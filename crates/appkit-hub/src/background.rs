@@ -256,6 +256,26 @@ pub fn autostart_for(app: &Background<'_>, what: Autostart, exe: &Path) -> Resul
     run_key_for(app, what, exe, &RegExe(system_program("reg.exe")?))
 }
 
+/// Whether the program of another app starts with the login of the current user: its value in the
+/// `Run` key, which is named by the app (`identity.app`). Read only, through `reg.exe` and never
+/// through a program of the other app.
+///
+/// `None`: it cannot be told (not Windows, or `reg.exe` did not run). A key or a value that is not
+/// there, or that a policy hides, is `Some(false)`.
+#[must_use]
+pub fn autostart_of(identity: &AppIdentity) -> Option<bool> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let reg = RegExe(system_program("reg.exe").ok()?);
+    autostart_in(identity.app, &reg)
+}
+
+/// [`autostart_of`] through the given registry.
+fn autostart_in(value: &str, reg: &dyn Registry) -> Option<bool> {
+    login_value_present(value, reg).ok()
+}
+
 /// The login entry of the app in the `Run` key, through `reg`: the value is the app's name.
 fn run_key_for(
     app: &Background<'_>,
@@ -1103,6 +1123,30 @@ mod tests {
 
     fn purge_settings(dir: &Path) -> Result<String, String> {
         super::purge_settings(&APP, dir)
+    }
+
+    #[test]
+    fn the_login_entry_of_another_app_is_read_by_its_name_and_nothing_is_written() {
+        let on = FakeRegistry::new(Some(r"C:\a\rules-desktop.exe start"));
+        assert_eq!(autostart_in("rules-desktop", &on), Some(true));
+        let calls = on.calls();
+        assert_eq!(calls.len(), 1, "{calls:?}");
+        assert_eq!(calls[0][0], "query", "{calls:?}");
+        let at = calls[0].iter().position(|a| a == "/v").unwrap();
+        assert_eq!(calls[0][at + 1], "rules-desktop");
+
+        assert_eq!(
+            autostart_in("rules-desktop", &FakeRegistry::new(None)),
+            Some(false)
+        );
+        // A value that a policy hides reads like one that is not there.
+        let mut locked = FakeRegistry::new(None);
+        locked.locked = true;
+        assert_eq!(autostart_in("rules-desktop", &locked), Some(false));
+        // No `reg.exe`: nothing is known, which is not "off".
+        let mut gone = FakeRegistry::new(None);
+        gone.missing = true;
+        assert_eq!(autostart_in("rules-desktop", &gone), None);
     }
 
     #[test]
