@@ -97,6 +97,25 @@ program that lists apps shows "setup needed" instead of a page that cannot work.
 a build that does not know it. Only 1 to 40 ASCII letters and digits are reported, so a program that lists apps
 (the hub) can compare it with the title of the rolling release (`Rolling build (<sha7>)`).
 
+## Where the hub looks for the engine
+
+The checkout of an app's Neovim engine (`rules.nvim`, `tasks.nvim`) is looked for in this order, and the
+first value that is set decides:
+
+1. `engine_dir` in the settings file of the app,
+2. the environment variable the app names (`RULES_ENGINE_DIR`),
+3. `$REPOS_DIR/<name>`, the folder of that checkout below the folder that holds all your checkouts.
+
+A value that is set but wrong is an error that names it; there is no quiet fall back to the next place.
+`REPOS_DIR` is optional: without it and without the other two, the setup page says that nothing was
+found and lists the three places that were tried. The shared library (`lib.nvim`) is found the same way,
+and also as a sibling of the engine checkout.
+
+```text
+RULES_ENGINE_DIR=D:\codeules.nvim    # explicit
+REPOS_DIR=D:\code                       # finds D:\codeules.nvim and D:\code\lib.nvim
+```
+
 ## Starting programs and opening pages
 
 `launch::spawn(program, args, &LaunchOpts { cwd, window })` starts a program of somebody else:
