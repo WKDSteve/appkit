@@ -482,7 +482,7 @@ impl SearchIndex {
             }
             // A page of a later state than the change: the ids of the
             // changes in between were not read. Build from one state.
-            if change.rev.is_some() && fetched.rev != change.rev {
+            if change.rev.is_some() && fetched.rev.is_some() && fetched.rev != change.rev {
                 if let Err(e) = self.build().await {
                     eprintln!("search index: {e}");
                 }
