@@ -93,6 +93,10 @@ An app that does need setup says so in `hello`: `Runtime::setup_required()` retu
 (`no_vault`), and `hello` carries `setup_required` (bool) and `setup_reason` (code or `null`). A
 program that lists apps shows "setup needed" instead of a page that cannot work.
 
+`hello` also carries `build`: the short commit id of a rolling build (`ServeParts::build_id`), or `null` for a release or
+a build that does not know it. Only 1 to 40 ASCII letters and digits are reported, so a program that lists apps
+(the hub) can compare it with the title of the rolling release (`Rolling build (<sha7>)`).
+
 ## Starting programs and opening pages
 
 `launch::spawn(program, args, &LaunchOpts { cwd, window })` starts a program of somebody else:

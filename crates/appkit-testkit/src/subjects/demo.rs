@@ -80,6 +80,7 @@ impl Subject for Demo {
                     instance: cfg.instance,
                     app: IDENTITY.app,
                     version: "0.0.0",
+                    build_id: None,
                     guard_rules: GuardRules::new(IDENTITY.route("hello"), [IDENTITY.route("ops")]),
                     ui: Arc::new(NoPages),
                     runtime: DemoRuntime { status: cfg.status },

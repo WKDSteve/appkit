@@ -569,6 +569,7 @@ pub async fn hello_needs_no_token_and_carries_no_data(s: &dyn Subject) {
         keys,
         [
             "app",
+            "build",
             "capabilities",
             "engine",
             "instance",
@@ -592,6 +593,17 @@ pub async fn hello_needs_no_token_and_carries_no_data(s: &dyn Subject) {
                 "setup_reason is not a short code: {code:?}"
             );
         }
+    }
+    // The build is the short commit id of a rolling build, or null: never a path or a sentence.
+    if let Some(build) = doc["build"].as_str() {
+        assert!(
+            !build.is_empty()
+                && build.len() <= 40
+                && build.bytes().all(|b| b.is_ascii_alphanumeric()),
+            "build is not a commit id: {build:?}"
+        );
+    } else {
+        assert!(doc["build"].is_null(), "{}", r.body);
     }
     assert_eq!(doc["app"], s.identity().app);
     assert_eq!(doc["instance"], h.server.instance());

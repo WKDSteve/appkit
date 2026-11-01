@@ -37,6 +37,8 @@ pub async fn hello<R: Runtime>(State(st): State<Arc<Core<R>>>) -> Response {
         "kind": "hub.hello",
         "app": st.app,
         "version": st.version,
+        // The short commit id of a rolling build, else null; added to schema 1 like the keys below.
+        "build": st.build_id.and_then(crate::hub::clean_build_id),
         "instance": st.instance,
         // Added to schema 1: a reader that does not know them ignores them.
         "setup_required": setup.is_some(),

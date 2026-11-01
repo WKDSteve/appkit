@@ -58,6 +58,8 @@ pub struct Core<R: Runtime> {
     /// What the hub says it is in `hello`, and its version.
     pub app: &'static str,
     pub version: &'static str,
+    /// The build of a rolling build (the short commit id), as `hello` reports it; see [`clean_build_id`].
+    pub build_id: Option<&'static str>,
     pub guard_rules: GuardRules,
     pub ui: Arc<dyn Pages>,
     /// What belongs to the vault that is read; replaced when another is chosen.
@@ -111,11 +113,22 @@ pub struct ServeParts<R: Runtime> {
     pub instance: Secret,
     pub app: &'static str,
     pub version: &'static str,
+    /// The build of a rolling build: the short commit id the program was built from; `None` for a release or a
+    /// build that does not know it. `hello` reports it when it has the form of [`clean_build_id`].
+    pub build_id: Option<&'static str>,
     pub guard_rules: GuardRules,
     pub ui: Arc<dyn Pages>,
     pub runtime: R,
     pub build: BuildRuntime<R>,
     pub vaults: Option<Arc<dyn VaultAdmin<R::Target>>>,
+}
+
+/// The build id as `hello` may report it: 1 to 40 ASCII letters and digits (a short or full commit id), else `None`.
+/// What is not of that form is dropped rather than shown: a reader compares it with a release title.
+#[must_use]
+pub fn clean_build_id(raw: &str) -> Option<&str> {
+    (!raw.is_empty() && raw.len() <= 40 && raw.bytes().all(|b| b.is_ascii_alphanumeric()))
+        .then_some(raw)
 }
 
 /// A started server.
@@ -198,6 +211,7 @@ where
         instance: instance.clone(),
         app: parts.app,
         version: parts.version,
+        build_id: parts.build_id,
         guard_rules: parts.guard_rules,
         ui: parts.ui,
         runtime: StdRwLock::new(Arc::new(parts.runtime)),
@@ -421,6 +435,7 @@ mod tests {
             instance: Secret::generate(CODE_BYTES).unwrap().to_hex(),
             app: "other-app",
             version: "9.9.9",
+            build_id: Some("abc1234"),
             guard_rules: GuardRules::new("/api/other/hello", []),
             ui: Arc::new(NoPages),
             runtime: StdRwLock::new(Arc::clone(first)),
@@ -449,6 +464,7 @@ mod tests {
         let before = json_of(hello(State(Arc::clone(&core))).await).await;
         assert_eq!(before["app"], "other-app");
         assert_eq!(before["version"], "9.9.9");
+        assert_eq!(before["build"], "abc1234");
         assert_eq!(before["engine"]["ready"], false);
         assert_eq!(before["engine"]["problem"], "engine_unreachable");
 
@@ -463,6 +479,45 @@ mod tests {
         let after = json_of(hello(State(core)).await).await;
         assert_eq!(after["engine"]["ready"], true);
         assert_eq!(after["engine"]["capabilities"][0], "second");
+    }
+
+    #[test]
+    fn a_build_id_is_letters_and_digits_of_a_commit_and_nothing_else() {
+        assert_eq!(clean_build_id("abc1234"), Some("abc1234"));
+        assert_eq!(
+            clean_build_id(&"a".repeat(40)),
+            Some("a".repeat(40).as_str())
+        );
+        for bad in [
+            "",
+            "abc 123",
+            "../x",
+            r"a\b",
+            "abc\n",
+            "\u{e4}1",
+            &"a".repeat(41),
+        ] {
+            assert_eq!(clean_build_id(bad), None, "{bad:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn hello_reports_no_build_for_a_release_and_none_that_is_not_a_commit_id() {
+        let first = Arc::new(OtherRuntime::new(HubStatus {
+            engine_ready: true,
+            problem: None,
+            capabilities: Vec::new(),
+        }));
+        let mut core = core_with(&first);
+        for (id, want) in [
+            (None, serde_json::Value::Null),
+            (Some("../x"), serde_json::Value::Null),
+            (Some("deadbeef"), serde_json::json!("deadbeef")),
+        ] {
+            Arc::get_mut(&mut core).unwrap().build_id = id;
+            let doc = json_of(hello(State(Arc::clone(&core))).await).await;
+            assert_eq!(doc["build"], want, "{id:?}");
+        }
     }
 
     #[tokio::test]

@@ -39,6 +39,8 @@ export const PLAIN: Pick<RequestInit, 'cache' | 'credentials' | 'referrerPolicy'
 export interface Hello {
   instance: string;
   version: string;
+  /** The short commit id of a rolling build; `null` or missing for a release (older hubs omit it). */
+  build?: string | null;
   engine: { ready: boolean; problem: string | null; capabilities: string[] | null };
 }
 
