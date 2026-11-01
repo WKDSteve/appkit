@@ -371,7 +371,7 @@ impl SearchIndex {
                 Ok(())
             }
             Err(e) => {
-                state.failed = state.corpus.is_none();
+                state.failed = state.failed || state.corpus.is_none();
                 Err(e)
             }
         }
@@ -422,17 +422,23 @@ impl SearchIndex {
     /// Follow a change the store reported.
     pub async fn apply(&self, change: &Change) {
         let wanted: Vec<&String> = change.changed.iter().chain(change.added.iter()).collect();
-        let current = lock(&self.state).corpus.clone();
+        let (current, failed) = {
+            let state = lock(&self.state);
+            (state.corpus.clone(), state.failed)
+        };
         // The text of this very state is in the index already (the first
         // snapshot of the hub says so after the index was built before it).
-        if current
-            .as_ref()
-            .zip(change.rev.as_ref())
-            .is_some_and(|(c, rev)| c.rev.as_ref() == Some(rev))
+        // Not after a failed read: the ids of that change were never read.
+        if !failed
+            && current
+                .as_ref()
+                .zip(change.rev.as_ref())
+                .is_some_and(|(c, rev)| c.rev.as_ref() == Some(rev))
         {
             return;
         }
-        let rebuild = current.is_none() || change.truncated || wanted.len() > INCREMENTAL_MAX;
+        let rebuild =
+            failed || current.is_none() || change.truncated || wanted.len() > INCREMENTAL_MAX;
         if rebuild {
             if let Err(e) = self.build().await {
                 eprintln!("search index: {e}");
@@ -467,9 +473,20 @@ impl SearchIndex {
                     }
                     Err(e) => {
                         eprintln!("search index: {e}");
+                        // The ids of this change keep their old text; the
+                        // next change builds the whole index again.
+                        lock(&self.state).failed = true;
                         return;
                     }
                 }
+            }
+            // A page of a later state than the change: the ids of the
+            // changes in between were not read. Build from one state.
+            if change.rev.is_some() && fetched.rev != change.rev {
+                if let Err(e) = self.build().await {
+                    eprintln!("search index: {e}");
+                }
+                return;
             }
         }
         let page = fetched;
@@ -773,6 +790,76 @@ mod tests {
             index.status(),
             Status::Ready {
                 items: 3,
+                partial: false
+            }
+        );
+    }
+
+    fn change(seq: u64, rev: &str, added: &[&str]) -> Change {
+        Change {
+            seq,
+            rev: Some(rev.to_owned()),
+            cause: "fs",
+            changed: vec![],
+            added: added.iter().map(|s| (*s).to_owned()).collect(),
+            removed: vec![],
+            truncated: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_page_of_a_later_state_than_the_change_builds_the_index_again() {
+        let engine = Arc::new(Scripted(Mutex::new(vec![
+            page("rev:1", &[("a/one", 3)], None),
+            // Two saves within one delay: the page for the first change is
+            // already the state of the second.
+            page("rev:3", &[("a/two", 3)], None),
+            page("rev:3", &[("a/one", 3), ("a/two", 3), ("a/four", 3)], None),
+        ])));
+        let index = SearchIndex::new(engine, BODIES);
+        index.build().await.unwrap();
+        index.apply(&change(2, "rev:2", &["a/two"])).await;
+        assert_eq!(
+            index.status(),
+            Status::Ready {
+                items: 3,
+                partial: false
+            }
+        );
+        // The second change finds its state in the index and returns.
+        index.apply(&change(3, "rev:3", &["a/four"])).await;
+        assert_eq!(
+            index.status(),
+            Status::Ready {
+                items: 3,
+                partial: false
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_page_that_fails_is_made_up_by_a_build_on_the_next_change() {
+        let engine = Arc::new(Scripted(Mutex::new(vec![
+            page("rev:1", &[("a/one", 3)], None),
+            "not a page".to_owned(),
+            page("rev:2", &[("a/one", 3), ("a/two", 3)], None),
+        ])));
+        let index = SearchIndex::new(engine, BODIES);
+        index.build().await.unwrap();
+        index.apply(&change(2, "rev:2", &["a/two"])).await;
+        assert_eq!(
+            index.status(),
+            Status::Ready {
+                items: 1,
+                partial: false
+            }
+        );
+        // Even a change of the state the index carries is no reason to skip.
+        index.apply(&change(3, "rev:1", &["a/three"])).await;
+        assert_eq!(
+            index.status(),
+            Status::Ready {
+                items: 2,
                 partial: false
             }
         );
