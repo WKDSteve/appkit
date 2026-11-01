@@ -8,6 +8,8 @@
 #                earlier build that this one no longer has, then the checksums, and LAST the tag
 #                moves to SHA and the page names it. A run that stops in between leaves the page
 #                naming the previous commit.
+#   Both carry `version.json` (made here, see version_json.py) next to the install scripts, and it is
+#   listed in SHA256SUMS like every other file.
 #   TAG=vX.Y.Z   a release: a draft is made if there is none (a published release is never touched
 #                again), the files and the checksums are attached, and it stays a draft for a person
 #                to open (NREL-07).
@@ -27,6 +29,7 @@ APP="${APP:-}"
 EXTRA="${EXTRA:-}"
 NOTES_FILE="${NOTES_FILE:-}"
 TITLE="${TITLE:-}"
+VERSION="${VERSION:-}"
 PYTHON="${PYTHON:-python3}"
 
 case "$TAG" in
@@ -92,6 +95,13 @@ if [ -n "${UNIX_KIND:-}" ]; then
     stamp install.sh install.sh "$UNIX_KIND" "${UNIX_PROGRAM:-}" \
         "${UNIX_RELEASE_ASSET:-}" "${UNIX_ROLLING_ASSET:-}"
 fi
+
+# version.json: what a hub reads to tell that this build is newer than the installed one. A built or
+# extra file of that name would be shadowed by it, so the name is the kit's.
+[ ! -e "$stage/version.json" ] || fail "two files are called version.json (it is made here, not given)"
+"$PYTHON" "$KIT/version_json.py" "$stage/version.json" --app "$APP" --channel "$TAG" \
+    --version "$VERSION" --commit "$SHA" ||
+    fail "cannot write version.json"
 
 mapfile -t names < <(find "$stage" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
 # "<hash>  <name>" everywhere (sha256sum of Git Bash marks binary mode with "<hash> *<name>").

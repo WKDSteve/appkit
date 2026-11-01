@@ -36,6 +36,7 @@
 #             scripts/uninstall.sh
 #           notes-file: .github/rolling-notes.md
 #           title: my-app ${{ github.ref_name }}      # a release only; default: the tag
+#           version: 1.2.3                            # the program's own version, for version.json (rolling build)
 #
 # What it does, in order: release-kit/publish.sh.
 
@@ -106,6 +107,10 @@ inputs:
     description: The title of the release page of a tag, by default the tag itself. The rolling build names its commit itself.
     required: false
     default: ""
+  version:
+    description: The version the program reports about itself (X.Y.Z), written to version.json. A release has the version of its tag and refuses another; the rolling build says null without it.
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -132,6 +137,7 @@ runs:
         EXTRA: ${{ inputs.extra }}
         NOTES_FILE: ${{ inputs.notes-file }}
         TITLE: ${{ inputs.title }}
+        VERSION: ${{ inputs.version }}
       run: bash "$KIT/publish.sh"
     - name: Publish (Windows)
       if: runner.os == 'Windows'
@@ -155,4 +161,5 @@ runs:
         EXTRA: ${{ inputs.extra }}
         NOTES_FILE: ${{ inputs.notes-file }}
         TITLE: ${{ inputs.title }}
+        VERSION: ${{ inputs.version }}
       run: bash "$(cygpath -u "$KIT")/publish.sh"

@@ -11,6 +11,7 @@ install script that installs exactly that build.
 | `scripts/install.ps1` | Windows: downloads the build, checks it against `SHA256SUMS`, installs it for the current user. |
 | `scripts/install.sh` | Linux and macOS: the same. |
 | `stamp.py` | Writes the repository, the app and the channel into a copy of an install script. |
+| `version_json.py` | Writes `version.json`, which `publish.sh` puts on every build (see below). |
 
 The kit builds nothing: the build stays a job of each app (pnpm and cargo, Tauri with its sidecar,
 MSYS2 and Inno Setup are too different). It takes over what is the same everywhere: deciding,
@@ -33,6 +34,24 @@ point a ref past a change of `.github/workflows` without the `workflows` right),
 the downloads go by the name of the release, not by the commit of its tag, and the page still names
 the commit of its files. A repository with **immutable releases** turned on cannot have a rolling
 build: its files could never be replaced.
+
+## `version.json`
+
+Both channels carry a small `version.json` next to the files (listed in `SHA256SUMS` like the rest, address
+`releases/download/<channel>/version.json`). A hub that lists apps compares the version of the installed app
+with it, instead of reading the release API of each app:
+
+```json
+{"schema": "release-kit-version/1", "app": "demo", "channel": "latest", "version": "1.2.3",
+ "commit": "<40 hex>", "date": "2026-11-01T12:00:00Z"}
+```
+
+- `version` is what the program reports about itself. A release has the version of its tag and `publish`
+  refuses a different `version` input; the rolling build has `null` unless the app passes `version:`
+  (read it from `Cargo.toml` or `package.json` in the workflow).
+- `commit` is the commit of the files (`null` on a release), `date` is when the build was published (UTC).
+- A later minor version only adds keys; a reader ignores what it does not know. A file of the name
+  `version.json` among the built or extra files is refused: the name is the kit's.
 
 ## The install scripts
 

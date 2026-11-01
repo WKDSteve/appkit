@@ -29,6 +29,7 @@ KIT = Path(__file__).resolve().parent
 sys.path.insert(0, str(KIT))
 
 import stamp  # noqa: E402
+import version_json  # noqa: E402
 
 # The install scripts download through the API when a token is set (a private repository); a
 # token of the person who runs the tests must not turn the other tests into API calls.
@@ -881,6 +882,56 @@ exit 0
 """
 
 
+class VersionJsonTest(unittest.TestCase):
+    SHA = "b" * 40
+    DATE = "2026-11-01T12:00:00Z"
+
+    def test_the_rolling_build_says_what_it_is_told(self) -> None:
+        doc = version_json.make("demo", "latest", "1.2.3", self.SHA, self.DATE)
+        self.assertEqual(
+            doc,
+            {"schema": "release-kit-version/1", "app": "demo", "channel": "latest", "version": "1.2.3",
+             "commit": self.SHA, "date": self.DATE},
+        )
+
+    def test_a_rolling_build_not_told_its_version_says_null(self) -> None:
+        doc = version_json.make("demo", "latest", "", self.SHA, self.DATE)
+        self.assertIsNone(doc["version"])
+
+    def test_a_release_has_the_version_of_its_tag(self) -> None:
+        doc = version_json.make("demo", "v1.2.3", "", "", self.DATE)
+        self.assertEqual((doc["version"], doc["commit"]), ("1.2.3", None))
+        self.assertEqual(version_json.make("demo", "v1.2.3", "1.2.3", "", self.DATE)["version"], "1.2.3")
+
+    def test_a_release_refuses_another_version_than_its_tag(self) -> None:
+        with self.assertRaises(version_json.VersionError):
+            version_json.make("demo", "v1.2.3", "1.2.4")
+
+    def test_what_a_field_may_not_hold_is_refused(self) -> None:
+        for args in (
+            ("de mo", "latest"),
+            ("demo", "main"),
+            ("demo", "latest", "one"),
+            ("demo", "latest", "1.2.3", "abc"),
+            ("demo", "latest", "1.2.3", self.SHA, "yesterday"),
+        ):
+            with self.subTest(args=args), self.assertRaises(version_json.VersionError):
+                version_json.make(*args)
+
+    def test_the_date_defaults_to_now_in_utc(self) -> None:
+        self.assertRegex(version_json.make("demo", "latest")["date"], version_json.DATE.pattern)
+
+    def test_cli_writes_json_and_writes_nothing_on_refusal(self) -> None:
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        out = tmp / "version.json"
+        self.assertEqual(version_json.main([str(out), "--app", "demo", "--channel", "latest", "--version", "1.0.0"]), 0)
+        self.assertEqual(json.loads(out.read_text(encoding="utf-8"))["version"], "1.0.0")
+        out.unlink()
+        self.assertEqual(version_json.main([str(out), "--app", "demo", "--channel", "nope"]), 1)
+        self.assertFalse(out.exists())
+
+
 @unittest.skipUnless(BASH_EXE and shutil.which("python3" if not WINDOWS else "python"), "no bash")
 class PublishTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -1065,6 +1116,47 @@ class PublishTest(unittest.TestCase):
             sums.split()[sums.split().index("install.ps1") - 1], sha(keep / "install.ps1"),
             "the checksum is of the stamped script",
         )
+
+    def keep_uploads(self) -> Path:
+        """A fake gh that keeps a copy of every file it is asked to upload."""
+        keep = self.tmp / "kept"
+        keep.mkdir()
+        gh = self.bin / "gh"
+        copy = f'if [ "$1 $2" = "release upload" ]; then for f in "$@"; do [ -f "$f" ] && cp "$f" "{keep.as_posix()}/"; done; fi\n'
+        gh.write_text(FAKE_GH[: -len("exit 0\n")] + copy + "exit 0\n", encoding="utf-8", newline="\n")
+        return keep
+
+    def test_the_rolling_build_carries_version_json_listed_in_the_sums(self) -> None:
+        keep = self.keep_uploads()
+        res = self.publish(VERSION="1.4.0", GH_ASSETS="SHA256SUMS version.json")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        doc = json.loads((keep / "version.json").read_text(encoding="utf-8"))
+        self.assertEqual((doc["app"], doc["channel"], doc["version"], doc["commit"]), ("demo", "latest", "1.4.0", "a" * 40))
+        sums = (keep / "SHA256SUMS").read_text()
+        self.assertEqual(sums.split()[sums.split().index("version.json") - 1], sha(keep / "version.json"))
+        first = next(c for c in self.calls() if c.startswith("gh release upload latest demo-hub"))
+        self.assertIn("version.json", first)
+        self.assertFalse(any("delete-asset latest version.json" in c for c in self.calls()), "this build has it")
+
+    def test_a_release_carries_the_version_of_its_tag(self) -> None:
+        keep = self.keep_uploads()
+        res = self.publish(TAG="v2.0.1", SHA="", GH_NO_RELEASE="1")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        doc = json.loads((keep / "version.json").read_text(encoding="utf-8"))
+        self.assertEqual((doc["channel"], doc["version"], doc["commit"]), ("v2.0.1", "2.0.1", None))
+
+    def test_a_release_with_another_version_publishes_nothing(self) -> None:
+        res = self.publish(TAG="v2.0.1", SHA="", VERSION="2.0.2", GH_NO_RELEASE="1")
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("not the version of the tag", res.stderr)
+        self.assertEqual(self.calls(), [])
+
+    def test_a_file_called_version_json_may_not_be_given(self) -> None:
+        (self.dist / "version.json").write_text("{}")
+        res = self.publish(EXPECT="3")
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("two files are called version.json", res.stderr)
+        self.assertEqual(self.calls(), [])
 
 
 if __name__ == "__main__":
