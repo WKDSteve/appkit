@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Move the apps that use appkit to one tag of appkit, in one command.
 
-    python tools/bump-apps.py v0.23.2                       all four apps, files edited, lock files refreshed, pins checked
+    python tools/bump-apps.py v0.23.2                       all five apps, files edited, lock files refreshed, pins checked
     python tools/bump-apps.py v0.23.2 --apps ai-desktop     only these (comma separated)
     python tools/bump-apps.py v0.23.2 --dry-run             say what would change, change nothing
     python tools/bump-apps.py v0.23.2 --commit              also commit each app (never pushes)
@@ -11,7 +11,8 @@ not), and doing it by hand is what makes a small appkit fix cost an afternoon.
 
   kit only (ai-desktop, docmap-desktop)   the `uses: WKDSteve/appkit/release-kit/...@<sha> # vX.Y.Z` lines of the
                                           workflows and tools/release-kit.pin
-  full (tasks-desktop, rules-desktop)     the same, and the tag in Cargo.toml and ui/package.json (appkit-ui and appkit-web); then
+  full (tasks-desktop, rules-desktop, hub-desktop)
+                                          the same, and the tag in Cargo.toml and ui/package.json (appkit-ui and appkit-web); then
                                           `cargo update -p appkit-hub` and `pnpm install` rewrite the lock files
 
 The tag must exist in this clone AND on origin, and name the same commit in both: a pin to a commit that GitHub
@@ -41,6 +42,7 @@ APPS = {
     "docmap-desktop": "kit",
     "tasks-desktop": "full",
     "rules-desktop": "full",
+    "hub-desktop": "full",
 }
 
 TAG = re.compile(r"^v\d+\.\d+\.\d+$")
@@ -219,7 +221,7 @@ def bump_app(name: str, repos: Path, tag: str, sha: str, args: argparse.Namespac
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Move the apps to one tag of appkit.")
     parser.add_argument("tag", help="vX.Y.Z, already pushed to origin")
-    parser.add_argument("--apps", default=",".join(APPS), help="comma separated (default: all four)")
+    parser.add_argument("--apps", default=",".join(APPS), help="comma separated (default: all five)")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--commit", action="store_true", help="commit each app that was bumped (never pushes)")
     parser.add_argument("--no-lock", action="store_true", help="edit the files only: no cargo update / pnpm install")

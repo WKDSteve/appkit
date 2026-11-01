@@ -18,9 +18,9 @@ tag (`pnpm-lock.yaml` holds the commit of each kit), and its CI checks that the 
    limits that closes a hole is taken by every app that uses the kit, not only by the one that found
    it: the change names the apps and their tasks.
 6. **Move the apps with one command.** An app pins the tag in several places that must agree (the
-   `uses:` lines of its workflows, `tools/release-kit.pin`, and for the two hub apps `Cargo.toml`,
+   `uses:` lines of its workflows, `tools/release-kit.pin`, and for the hub apps `Cargo.toml`,
    `ui/package.json` and both lock files). `python tools/bump-apps.py vX.Y.Z` edits all of them in
-   `ai-desktop`, `docmap-desktop`, `tasks-desktop` and `rules-desktop` (`--apps a,b` for some,
+   `ai-desktop`, `docmap-desktop`, `tasks-desktop`, `rules-desktop` and `hub-desktop` (`--apps a,b` for some,
    `--dry-run` to look first, `--commit` to also commit each app; it never pushes), refreshes the lock
    files, and runs each app's own pin check. It refuses a tag that is not on origin, and skips an app
    whose files to edit hold uncommitted work. Then push each app and watch its CI.
