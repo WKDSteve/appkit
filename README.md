@@ -112,8 +112,8 @@ found and lists the three places that were tried. The shared library (`lib.nvim`
 and also as a sibling of the engine checkout.
 
 ```text
-RULES_ENGINE_DIR=D:\codeules.nvim    # explicit
-REPOS_DIR=D:\code                       # finds D:\codeules.nvim and D:\code\lib.nvim
+RULES_ENGINE_DIR=D:\code\rules.nvim    # explicit
+REPOS_DIR=D:\code                       # finds D:\code\rules.nvim and D:\code\lib.nvim
 ```
 
 ## Starting programs and opening pages
