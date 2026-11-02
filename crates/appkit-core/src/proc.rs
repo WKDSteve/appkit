@@ -132,8 +132,8 @@ pub async fn run(spec: Spec) -> Result<Output, ProcError> {
     }
 
     let mut child = command.spawn().map_err(ProcError::Spawn)?;
-    // Dropped on every way out: the processes the child started end with it.
-    let _tree = crate::job::Job::adopt(&child);
+    // Dropped on every way out but a normal end: the processes the child started end with it.
+    let tree = crate::job::Job::adopt(&child);
     let stdin = child.stdin.take();
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
@@ -160,11 +160,15 @@ pub async fn run(spec: Spec) -> Result<Output, ProcError> {
             // The pipes are closed, so the child is ending. Bound the wait too.
             match tokio::time::timeout_at(deadline, child.wait()).await {
                 Ok(Ok(status)) => {
+                    // It ended as it should: what it started on purpose lives on.
+                    if let Some(tree) = tree {
+                        tree.release();
+                    }
                     return Ok(Output {
                         code: status.code(),
                         stdout: out,
                         stderr: err,
-                    })
+                    });
                 }
                 Ok(Err(e)) => Err(ProcError::Io(e)),
                 Err(_) => Err(ProcError::Timeout(spec.timeout)),
