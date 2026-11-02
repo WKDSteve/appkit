@@ -451,8 +451,14 @@ impl SearchIndex {
         }
         // The named ids, a page at a time: a page ends at the bytes it may
         // hold, and what it names beyond that comes on the next one.
+        // A change that only removes ids reads no page, so the index takes the state of the
+        // change; otherwise the same state coming back later would look like one it holds.
         let mut fetched = Page {
-            rev: current.rev.clone(),
+            rev: if wanted.is_empty() && change.rev.is_some() {
+                change.rev.clone()
+            } else {
+                current.rev.clone()
+            },
             items: Vec::new(),
             next_offset: None,
         };
@@ -805,6 +811,36 @@ mod tests {
             removed: vec![],
             truncated: false,
         }
+    }
+
+    #[tokio::test]
+    async fn a_change_that_only_removes_takes_its_state_so_the_old_state_can_return() {
+        let engine = Arc::new(Scripted(Mutex::new(vec![
+            page("rev:1", &[("a/one", 3), ("a/two", 3)], None),
+            // The page for the change that brings a/two back (checkout back to rev:1).
+            page("rev:1", &[("a/two", 3)], None),
+        ])));
+        let index = SearchIndex::new(engine, BODIES);
+        index.build().await.unwrap();
+        let mut removal = change(2, "rev:2", &[]);
+        removal.removed = vec!["a/two".to_owned()];
+        index.apply(&removal).await;
+        assert_eq!(
+            index.status(),
+            Status::Ready {
+                items: 1,
+                partial: false
+            }
+        );
+        // The state of the index is rev:2 now, so rev:1 is not "already there".
+        index.apply(&change(3, "rev:1", &["a/two"])).await;
+        assert_eq!(
+            index.status(),
+            Status::Ready {
+                items: 2,
+                partial: false
+            }
+        );
     }
 
     #[tokio::test]
