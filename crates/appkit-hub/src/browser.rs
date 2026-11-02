@@ -225,6 +225,14 @@ mod tests {
         assert!(err.contains("not opened"), "{err}");
     }
 
+    /// By hand: starts the real default browser (`cargo test -p appkit-hub -- --ignored opens_the_real`).
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "starts the default browser"]
+    fn opens_the_real_default_browser() {
+        open("http://127.0.0.1:17610/", PORTS).unwrap();
+    }
+
     #[cfg(not(windows))]
     #[test]
     fn the_opener_gets_the_link_as_one_argument_and_is_absolute() {

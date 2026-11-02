@@ -16,7 +16,7 @@ axum = { version = "0.8", default-features = false, features = ["http1", "tokio"
 hyper = { version = "1", default-features = false, features = ["http1", "server"] }
 hyper-util = { version = "0.1", default-features = false, features = ["server", "tokio", "service", "http1"] }
 # The stable line of notify; 9.0 is a release candidate (concept 7.1, 13.14).
-notify = { version = "8.2", default-features = false }
+notify = { version = "8.2", default-features = false, features = ["macos_fsevent"] }
 serde ={ version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 tokio = { version = "1", default-features = false, features = ["sync", "rt", "rt-multi-thread", "net", "time", "macros", "io-util", "process"] }
