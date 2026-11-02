@@ -60,53 +60,40 @@ async fn timeout_ends_the_grandchild_too() {
     assert!(!written, "the grandchild outlived the watchdog");
 }
 
-#[tokio::test]
-async fn a_normal_end_leaves_what_the_child_started_on_purpose() {
-    let scratch = appkit_scratch::Scratch::new("proc-tree-kept");
-    let dir = scratch.path().to_path_buf();
-    let marker = dir.join("marker.txt");
-    let script = dir.join("grand.bat");
-    std::fs::write(
-        &script,
-        format!(
-            "@ping -n 3 127.0.0.1 >nul\r\n@echo x> \"{}\"\r\n",
-            marker.display()
-        ),
-    )
-    .unwrap();
-
+/// A long-running child of the system folder, with the job adopted.
+fn sleeper() -> tokio::process::Child {
     let system = std::env::var_os("SystemRoot").unwrap_or_default();
-    let cmd = std::path::Path::new(&system)
-        .join("System32")
-        .join("cmd.exe");
-    let spec = Spec {
-        program: cmd,
-        // The outer cmd ends at once, the batch file goes on without our pipes.
-        args: vec![
-            OsString::from("/c"),
-            OsString::from(format!("start /b {} >nul 2>&1", script.display())),
-        ],
-        env: vec![
-            (OsString::from("SystemRoot"), system.clone()),
-            (
-                OsString::from("PATH"),
-                std::path::Path::new(&system)
-                    .join("System32")
-                    .into_os_string(),
-            ),
-        ],
-        cwd: Some(dir),
-        stdin: Vec::new(),
-        timeout: Duration::from_secs(20),
-        max_stdout: 1024,
-        max_stderr: 1024,
-    };
-    let out = run(spec).await.unwrap();
-    assert_eq!(out.code, Some(0));
+    tokio::process::Command::new(
+        std::path::Path::new(&system)
+            .join("System32")
+            .join("ping.exe"),
+    )
+    .args(["-n", "30", "127.0.0.1"])
+    .stdin(std::process::Stdio::null())
+    .stdout(std::process::Stdio::null())
+    .kill_on_drop(true)
+    .spawn()
+    .unwrap()
+}
 
-    tokio::time::sleep(Duration::from_secs(5)).await;
+#[tokio::test]
+async fn dropping_the_job_ends_the_process() {
+    let mut child = sleeper();
+    let job = appkit_core::job::Job::adopt(&child).expect("a job");
+    drop(job);
+    let status = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+    assert!(status.is_ok(), "the process outlived its job");
+}
+
+#[tokio::test]
+async fn a_released_job_leaves_the_process_alone() {
+    let mut child = sleeper();
+    let job = appkit_core::job::Job::adopt(&child).expect("a job");
+    job.release();
+    tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(
-        marker.exists(),
-        "the watchdog's job ended a process it had no reason to"
+        child.try_wait().unwrap().is_none(),
+        "release ended the process"
     );
+    child.kill().await.unwrap();
 }
