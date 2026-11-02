@@ -4,6 +4,9 @@
 //! runs a shell, a test runner) leaves them running when the watchdog fires. The child is
 //! put into a job with `KILL_ON_JOB_CLOSE`; dropping the [`Job`] closes the handle, and the
 //! system ends every process still in it. On other systems the type is empty and does nothing.
+//!
+//! Limit: the child runs for a moment before it is put into the job (it is not started
+//! suspended), so a process it starts in that first moment is not in the job and outlives it.
 #![allow(unsafe_code)]
 
 /// Ends the process tree of a child when it is dropped (Windows), else nothing.
