@@ -9,5 +9,6 @@
 
 pub mod authn;
 pub mod identity;
+pub mod job;
 pub mod proc;
 pub mod registry;

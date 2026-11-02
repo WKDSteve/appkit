@@ -83,6 +83,8 @@ pub enum Failure {
 
 struct Running {
     child: Child,
+    /// Ends the host's own children with it.
+    _tree: Option<appkit_core::job::Job>,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
     next_id: u64,
@@ -283,6 +285,7 @@ impl Host {
         let kept = Arc::new(StdMutex::new(String::new()));
         tokio::spawn(keep_tail(stderr, Arc::clone(&kept)));
         let mut running = Running {
+            _tree: appkit_core::job::Job::adopt(&child),
             child,
             stdin,
             stdout: BufReader::new(stdout),

@@ -132,6 +132,8 @@ pub async fn run(spec: Spec) -> Result<Output, ProcError> {
     }
 
     let mut child = command.spawn().map_err(ProcError::Spawn)?;
+    // Dropped on every way out: the processes the child started end with it.
+    let _tree = crate::job::Job::adopt(&child);
     let stdin = child.stdin.take();
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();

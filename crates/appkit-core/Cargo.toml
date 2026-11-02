@@ -18,3 +18,7 @@ tokio = { version = "1", default-features = false, features = ["io-util", "proce
 
 [dev-dependencies]
 appkit-scratch = { path = "../appkit-scratch" }
+
+# The one direct call of the system (src/job.rs): the version the rest of the kit uses.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_JobObjects"] }
