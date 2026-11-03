@@ -112,10 +112,16 @@ export function installNav<S>(options: NavOptions<S>): Nav<S> {
   options.window.addEventListener('popstate', onPop);
   return {
     record(state, recordOptions) {
-      if (current !== null && same(current, state)) return;
       const entry: Entry<S> = { appkitNav: 1, state };
       // While a pairing code is in the address the URL is left to the pairing, which takes the code out.
       const url = address && hasPairing(address.location.hash) ? undefined : urlOf(state);
+      if (current !== null && same(current, state)) {
+        // The same place, but another part of the page changed the address (or gave it back): it follows the place
+        // again, in the same entry.
+        const { pathname, search, hash } = address?.location ?? { pathname: '', search: '', hash: '' };
+        if (url !== undefined && url !== `${pathname}${search}${hash}`) options.history.replaceState(entry, '', url);
+        return;
+      }
       if (current === null || recordOptions?.replace === true) options.history.replaceState(entry, '', url);
       else options.history.pushState(entry, '', url);
       current = state;

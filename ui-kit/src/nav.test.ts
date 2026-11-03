@@ -186,6 +186,20 @@ describe('installNav with the place in the address', () => {
     ]);
   });
 
+  it('the same place puts the address back when another part of the page changed it, in the same entry', () => {
+    const f = addressed();
+    f.nav.record({ view: 'rules', id: 'AA' });
+    f.location.hash = '';
+    f.nav.record({ view: 'rules', id: 'AA' });
+    expect(f.calls.map((c) => [c[0], c[2]])).toEqual([
+      ['replace', '/#view=rules&item=AA'],
+      ['replace', '/#view=rules&item=AA'],
+    ]);
+    // An address that is right already is not written again.
+    f.nav.record({ view: 'rules', id: 'AA' });
+    expect(f.calls).toHaveLength(2);
+  });
+
   it('Back still restores from the entry, not from the address', () => {
     const f = addressed();
     f.nav.record({ view: 'overview', id: null });
