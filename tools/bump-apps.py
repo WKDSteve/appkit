@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Move the apps that use appkit to one tag of appkit, in one command.
 
-    python tools/bump-apps.py v0.23.2                       all five apps, files edited, lock files refreshed, pins checked
+    python tools/bump-apps.py v0.23.2                       all six apps, files edited, lock files refreshed, pins checked
     python tools/bump-apps.py v0.23.2 --apps ai-desktop     only these (comma separated)
     python tools/bump-apps.py v0.23.2 --dry-run             say what would change, change nothing
     python tools/bump-apps.py v0.23.2 --commit              also commit each app (never pushes)
@@ -11,7 +11,7 @@ not), and doing it by hand is what makes a small appkit fix cost an afternoon.
 
   kit only (ai-desktop, docmap-desktop)   the `uses: WKDSteve/appkit/release-kit/...@<sha> # vX.Y.Z` lines of the
                                           workflows and tools/release-kit.pin
-  full (tasks-desktop, rules-desktop, hub-desktop)
+  full (tasks-desktop, rules-desktop, testing-desktop, hub-desktop)
                                           the same, and the tag in Cargo.toml and ui/package.json (appkit-ui and appkit-web); then
                                           `cargo update -p appkit-hub` and `pnpm install` rewrite the lock files
 
@@ -42,6 +42,7 @@ APPS = {
     "docmap-desktop": "kit",
     "tasks-desktop": "full",
     "rules-desktop": "full",
+    "testing-desktop": "full",
     "hub-desktop": "full",
 }
 

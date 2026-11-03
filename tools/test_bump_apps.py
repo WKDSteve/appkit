@@ -259,6 +259,9 @@ class TagTest(unittest.TestCase):
     def test_hub_desktop_is_a_full_app(self) -> None:
         self.assertEqual(bump.APPS["hub-desktop"], "full")
 
+    def test_testing_desktop_is_a_full_app(self) -> None:
+        self.assertEqual(bump.APPS["testing-desktop"], "full")
+
     def test_the_cli_refuses_a_bad_tag_and_an_unknown_app(self) -> None:
         self.assertEqual(bump.main(["main"]), 2)
         self.assertEqual(bump.main(["v0.23.2", "--apps", "nope"]), 2)
