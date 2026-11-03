@@ -35,7 +35,13 @@ together are at most 8 KiB.
 
 Every answer carries `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`,
 `Cache-Control: no-store` and `Cross-Origin-Resource-Policy: same-origin`; the page carries a
-restrictive `Content-Security-Policy`.
+restrictive `Content-Security-Policy` whose `connect-src` is `'self'`. An app can widen that by exactly one
+host with `GuardRules::with_connect_src("https://host")` (today: hub-desktop, `https://api.github.com`, for the
+update badge: a read of public release data without token or cookie). The value is checked when the hub is
+made and must be `https://` plus a lower-case host name with a dot and an optional port: no wildcard, no
+address, no path, no other scheme (a mistake ends the program). The matrix checks that every page's
+`connect-src` is `'self'` and at most one such host, and `the_page_may_connect_to` that the named host is the
+one in the header.
 
 Routes are classified by their raw path. Everything under `/api/` needs a session unless it is on
 the short list below, so a route an app adds is closed until it is opened on purpose; a path with

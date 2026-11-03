@@ -2,4 +2,4 @@
 
 mod demo;
 
-pub use self::demo::{Demo, IDENTITY as DEMO_IDENTITY};
+pub use self::demo::{Demo, DemoWide, IDENTITY as DEMO_IDENTITY, WIDE_ORIGIN};

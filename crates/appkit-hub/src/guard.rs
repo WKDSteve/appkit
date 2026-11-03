@@ -29,6 +29,9 @@ pub struct GuardRules {
     /// POST paths that are counted by the coarse limit of `ops` (a read that is a POST, or a write
     /// that only its body tells from a dry run) and not by the strict one of the other mutations.
     coarse_post_paths: Vec<String>,
+    /// The one address besides this origin that the page may fetch from (`https://api.github.com`); none:
+    /// this origin only.
+    connect_src: Option<String>,
 }
 
 /// The routes of the core itself: an app cannot name one of them as its own.
@@ -54,6 +57,38 @@ fn plain_api_path(path: &str) -> bool {
             .split('/')
             .skip(1)
             .all(|part| !part.is_empty() && part != "." && part != "..")
+}
+
+/// Is `origin` exactly `https://` + a host name (labels of lower-case letters, digits and `-`, at least
+/// two of them, none empty or starting or ending with `-`, the last one not all digits) + an optional port?
+fn plain_https_origin(origin: &str) -> bool {
+    let Some(rest) = origin.strip_prefix("https://") else {
+        return false;
+    };
+    let (host, port) = match rest.split_once(':') {
+        Some((host, port)) => (host, Some(port)),
+        None => (rest, None),
+    };
+    let port_ok = port.is_none_or(|p| {
+        (1..=5).contains(&p.len())
+            && p.bytes().all(|b| b.is_ascii_digit())
+            && p.parse::<u16>().is_ok_and(|n| n > 0)
+    });
+    let labels: Vec<&str> = host.split('.').collect();
+    port_ok
+        && labels.len() >= 2
+        && labels.iter().all(|label| {
+            !label.is_empty()
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        })
+        // A host of digits only is an address, not a name.
+        && labels
+            .last()
+            .is_some_and(|tld| tld.bytes().any(|b| b.is_ascii_lowercase()))
 }
 
 impl GuardRules {
@@ -93,7 +128,34 @@ impl GuardRules {
         Self {
             hello_path,
             coarse_post_paths,
+            connect_src: None,
         }
+    }
+
+    /// Let the page fetch from one more address, besides this origin (`connect-src 'self' <origin>`).
+    ///
+    /// This widens what the page can reach, so it is narrow on purpose: one origin, `https` only, a host
+    /// name with a dot (no wildcard, no address, no path, no query, no scheme other than `https`), checked
+    /// here when the hub is made. An app that does not call this keeps `connect-src 'self'`.
+    ///
+    /// # Panics
+    ///
+    /// When `origin` is not of the form `https://host[:port]` as above.
+    #[must_use]
+    pub fn with_connect_src(mut self, origin: impl Into<String>) -> Self {
+        let origin = origin.into();
+        assert!(
+            plain_https_origin(&origin),
+            "the extra connect-src must be https://host[:port] with a host name, not {origin:?}"
+        );
+        self.connect_src = Some(origin);
+        self
+    }
+
+    /// The extra address of `connect-src`, if the app named one.
+    #[must_use]
+    pub fn connect_src(&self) -> Option<&str> {
+        self.connect_src.as_deref()
     }
 
     /// The path of `hello`.
@@ -174,7 +236,7 @@ pub async fn guard<R: Runtime>(
 ) -> Response {
     let class = classify(req.uri().path(), &st.guard_rules);
     let mut response = judge(&st, class, req, next).await;
-    set_security_headers(&mut response, class);
+    set_security_headers(&mut response, class, st.guard_rules.connect_src());
     response
 }
 
@@ -347,7 +409,29 @@ pub fn too_many() -> Response {
     )
 }
 
-pub fn set_security_headers(response: &mut Response, class: Class) {
+/// The policy of the page: this origin only, plus the one address an app named for `connect-src`.
+fn shell_policy(connect_src: Option<&str>) -> HeaderValue {
+    let connect = match connect_src {
+        Some(origin) => format!("'self' {origin}"),
+        None => "'self'".to_owned(),
+    };
+    // Nothing is allowed that the page does not name. Scripts and styles come from this origin only (no
+    // inline), and a sink that takes a string as HTML or script (`innerHTML`, `eval`) is refused unless the
+    // one policy of the page made it: Svelte's own, which wraps nothing a task's text could reach (the body
+    // is drawn as elements).
+    let policy = format!(
+        "default-src 'none'; script-src 'self'; style-src 'self'; \
+         img-src 'self'; connect-src {connect}; base-uri 'none'; \
+         object-src 'none'; frame-ancestors 'none'; form-action 'none'; \
+         require-trusted-types-for 'script'; trusted-types svelte-trusted-html"
+    );
+    // The origin was checked when the rules were made (plain ASCII), so this cannot fail; the fallback is
+    // the strictest policy.
+    HeaderValue::from_str(&policy)
+        .unwrap_or_else(|_| HeaderValue::from_static("default-src 'none'"))
+}
+
+pub fn set_security_headers(response: &mut Response, class: Class, connect_src: Option<&str>) {
     let h = response.headers_mut();
     h.insert(
         HeaderName::from_static("x-content-type-options"),
@@ -368,15 +452,7 @@ pub fn set_security_headers(response: &mut Response, class: Class) {
         // string as HTML or script (`innerHTML`, `eval`) is refused unless
         // the one policy of the page made it: Svelte's own, which wraps
         // nothing a task's text could reach (the body is drawn as elements).
-        h.insert(
-            header::CONTENT_SECURITY_POLICY,
-            HeaderValue::from_static(
-                "default-src 'none'; script-src 'self'; style-src 'self'; \
-                 img-src 'self'; connect-src 'self'; base-uri 'none'; \
-                 object-src 'none'; frame-ancestors 'none'; form-action 'none'; \
-                 require-trusted-types-for 'script'; trusted-types svelte-trusted-html",
-            ),
-        );
+        h.insert(header::CONTENT_SECURITY_POLICY, shell_policy(connect_src));
         h.insert(
             HeaderName::from_static("cross-origin-opener-policy"),
             HeaderValue::from_static("same-origin"),
@@ -394,6 +470,85 @@ pub fn set_security_headers(response: &mut Response, class: Class) {
 #[cfg(test)]
 mod tests {
     use crate::*;
+
+    fn connect_of(policy: &HeaderValue) -> String {
+        let text = policy.to_str().unwrap();
+        text.split(';')
+            .map(str::trim)
+            .find_map(|d| d.strip_prefix("connect-src "))
+            .unwrap()
+            .to_owned()
+    }
+
+    #[test]
+    fn the_page_connects_to_this_origin_only_unless_the_app_names_one_more() {
+        assert_eq!(connect_of(&super::shell_policy(None)), "'self'");
+        assert_eq!(
+            connect_of(&super::shell_policy(Some("https://api.github.com"))),
+            "'self' https://api.github.com"
+        );
+        // Everything else of the policy is the same either way.
+        let plain = super::shell_policy(None);
+        let wide = super::shell_policy(Some("https://api.github.com"));
+        assert_eq!(
+            plain.to_str().unwrap().replace("connect-src 'self'", ""),
+            wide.to_str()
+                .unwrap()
+                .replace("connect-src 'self' https://api.github.com", "")
+        );
+        assert_eq!(rules().connect_src(), None);
+        assert_eq!(
+            rules()
+                .with_connect_src("https://api.github.com")
+                .connect_src(),
+            Some("https://api.github.com")
+        );
+    }
+
+    #[test]
+    fn only_a_plain_https_host_may_be_named_for_connect_src() {
+        for good in [
+            "https://api.github.com",
+            "https://example.org:8443",
+            "https://a-b.c1.example.io",
+        ] {
+            assert!(super::plain_https_origin(good), "{good}");
+        }
+        for bad in [
+            "",
+            "https://",
+            "http://api.github.com",
+            "https://*.github.com",
+            "*",
+            "https://api.github.com/",
+            "https://api.github.com/x",
+            "https://api.github.com?x=1",
+            "https://api.github.com#x",
+            "https://user@api.github.com",
+            "https://api.github.com:0",
+            "https://api.github.com:65536",
+            "https://api.github.com:",
+            "https://api.github.com:80a",
+            "https://localhost",
+            "https://127.0.0.1",
+            "https://1.2.3.4:443",
+            "https://[::1]",
+            "https://API.github.com",
+            "https://api..github.com",
+            "https://-api.github.com",
+            "https://api.github.com;",
+            "https://api.github.com 'unsafe-eval'",
+            "https://api.github.com\r\nX: y",
+            "data:",
+            "'self'",
+        ] {
+            assert!(!super::plain_https_origin(bad), "{bad:?}");
+            assert!(
+                std::panic::catch_unwind(|| rules().with_connect_src(bad)).is_err(),
+                "{bad:?}"
+            );
+        }
+    }
 
     fn rules() -> GuardRules {
         GuardRules::new(

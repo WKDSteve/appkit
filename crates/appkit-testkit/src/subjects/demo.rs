@@ -63,40 +63,71 @@ fn routes(_core: &Arc<Core<DemoRuntime>>) -> Router<Arc<Core<DemoRuntime>>> {
 /// The hub of the second app, with no engine and no page.
 pub struct Demo;
 
+/// The same hub, whose page may also fetch from one other `https` host (`GuardRules::with_connect_src`).
+pub struct DemoWide;
+
+/// The host `DemoWide` names.
+pub const WIDE_ORIGIN: &str = "https://api.example.org";
+
+fn rules() -> GuardRules {
+    GuardRules::new(IDENTITY.route("hello"), [IDENTITY.route("ops")])
+}
+
+fn start_with(
+    cfg: StartConfig,
+    guard_rules: GuardRules,
+) -> BoxFuture<'static, std::io::Result<RunningServer>> {
+    Box::pin(async move {
+        serve(
+            ServeParts {
+                addr: cfg.addr,
+                limits: cfg.limits,
+                clock: cfg.clock,
+                pairing_ttl: cfg.pairing_ttl,
+                control_secret: cfg.control_secret,
+                instance: cfg.instance,
+                app: IDENTITY.app,
+                version: "0.0.0",
+                build_id: None,
+                guard_rules,
+                ui: Arc::new(NoPages),
+                runtime: DemoRuntime { status: cfg.status },
+                build: Arc::new(|()| DemoRuntime {
+                    status: HubStatus {
+                        engine_ready: false,
+                        problem: None,
+                        capabilities: Vec::new(),
+                    },
+                }),
+                vaults: None,
+            },
+            routes,
+        )
+        .await
+    })
+}
+
 impl Subject for Demo {
     fn identity(&self) -> &'static AppIdentity {
         &IDENTITY
     }
 
     fn start(&self, cfg: StartConfig) -> BoxFuture<'_, std::io::Result<RunningServer>> {
-        Box::pin(async move {
-            serve(
-                ServeParts {
-                    addr: cfg.addr,
-                    limits: cfg.limits,
-                    clock: cfg.clock,
-                    pairing_ttl: cfg.pairing_ttl,
-                    control_secret: cfg.control_secret,
-                    instance: cfg.instance,
-                    app: IDENTITY.app,
-                    version: "0.0.0",
-                    build_id: None,
-                    guard_rules: GuardRules::new(IDENTITY.route("hello"), [IDENTITY.route("ops")]),
-                    ui: Arc::new(NoPages),
-                    runtime: DemoRuntime { status: cfg.status },
-                    build: Arc::new(|()| DemoRuntime {
-                        status: HubStatus {
-                            engine_ready: false,
-                            problem: None,
-                            capabilities: Vec::new(),
-                        },
-                    }),
-                    vaults: None,
-                },
-                routes,
-            )
-            .await
-        })
+        start_with(cfg, rules())
+    }
+
+    fn data_routes(&self) -> Vec<&'static str> {
+        vec!["items", "item", "ops"]
+    }
+}
+
+impl Subject for DemoWide {
+    fn identity(&self) -> &'static AppIdentity {
+        &IDENTITY
+    }
+
+    fn start(&self, cfg: StartConfig) -> BoxFuture<'_, std::io::Result<RunningServer>> {
+        start_with(cfg, rules().with_connect_src(WIDE_ORIGIN))
     }
 
     fn data_routes(&self) -> Vec<&'static str> {

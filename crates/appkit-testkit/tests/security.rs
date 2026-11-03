@@ -5,3 +5,21 @@
 mod demo {
     appkit_testkit::security_matrix!(appkit_testkit::subjects::Demo);
 }
+
+mod demo_wide {
+    appkit_testkit::security_matrix!(appkit_testkit::subjects::DemoWide);
+}
+
+#[tokio::test]
+async fn an_app_without_an_extra_source_keeps_connect_src_self() {
+    appkit_testkit::security::the_page_may_connect_to(&appkit_testkit::subjects::Demo, None).await;
+}
+
+#[tokio::test]
+async fn an_app_that_names_one_https_host_gets_exactly_that_one() {
+    appkit_testkit::security::the_page_may_connect_to(
+        &appkit_testkit::subjects::DemoWide,
+        Some(appkit_testkit::subjects::WIDE_ORIGIN),
+    )
+    .await;
+}

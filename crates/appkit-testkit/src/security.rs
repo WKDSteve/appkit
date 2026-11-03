@@ -629,6 +629,23 @@ pub async fn the_page_needs_no_token_and_has_its_headers(s: &dyn Subject) {
         .header("content-security-policy")
         .unwrap()
         .contains("frame-ancestors 'none'"));
+    // The page reaches this origin and, at most, one plain https host the app named: no wildcard, no scheme
+    // but https, no second host.
+    let csp = r.header("content-security-policy").unwrap();
+    let connect = csp
+        .split(';')
+        .map(str::trim)
+        .find_map(|d| d.strip_prefix("connect-src "))
+        .expect("the policy has a connect-src");
+    let mut sources = connect.split(' ');
+    assert_eq!(sources.next(), Some("'self'"), "{connect}");
+    if let Some(extra) = sources.next() {
+        assert!(
+            extra.starts_with("https://") && !extra.contains('*') && !extra[8..].contains('/'),
+            "{connect}"
+        );
+    }
+    assert_eq!(sources.next(), None, "{connect}");
     // The page may write the clipboard (on a gesture), never read it, and no frame may do either.
     let policy = r.header("permissions-policy").unwrap();
     assert!(policy.contains("clipboard-write=(self)"), "{policy}");
@@ -636,6 +653,20 @@ pub async fn the_page_needs_no_token_and_has_its_headers(s: &dyn Subject) {
     // Anything else outside /api is not found, with no token needed.
     let r = get(&h, "/etc/passwd", &[]).await;
     assert_eq!(r.status, 404, "{r:?}");
+}
+
+/// The page of the app may fetch from this origin and from `extra` (an `https` host the app named), and from
+/// nothing else.
+pub async fn the_page_may_connect_to(s: &dyn Subject, extra: Option<&str>) {
+    let h = Harness::new(s).await;
+    let r = get(&h, "/", &[]).await;
+    assert_eq!(r.status, 200, "{r:?}");
+    let csp = r.header("content-security-policy").unwrap();
+    let want = match extra {
+        Some(origin) => format!("connect-src 'self' {origin};"),
+        None => "connect-src 'self';".to_owned(),
+    };
+    assert!(csp.contains(&want), "{csp}");
 }
 
 pub async fn every_answer_carries_the_security_headers(s: &dyn Subject) {
