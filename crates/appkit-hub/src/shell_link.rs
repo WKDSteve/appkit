@@ -3,7 +3,8 @@
 //!
 //! The link written here: a header, an item list of the path (the shell takes the target from
 //! it), a `LinkInfo` with the local path (ANSI and Unicode), and the strings for the description,
-//! the working folder and the arguments. Reading is the other half for `uninstall`: the target
+//! the working folder and the arguments. No icon: the shell shows that of the target, which the
+//! program carries itself (rule APP-11). Reading is the other half for `uninstall`: the target
 //! path of a link from its `LinkInfo`, also of one the script host made before.
 //!
 //! [MS-SHLLINK]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-shllink/
@@ -479,6 +480,64 @@ mod tests {
                 link.description
             )
         );
+    }
+
+    /// A link names no icon of its own, so the shell shows the icon of its target: a program that
+    /// carries its icon (rule APP-11) has it on its links too. The target is a program of Windows,
+    /// whose icon is not the plain one of a file that carries none.
+    #[cfg(windows)]
+    #[test]
+    fn the_shell_shows_the_icon_of_the_target_for_a_link() {
+        let dir = Scratch::new("shell-icon");
+        let target =
+            std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("explorer.exe");
+        let link_path = dir.join("Rules.lnk");
+        write(&link_path, &sample(&target.to_string_lossy())).unwrap();
+        let plain = dir.join("plain.exe");
+        std::fs::write(&plain, b"").unwrap();
+
+        let script = r#"
+Add-Type -AssemblyName System.Drawing
+Add-Type -TypeDefinition @'
+using System; using System.Runtime.InteropServices;
+public static class ShellIcon {
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  public struct INFO { public IntPtr hIcon; public int iIcon; public uint attr;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string name;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)] public string type; }
+  [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+  static extern IntPtr SHGetFileInfo(string path, uint attrs, ref INFO info, uint size, uint flags);
+  public static IntPtr Large(string path) { var i = new INFO(); SHGetFileInfo(path, 0, ref i, (uint)Marshal.SizeOf(i), 0x100); return i.hIcon; }
+}
+'@
+foreach ($path in $env:APPKIT_LNK, $env:APPKIT_TARGET, $env:APPKIT_PLAIN) {
+    $icon = [Drawing.Icon]::FromHandle([ShellIcon]::Large($path)).ToBitmap()
+    # The right half: a link has the arrow of the shell at the bottom left.
+    $half = $icon.Clone([Drawing.Rectangle]::new($icon.Width / 2, 0, $icon.Width / 2, $icon.Height), $icon.PixelFormat)
+    $stream = [IO.MemoryStream]::new()
+    $half.Save($stream, [Drawing.Imaging.ImageFormat]::Png)
+    [Convert]::ToBase64String($stream.ToArray())
+}
+"#;
+        let out = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", script])
+            // With the value of PowerShell 7 this one loads the modules of that one.
+            .env_remove("PSModulePath")
+            .env("APPKIT_LNK", &link_path)
+            .env("APPKIT_TARGET", &target)
+            .env("APPKIT_PLAIN", &plain)
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let icons: Vec<&str> = text.lines().collect();
+        assert_eq!(icons.len(), 3, "{text}");
+        assert_eq!(icons[0], icons[1], "the link shows another icon");
+        assert_ne!(icons[1], icons[2], "the target shows the plain icon");
     }
 
     #[test]
