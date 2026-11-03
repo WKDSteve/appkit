@@ -637,7 +637,7 @@ pub fn installed_program(app: &Background<'_>, env: &Env) -> Result<PathBuf, Str
 pub struct InstallOptions {
     /// Register the installed program with the login of the user.
     pub autostart: bool,
-    /// Put a link (named by the title of the app) on the desktop (Windows).
+    /// Put a link (named by the title of the app) on the desktop and in the Start menu (Windows).
     pub shortcut: bool,
 }
 
@@ -990,16 +990,55 @@ fn expand_vars(text: &str, env: &Env) -> Option<PathBuf> {
     Some(PathBuf::from(out))
 }
 
-/// The desktop folder of the user: `Desktop` under [`SHELL_FOLDERS_KEY`] with its variables
-/// expanded (`%OneDrive%\Desktop`: the variable comes from the environment, whatever its
-/// characters), else `%USERPROFILE%\Desktop` when the registry has no such value. A value that is
-/// there but cannot be used is an error, not a guess: `reg.exe` prints in the code page of the
-/// console, so a path with a character outside it comes back broken, and a link put in another
-/// folder would not be on the desktop the person sees.
-fn desktop_folder(env: &Env, reg: &dyn Registry) -> Result<PathBuf, String> {
-    let out = reg.run(&args(&["query", SHELL_FOLDERS_KEY, "/v", "Desktop"]))?;
+/// Where a link of the app is put: the desktop and the Start menu (`Programs` of the user, the
+/// list Windows shows under "All apps" and searches).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LinkPlace {
+    Desktop,
+    StartMenu,
+}
+
+impl LinkPlace {
+    const ALL: [Self; 2] = [Self::Desktop, Self::StartMenu];
+
+    /// The value of the folder under [`SHELL_FOLDERS_KEY`].
+    fn value(self) -> &'static str {
+        match self {
+            Self::Desktop => "Desktop",
+            Self::StartMenu => "Programs",
+        }
+    }
+
+    /// The folder when the registry names none.
+    fn fallback(self, env: &Env) -> Option<PathBuf> {
+        match self {
+            Self::Desktop => env.path("USERPROFILE").map(|p| p.join("Desktop")),
+            Self::StartMenu => env
+                .path("APPDATA")
+                .map(|p| p.join(r"Microsoft\Windows\Start Menu\Programs")),
+        }
+    }
+
+    /// How the texts name the place: "on the desktop", "in the Start menu".
+    fn said(self) -> &'static str {
+        match self {
+            Self::Desktop => "on the desktop",
+            Self::StartMenu => "in the Start menu",
+        }
+    }
+}
+
+/// A folder of the user: its value under [`SHELL_FOLDERS_KEY`] (`Desktop`, `Programs`) with its
+/// variables expanded (`%OneDrive%\Desktop`: the variable comes from the environment, whatever its
+/// characters), else its usual place in the profile when the registry has no such value. A value
+/// that is there but cannot be used is an error, not a guess: `reg.exe` prints in the code page of
+/// the console, so a path with a character outside it comes back broken, and a link put in another
+/// folder would not be where the person looks.
+fn shell_folder(env: &Env, reg: &dyn Registry, place: &LinkPlace) -> Result<PathBuf, String> {
+    let name = place.value();
+    let out = reg.run(&args(&["query", SHELL_FOLDERS_KEY, "/v", name]))?;
     let named = if out.success {
-        reg_value(&out.stdout, "Desktop")
+        reg_value(&out.stdout, name)
     } else {
         None
     };
@@ -1010,16 +1049,20 @@ fn desktop_folder(env: &Env, reg: &dyn Registry) -> Result<PathBuf, String> {
             expand_vars(&value, env)
         };
         return dir.filter(|p| p.is_absolute()).ok_or_else(|| {
-            format!("the desktop folder the registry names cannot be used: {value}")
+            format!(
+                "the folder {} the registry names cannot be used: {value}",
+                place.said()
+            )
         });
     }
-    env.path("USERPROFILE")
+    place
+        .fallback(env)
         .filter(|p| p.is_absolute())
-        .map(|p| p.join("Desktop"))
-        .ok_or_else(|| "no desktop folder found (no USERPROFILE)".to_owned())
+        .ok_or_else(|| format!("no folder {} found (no profile)", place.said()))
 }
 
-/// Take the link of the desktop (named by the title of the app) away (Windows), or the launcher (Linux).
+/// Take the links of the desktop and the Start menu (named by the title of the app) away
+/// (Windows), or the launcher (Linux). Both places are tried; the first failure is the answer.
 fn remove_shortcut(app: &Background<'_>, env: &Env) -> Result<String, String> {
     if !cfg!(windows) {
         let Some(platform) = loginitems::Platform::current() else {
@@ -1027,23 +1070,43 @@ fn remove_shortcut(app: &Background<'_>, env: &Env) -> Result<String, String> {
         };
         return loginitems::remove_launcher(&app.login, platform, env);
     }
-    let desktop = desktop_folder(env, &RegExe(system_program("reg.exe")?))?;
-    remove_link_in(
-        &desktop,
-        app.identity().title,
-        &app.identity().program_file(),
-    )
+    let reg = RegExe(system_program("reg.exe")?);
+    let mut out = String::new();
+    let mut failed = None;
+    for place in LinkPlace::ALL {
+        let removed = shell_folder(env, &reg, &place).and_then(|dir| {
+            remove_link_in(
+                &dir,
+                place,
+                app.identity().title,
+                &app.identity().program_file(),
+            )
+        });
+        match removed {
+            Ok(text) => out.push_str(&text),
+            Err(e) => {
+                failed.get_or_insert(e);
+            }
+        }
+    }
+    failed.map_or(Ok(out), Err)
 }
 
-/// Delete `<title>.lnk` in `desktop` when it points at the program `program`: a link of the
+/// Delete `<title>.lnk` in `dir` when it points at the program `program`: a link of the
 /// person's own that has the same name is not ours to delete.
-fn remove_link_in(desktop: &Path, title: &str, program: &str) -> Result<String, String> {
-    crate::shell_link::remove_if_target(&desktop.join(desktop_link_name(title)), program)
-        .map_err(|e| format!("the link on the desktop could not be checked: {e}"))?;
+fn remove_link_in(
+    dir: &Path,
+    place: LinkPlace,
+    title: &str,
+    program: &str,
+) -> Result<String, String> {
+    crate::shell_link::remove_if_target(&dir.join(desktop_link_name(title)), program)
+        .map_err(|e| format!("the link {} could not be checked: {e}", place.said()))?;
     // A link of the person's own with that name is not ours and stays: the text does not claim
-    // that the desktop is free of any link of that name.
+    // that the folder is free of any link of that name.
     Ok(format!(
-        "no link \"{title}\" of ours is on the desktop (one that was is removed)\n"
+        "no link \"{title}\" of ours is {} (one that was is removed)\n",
+        place.said()
     ))
 }
 
@@ -1072,7 +1135,7 @@ pub fn app_link(app: &str, target: &Path) -> crate::shell_link::Link {
     }
 }
 
-/// A link on the desktop (named by the title of the app) that starts the hub and opens the page.
+/// A link on the desktop and in the Start menu (named by the title of the app) that starts the hub and opens the page.
 /// It is written as a file (`shell_link`), not through the script host, which an endpoint
 /// protection stops when an unsigned program starts it.
 fn shortcut(app: &Background<'_>, exe: &Path) -> Result<String, String> {
@@ -1082,14 +1145,34 @@ fn shortcut(app: &Background<'_>, exe: &Path) -> Result<String, String> {
         return loginitems::launcher(&app.login, platform, exe, &Env::from_process());
     }
     let env = Env::from_process();
-    let desktop = desktop_folder(&env, &RegExe(system_program("reg.exe")?))?;
-    make_link_in(&desktop, app.identity().title, app.identity().app, exe)
+    let reg = RegExe(system_program("reg.exe")?);
+    let mut out = String::new();
+    for place in LinkPlace::ALL {
+        let dir = shell_folder(&env, &reg, &place)?;
+        out.push_str(&make_link_in(
+            &dir,
+            place,
+            app.identity().title,
+            app.identity().app,
+            exe,
+        )?);
+    }
+    Ok(out)
 }
 
-fn make_link_in(desktop: &Path, title: &str, app: &str, exe: &Path) -> Result<String, String> {
-    crate::shell_link::write(&desktop.join(desktop_link_name(title)), &app_link(app, exe))
-        .map_err(|e| format!("the desktop link could not be made: {e}"))?;
-    Ok(format!("a link \"{title}\" is on the desktop\n"))
+fn make_link_in(
+    dir: &Path,
+    place: LinkPlace,
+    title: &str,
+    app: &str,
+    exe: &Path,
+) -> Result<String, String> {
+    // The Start menu folder of a fresh profile may not be there yet.
+    std::fs::create_dir_all(dir)
+        .map_err(|e| format!("the link {} could not be made: {e}", place.said()))?;
+    crate::shell_link::write(&dir.join(desktop_link_name(title)), &app_link(app, exe))
+        .map_err(|e| format!("the link {} could not be made: {e}", place.said()))?;
+    Ok(format!("a link \"{title}\" is {}\n", place.said()))
 }
 
 #[cfg(test)]
@@ -1196,7 +1279,14 @@ mod tests {
     fn the_desktop_link_comes_from_the_app_and_only_ours_is_removed() {
         let desktop = Scratch::new("hub-desk");
         let exe = Path::new(r"C:\Apps\rules-hub.exe");
-        let text = make_link_in(&desktop, IDENTITY.title, IDENTITY.app, exe).unwrap();
+        let text = make_link_in(
+            &desktop,
+            LinkPlace::Desktop,
+            IDENTITY.title,
+            IDENTITY.app,
+            exe,
+        )
+        .unwrap();
         assert!(text.contains("\"Rules\""), "{text}");
         let link = desktop.join("Rules.lnk");
         let bytes = std::fs::read(&link).unwrap();
@@ -1216,26 +1306,70 @@ mod tests {
         let program = format!("{}.exe", IDENTITY.binary);
         crate::shell_link::write(&link, &app_link("mine", Path::new(r"C:\Apps\editor.exe")))
             .unwrap();
-        remove_link_in(&desktop, IDENTITY.title, &program).unwrap();
+        remove_link_in(&desktop, LinkPlace::Desktop, IDENTITY.title, &program).unwrap();
         assert!(link.is_file());
         // Ours goes.
-        make_link_in(&desktop, IDENTITY.title, IDENTITY.app, exe).unwrap();
-        remove_link_in(&desktop, IDENTITY.title, &program).unwrap();
+        make_link_in(
+            &desktop,
+            LinkPlace::Desktop,
+            IDENTITY.title,
+            IDENTITY.app,
+            exe,
+        )
+        .unwrap();
+        remove_link_in(&desktop, LinkPlace::Desktop, IDENTITY.title, &program).unwrap();
         assert!(!link.exists());
     }
 
-    /// `reg query` answers with this value for the desktop.
+    /// The Start menu gets the same link, also when its folder is not there yet, and says so.
+    #[test]
+    fn the_start_menu_link_is_the_same_link_in_a_folder_that_may_be_new() {
+        let root = Scratch::new("hub-start");
+        let programs = root.join("Start Menu").join("Programs");
+        let exe = Path::new(r"C:\Apps\rules-hub.exe");
+        let text = make_link_in(
+            &programs,
+            LinkPlace::StartMenu,
+            IDENTITY.title,
+            IDENTITY.app,
+            exe,
+        )
+        .unwrap();
+        assert_eq!(text, "a link \"Rules\" is in the Start menu\n");
+        let bytes = std::fs::read(programs.join("Rules.lnk")).unwrap();
+        assert_eq!(
+            crate::shell_link::target_path(&bytes).as_deref(),
+            Some(r"C:\Apps\rules-hub.exe")
+        );
+        let program = format!("{}.exe", IDENTITY.binary);
+        let said =
+            remove_link_in(&programs, LinkPlace::StartMenu, IDENTITY.title, &program).unwrap();
+        assert!(said.contains("in the Start menu"), "{said}");
+        assert!(!programs.join("Rules.lnk").exists());
+    }
+
+    #[cfg(windows)]
+    fn desktop_folder(env: &Env, reg: &dyn Registry) -> Result<PathBuf, String> {
+        shell_folder(env, reg, &LinkPlace::Desktop)
+    }
+
+    /// `reg query` answers with this value for the folder it is asked about.
     #[cfg(windows)]
     struct DesktopRegistry(Option<&'static str>);
 
     #[cfg(windows)]
     impl Registry for DesktopRegistry {
-        fn run(&self, _args: &[OsString]) -> Result<RegOutput, String> {
+        fn run(&self, args: &[OsString]) -> Result<RegOutput, String> {
+            let name = args
+                .last()
+                .and_then(|a| a.to_str())
+                .unwrap_or_default()
+                .to_owned();
             Ok(match self.0 {
                 Some(data) => RegOutput {
                     success: true,
                     stdout: format!(
-                        "\r\n{SHELL_FOLDERS_KEY}\r\n    Desktop    REG_EXPAND_SZ    {data}\r\n\r\n"
+                        "\r\n{SHELL_FOLDERS_KEY}\r\n    {name}    REG_EXPAND_SZ    {data}\r\n\r\n"
                     ),
                     stderr: String::new(),
                 },
@@ -1273,6 +1407,87 @@ mod tests {
             assert!(err.contains("cannot be used"), "{err}");
         }
         assert!(desktop_folder(&Env::default(), &DesktopRegistry(None)).is_err());
+    }
+
+    /// The Start menu is `Programs` of the same key, else under `%APPDATA%`; a value that cannot
+    /// be used is an error that names the place.
+    #[cfg(windows)]
+    #[test]
+    fn the_start_menu_is_the_programs_folder_the_registry_names() {
+        let env = Env::from_pairs([("APPDATA", r"C:\Users\a\AppData\Roaming"), ("X", r"D:\X")]);
+        let named = shell_folder(
+            &env,
+            &DesktopRegistry(Some(r"%X%\Programs")),
+            &LinkPlace::StartMenu,
+        );
+        assert_eq!(named.unwrap(), PathBuf::from(r"D:\X\Programs"));
+        assert_eq!(
+            shell_folder(&env, &DesktopRegistry(None), &LinkPlace::StartMenu).unwrap(),
+            PathBuf::from(r"C:\Users\a\AppData\Roaming\Microsoft\Windows\Start Menu\Programs")
+        );
+        let err = shell_folder(
+            &env,
+            &DesktopRegistry(Some(r"%NOPE%\P")),
+            &LinkPlace::StartMenu,
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("in the Start menu") && err.contains("cannot be used"),
+            "{err}"
+        );
+        assert!(shell_folder(
+            &Env::default(),
+            &DesktopRegistry(None),
+            &LinkPlace::StartMenu
+        )
+        .is_err());
+    }
+
+    /// `reg query` knows only the value `name` (`data`) and answers "not found" for any other.
+    #[cfg(windows)]
+    struct OnlyRegistry(&'static str, &'static str);
+
+    #[cfg(windows)]
+    impl Registry for OnlyRegistry {
+        fn run(&self, args: &[OsString]) -> Result<RegOutput, String> {
+            let asked = args.last().and_then(|a| a.to_str()) == Some(self.0);
+            Ok(RegOutput {
+                success: asked,
+                stdout: if asked {
+                    format!(
+                        "\r\n{SHELL_FOLDERS_KEY}\r\n    {}    REG_EXPAND_SZ    {}\r\n\r\n",
+                        self.0, self.1
+                    )
+                } else {
+                    String::new()
+                },
+                stderr: String::new(),
+            })
+        }
+    }
+
+    /// Each place asks the registry for its own value: the Start menu is never the desktop.
+    #[cfg(windows)]
+    #[test]
+    fn each_place_asks_for_its_own_folder() {
+        let env = Env::from_pairs([
+            ("APPDATA", r"C:\Users\a\AppData\Roaming"),
+            ("USERPROFILE", r"C:\Users\a"),
+        ]);
+        let programs = OnlyRegistry("Programs", r"D:\Programs");
+        assert_eq!(
+            shell_folder(&env, &programs, &LinkPlace::StartMenu).unwrap(),
+            PathBuf::from(r"D:\Programs")
+        );
+        assert_eq!(
+            shell_folder(&env, &programs, &LinkPlace::Desktop).unwrap(),
+            PathBuf::from(r"C:\Users\a\Desktop")
+        );
+        let desktop = OnlyRegistry("Desktop", r"D:\Desk");
+        assert_eq!(
+            shell_folder(&env, &desktop, &LinkPlace::StartMenu).unwrap(),
+            PathBuf::from(r"C:\Users\a\AppData\Roaming\Microsoft\Windows\Start Menu\Programs")
+        );
     }
 
     #[test]

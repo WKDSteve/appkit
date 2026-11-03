@@ -226,7 +226,7 @@ async fn ask_install(
     }
     let opts = InstallOptions {
         autostart: yes_no(io, "Start it when you log in?", false),
-        shortcut: yes_no(io, "Put a link on the desktop?", true),
+        shortcut: yes_no(io, "Put a link on the desktop and in the Start menu?", true),
     };
     Ok(install_or_warn(app, io, opts, target).await)
 }
