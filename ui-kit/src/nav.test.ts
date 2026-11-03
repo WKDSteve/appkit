@@ -175,6 +175,17 @@ describe('installNav with the place in the address', () => {
     expect(f.calls).toHaveLength(1);
   });
 
+  it('leaves the address as it is for a state that has no route of its own', () => {
+    const f = addressed('#task=solo');
+    f.address.toRoute = (s) => (s.view === 'rules' ? null : { view: s.view });
+    f.nav.record({ view: 'rules', id: 'solo' });
+    f.nav.record({ view: 'overview', id: null });
+    expect(f.calls.map((c) => [c[0], c[2]])).toEqual([
+      ['replace', undefined],
+      ['push', '/#view=overview'],
+    ]);
+  });
+
   it('Back still restores from the entry, not from the address', () => {
     const f = addressed();
     f.nav.record({ view: 'overview', id: null });

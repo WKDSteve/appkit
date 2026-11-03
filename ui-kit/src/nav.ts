@@ -24,8 +24,11 @@ export interface NavWindow {
 /** The place in the address: the app's route of a state, and the state of a route. */
 export interface NavAddress<S> {
   location: { pathname: string; search: string; hash: string };
-  /** The route of the state. Only what a new tab needs to open the place; the rest stays in `history.state`. */
-  toRoute: (state: S) => Route;
+  /**
+   * The route of the state. Only what a new tab needs to open the place; the rest stays in `history.state`. Null: the
+   * address is not this state's to set (another part of the page keeps it, a window of one item), it is left as it is.
+   */
+  toRoute: (state: S) => Route | null;
   /** The state a route names, or null when it names none (no route, a view that is no view). */
   fromRoute: (route: Record<string, string>) => S | null;
 }
@@ -85,8 +88,10 @@ export function installNav<S>(options: NavOptions<S>): Nav<S> {
   /** The URL of a state, or undefined when the address is not kept: the URL then stays as it is. */
   const urlOf = (state: S): string | undefined => {
     if (!address) return undefined;
+    const route = address.toRoute(state);
+    if (route === null) return undefined;
     const { pathname, search } = address.location;
-    return `${pathname}${search}${routeHash(address.toRoute(state))}`;
+    return `${pathname}${search}${routeHash(route)}`;
   };
   const onPop = (event: { state: unknown }): void => {
     const entry = entryOf(event.state, options.isState);
