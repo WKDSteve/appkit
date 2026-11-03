@@ -44,14 +44,16 @@ export function readRoute(hash: string): Record<string, string> {
 }
 
 /**
- * The fragment of a route, `#key=value&...` in the order of its keys, or empty for none. A key or a value that a route
- * cannot hold is an error of the app, not of the person: it throws.
+ * The fragment of a route, `#key=value&...` in the order of its keys, or empty for none. A key a route cannot hold is
+ * an error of the app: it throws. A value comes from the data (the id of an item from its file) and is left out when a
+ * route cannot carry it, or would not read it back the same (space at its ends): the address then names less, the page
+ * still works.
  */
 export function routeHash(route: Route): string {
   const parts: string[] = [];
   for (const [key, value] of Object.entries(route)) {
     if (!KEY.test(key) || key === PAIR) throw new Error(`appkit route: not a route key: ${JSON.stringify(key)}`);
-    if (!valueOk(value)) throw new Error(`appkit route: not a value for ${key}`);
+    if (!valueOk(value) || value.trim() !== value) continue;
     parts.push(`${key}=${encodeURIComponent(value)}`);
   }
   return parts.length === 0 ? '' : `#${parts.join('&')}`;

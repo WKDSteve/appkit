@@ -40,11 +40,17 @@ describe('routeHash and routeHref', () => {
     expect(readRoute(routeHash(route))).toEqual(route);
   });
 
-  it("refuses a key or a value a route cannot hold: that is the app's mistake", () => {
+  it("refuses a key a route cannot hold: that is the app's mistake", () => {
     expect(() => routeHash({ pair: 'x' })).toThrow();
     expect(() => routeHash({ View: 'x' })).toThrow();
-    expect(() => routeHash({ view: '' })).toThrow();
-    expect(() => routeHash({ view: 'a\nb' })).toThrow();
+  });
+
+  it('leaves out a value from the data it cannot carry or read back the same, and does not throw', () => {
+    const long = 'x'.repeat(MAX_VALUE + 1);
+    for (const task of ['', 'a\nb', long, ' padded', 'padded ']) {
+      expect(routeHash({ view: 'list', task })).toBe('#view=list');
+    }
+    expect(routeHash({ task: long })).toBe('');
   });
 });
 
