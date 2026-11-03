@@ -40,7 +40,7 @@ pub const APP_PORTS: &[PortUse] = &[
     },
     PortUse {
         port: 17618,
-        owner: "testing-desktop (planned)",
+        owner: "testing-desktop",
     },
     PortUse {
         port: 17650,
