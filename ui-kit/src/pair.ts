@@ -1,6 +1,8 @@
 // The pairing code travels in the URL fragment: it never goes to a server
 // or a referrer. It is taken out of the address bar at once (concept 5.6).
 
+import { readRoute, routeHash } from './route';
+
 export interface LocationLike {
   hash: string;
   pathname: string;
@@ -25,11 +27,15 @@ function injectedCode(injected: unknown): string | null {
  * names, e.g. from an initialization script, and passes it here): a window of the shell has no
  * address bar to carry a fragment. The fragment wins when both are there; the injected one is
  * checked like it.
+ *
+ * `keepRoute`: the place of the page in the fragment (`route.ts`) stays in the address, the code and whatever else the
+ * fragment held leave it. Without it the whole fragment goes. An address that holds nothing to take out is not touched.
  */
 export function takePairingCode(
   location: LocationLike,
   history: HistoryLike,
   injected?: unknown,
+  options?: { keepRoute?: boolean },
 ): string | null {
   const hash = location.hash.startsWith('#') ? location.hash.slice(1) : location.hash;
   if (hash === '') return injectedCode(injected);
@@ -38,7 +44,8 @@ export function takePairingCode(
     const [key, value] = part.split('=');
     if (key === 'pair' && value && CODE.test(value)) code = value;
   }
-  // Whatever the fragment held, it is not left in the history.
-  history.replaceState(null, '', location.pathname + location.search);
+  // Whatever the fragment held besides the route, it is not left in the history.
+  const kept = options?.keepRoute === true ? routeHash(readRoute(hash)) : '';
+  if (kept !== `#${hash}`) history.replaceState(null, '', location.pathname + location.search + kept);
   return code ?? injectedCode(injected);
 }

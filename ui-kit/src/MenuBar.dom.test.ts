@@ -209,3 +209,95 @@ describe('MenuBar opens an item apart', () => {
     expect(picked).toEqual(['Board']);
   });
 });
+
+describe('MenuBar shows an item with an address as a link', () => {
+  const opened: string[] = [];
+  const linkMenus: Menu[] = [
+    {
+      id: 'view',
+      label: 'View',
+      items: [
+        {
+          kind: 'radio',
+          label: 'Plan',
+          checked: false,
+          href: '/#view=plan',
+          onselect: () => picked.push('Plan'),
+          onopennew: () => opened.push('Plan'),
+        },
+        { kind: 'radio', label: 'Board', checked: true, href: '/#view=board', onselect: () => picked.push('Board') },
+        { kind: 'action', label: 'Off', disabled: true, href: '/#view=off', onselect: () => picked.push('Off') },
+        { kind: 'action', label: 'Zoom', onselect: () => picked.push('Zoom') },
+      ],
+    },
+  ];
+  const item = (label: string) =>
+    [...document.querySelectorAll<HTMLElement>('.mb-item')].find((b) => b.textContent?.includes(label))!;
+  const mouse = (target: EventTarget, type: string, init: MouseEventInit): MouseEvent => {
+    const e = new MouseEvent(type, { bubbles: true, cancelable: true, ...init });
+    target.dispatchEvent(e);
+    return e;
+  };
+
+  beforeEach(async () => {
+    opened.length = 0;
+    if (app) await unmount(app);
+    document.body.innerHTML = '';
+    app = mount(MenuBar, { target: document.body, props: { menus: linkMenus, label: 'Menu', initialOpen: 'view' } });
+    flushSync();
+  });
+
+  it('is an <a> with the address and the role of its kind; a disabled one and one without stay buttons', () => {
+    const plan = item('Plan');
+    expect(plan.tagName).toBe('A');
+    expect(plan.getAttribute('href')).toBe('/#view=plan');
+    expect(plan.getAttribute('role')).toBe('menuitemradio');
+    expect(plan.getAttribute('type')).toBeNull();
+    expect(item('Off').tagName).toBe('BUTTON');
+    expect((item('Off') as HTMLButtonElement).disabled).toBe(true);
+    expect(item('Zoom').tagName).toBe('BUTTON');
+  });
+
+  it('a plain click chooses it in the page and does not follow the link', () => {
+    const e = mouse(item('Board'), 'click', { button: 0 });
+    expect(e.defaultPrevented).toBe(true);
+    expect(picked).toEqual(['Board']);
+  });
+
+  it("Ctrl+click and Shift+click of a link without the way apart are the browser's", () => {
+    expect(mouse(item('Board'), 'click', { button: 0, ctrlKey: true }).defaultPrevented).toBe(false);
+    expect(mouse(item('Board'), 'click', { button: 0, shiftKey: true }).defaultPrevented).toBe(false);
+    expect(picked).toEqual([]);
+  });
+
+  it('Ctrl+click of a link with the way apart takes that way (the session goes with it)', async () => {
+    const e = mouse(item('Plan'), 'click', { button: 0, ctrlKey: true });
+    await settle();
+    expect(e.defaultPrevented).toBe(true);
+    expect(opened).toEqual(['Plan']);
+    expect(picked).toEqual([]);
+  });
+
+  it('Alt+click does not save the link: it chooses the item', () => {
+    expect(mouse(item('Board'), 'click', { button: 0, altKey: true }).defaultPrevented).toBe(true);
+    expect(picked).toEqual(['Board']);
+  });
+
+  it('a middle click of a link without the way apart is left to the browser', () => {
+    expect(mouse(item('Board'), 'mousedown', { button: 1 }).defaultPrevented).toBe(false);
+    expect(mouse(item('Board'), 'auxclick', { button: 1 }).defaultPrevented).toBe(false);
+    expect(picked).toEqual([]);
+  });
+
+  it('Space chooses a link as it does a button, and the arrows walk links and buttons alike', async () => {
+    item('Plan').focus();
+    key(item('Plan'), 'ArrowDown');
+    expect(document.activeElement).toBe(item('Board'));
+    key(item('Board'), 'ArrowDown');
+    expect(document.activeElement).toBe(item('Zoom'));
+    const e = key(item('Board'), ' ');
+    await settle();
+    expect(e.defaultPrevented).toBe(true);
+    expect(picked).toEqual(['Board']);
+  });
+});

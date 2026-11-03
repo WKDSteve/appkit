@@ -94,7 +94,17 @@ export {
 } from './palette';
 export type { ToastKind, ToastMessage } from './toast';
 export { hostOf, MAX_SOURCE, parseMarkdown, safeHref, type Block, type Inline } from './markdown';
-export { installNav, type Nav, type NavHistory, type NavOptions, type NavWindow } from './nav';
+export {
+  installNav,
+  placeOf,
+  type Nav,
+  type NavAddress,
+  type NavHistory,
+  type NavOptions,
+  type NavWindow,
+} from './nav';
+export { hasPairing, MAX_VALUE, readRoute, routeHash, routeHref, type Route } from './route';
+export { ASK_MS, askForSession, shareSession, type AskOptions, type ChannelLike, type ShareOptions } from './handoff';
 export { takePairingCode, type HistoryLike, type LocationLike } from './pair';
 export {
   backoffSeconds,

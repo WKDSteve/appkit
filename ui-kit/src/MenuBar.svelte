@@ -8,6 +8,8 @@
   // Up and Down walk the items; a letter goes to the next item that starts with it; Left and Right go to the next
   // menu; Escape closes; Alt+letter opens the menu whose `mnemonic` that is. The shortcut is only shown: the app
   // binds the key itself. An item with `onopennew` opens apart like a link: middle click, Ctrl+click, Ctrl+Enter.
+  // An item with `href` is a link (`<a>`): what the page does not take itself (the context menu, Shift+click, a middle
+  // click or Ctrl+click without `onopennew`) the browser does with the address, a plain click stays in the page.
 
   import { tick, untrack } from 'svelte';
   import { tooltip } from './tooltip';
@@ -52,10 +54,26 @@
     return root ? [...root.querySelectorAll<HTMLButtonElement>('button.mb-trigger')] : [];
   }
 
-  function itemButtons(id: string): HTMLButtonElement[] {
-    return root
-      ? [...root.querySelectorAll<HTMLButtonElement>(`[data-menu="${id}"] button.mb-item:not(:disabled)`)]
-      : [];
+  function itemButtons(id: string): HTMLElement[] {
+    return root ? [...root.querySelectorAll<HTMLElement>(`[data-menu="${id}"] .mb-item:not(:disabled)`)] : [];
+  }
+
+  /** The address of an item that is a link, or null: it has none, or it cannot be chosen now (then it is a button). */
+  function linkOf(item: MenuItem): string | null {
+    if ((item.kind !== 'action' && item.kind !== 'radio') || item.disabled || !item.href) return null;
+    return item.href;
+  }
+
+  function onItemClick(event: MouseEvent, item: MenuItem): void {
+    if (apartKey(event) && pickApart(item)) {
+      event.preventDefault();
+      return;
+    }
+    // A link opened with a modifier is the browser's: a new tab or window at its address.
+    if (linkOf(item) !== null && (apartKey(event) || event.shiftKey)) return;
+    // Alt+click would save the link; a plain click goes to the place in this page, without loading it again.
+    event.preventDefault();
+    pick(item);
   }
 
   async function open(id: string, focusItem: 'first' | 'last' | null): Promise<void> {
@@ -144,7 +162,7 @@
       return;
     }
     const items = itemButtons(id);
-    const at = items.indexOf(event.currentTarget as HTMLButtonElement);
+    const at = items.indexOf(event.currentTarget as HTMLElement);
     const focus = (i: number) => items[(i + items.length) % items.length]?.focus();
     switch (event.key) {
       case 'ArrowDown':
@@ -180,6 +198,13 @@
       }
       case 'Tab':
         close(false);
+        break;
+      case ' ':
+        // A button takes Space by itself; a link does not.
+        if (linkOf(item) !== null) {
+          event.preventDefault();
+          pick(item);
+        }
         break;
       default:
         if (event.key.length === 1 && event.key !== ' ' && !event.ctrlKey && !event.metaKey && !event.altKey) {
@@ -230,33 +255,34 @@
     {#if item.kind === 'info'}
       <p class="mb-note" role="none">{item.label}</p>
     {:else if item.kind !== 'separator' && item.kind !== 'section'}
-      <button
-        type="button"
+      {@const href = linkOf(item)}
+      <svelte:element
+        this={href !== null ? 'a' : 'button'}
+        type={href !== null ? undefined : 'button'}
+        href={href ?? undefined}
         class="mb-item"
         role={roleOf(item)}
         aria-checked={item.kind === 'radio' || item.kind === 'check' ? item.checked : undefined}
         aria-keyshortcuts={item.shortcut ? ariaShortcut(item.shortcut) : undefined}
-        disabled={(item.kind === 'action' || item.kind === 'radio') && item.disabled}
+        disabled={href !== null ? undefined : (item.kind === 'action' || item.kind === 'radio') && item.disabled}
         tabindex="-1"
         use:tooltip={item.hint ?? ''}
-        onclick={(e) => {
-          if (!(apartKey(e) && pickApart(item))) pick(item);
-        }}
-        onmousedown={(e) => {
+        onclick={(e: MouseEvent) => onItemClick(e, item)}
+        onmousedown={(e: MouseEvent) => {
           // The middle button would start the browser's autoscroll on the page.
           if (e.button === 1 && apart(item)) e.preventDefault();
         }}
-        onauxclick={(e) => {
+        onauxclick={(e: MouseEvent) => {
           if (e.button === 1 && pickApart(item)) e.preventDefault();
         }}
-        onkeydown={(e) => onItemKey(e, id, item)}
+        onkeydown={(e: KeyboardEvent) => onItemKey(e, id, item)}
       >
         <span class="mb-mark" aria-hidden="true"
           >{item.kind === 'radio' ? (item.checked ? '●' : '') : item.kind === 'check' ? (item.checked ? '✓' : '') : ''}</span
         >
         <span class="mb-text">{item.label}</span>
         {#if item.shortcut}<span class="mb-shortcut">{item.shortcut}</span>{/if}
-      </button>
+      </svelte:element>
     {/if}
   {/each}
 {/snippet}
@@ -377,6 +403,10 @@
     color: var(--text);
     cursor: pointer;
     white-space: nowrap;
+    /* A link item looks like the others. */
+    font: inherit;
+    text-decoration: none;
+    box-sizing: border-box;
   }
   /* As in a native menu, the item under the pointer or the key is filled with the accent. */
   .mb-item:hover:not(:disabled),

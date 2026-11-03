@@ -7,6 +7,8 @@
  *
  * An action or radio item that shows something may carry `onopennew`: the way a link opens in a new tab, a middle
  * click, Ctrl+click (Cmd+click) or Ctrl+Enter (Cmd+Enter) on it calls that instead of `onselect` (the menu bar only).
+ * One that also has `href` (a place of the page, `route.ts`) is a link: the browser's own ways to open a link (its
+ * context menu, Shift+click) open that address, and a plain click still calls `onselect` in the page.
  */
 export type MenuItem =
   | {
@@ -14,6 +16,7 @@ export type MenuItem =
       label: string;
       onselect: () => void;
       onopennew?: () => void;
+      href?: string;
       disabled?: boolean;
       shortcut?: string;
       hint?: string;
@@ -24,6 +27,7 @@ export type MenuItem =
       checked: boolean;
       onselect: () => void;
       onopennew?: () => void;
+      href?: string;
       disabled?: boolean;
       shortcut?: string;
       hint?: string;

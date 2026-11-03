@@ -74,6 +74,33 @@ expired code is the same.
 A pairing code is never handed out by an open endpoint. The only way to get one is to be a program
 that can read `control.secret`.
 
+### A new tab of the page
+
+A place of the page (a view, an open item) can stand in the fragment of the address
+(`appkit-ui/route`, `appkit-ui/nav`), so that it opens in a new tab, again after a reload, and from a
+copied address. It is in the fragment for the same reason the pairing code is: a browser does not send
+it to the hub or in a `Referer`. It does end up in the browser's history, with the name of the item it
+names; an app puts into a route only what a new tab needs to find the place (an id, the name of a
+view), never the content of an item. The pairing code is never part of a route: `takePairingCode`
+with `keepRoute` takes the code out and leaves only the place.
+
+The token is kept per tab. A tab the browser opened itself from a link (its context menu, a middle
+click the page did not take) starts without one. Instead of a new pairing code it asks the open tabs
+of the page on a `BroadcastChannel` (`appkit-ui/handoff`), and one that has a session answers with its
+token; the new tab shares that session (no new session is opened, and the limit of the hub is not
+touched by tabs). What limits this:
+
+* A broadcast channel reaches only pages of the same origin (`http://127.0.0.1:PORT`) in the same
+  browser profile. A script of that origin owns the session anyway (see below).
+* A tab answers only while its event stream is open. The hub is then up and holds the port, so the
+  page that asks was served by that hub and not by another program that took the port after the hub
+  stopped (see below, another process of the same user).
+* The question carries 128 random bits and an answer counts only for it; an answer whose token is not
+  printable ASCII of the length of a token is not taken. Without an answer in 400 ms the new tab pairs
+  the way a first tab does.
+* A tab that shares a session shares its limits too: the live connections of a session are counted
+  across all its tabs.
+
 ### The control secret file
 
 `<config>/<app>/control.secret` is the one thing that lets a local program ask for access. It is
