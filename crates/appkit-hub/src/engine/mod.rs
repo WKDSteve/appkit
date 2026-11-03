@@ -65,6 +65,25 @@ impl EngineDialect {
     }
 }
 
+/// How much of a foreign `schema` an error message shows.
+const SHOWN_SCHEMA_CHARS: usize = 64;
+
+/// The `schema` of a head as a message may show it: its JSON text (control characters escaped), at
+/// most [`SHOWN_SCHEMA_CHARS`] characters, `none` when there is none. The engine wrote it, so it is
+/// not repeated whole: a text of any length would go into every error message.
+pub(crate) fn shown_schema(schema: Option<&Value>) -> String {
+    let Some(value) = schema else {
+        return "none".to_owned();
+    };
+    let text = value.to_string();
+    if text.chars().count() <= SHOWN_SCHEMA_CHARS {
+        return text;
+    }
+    let mut cut: String = text.chars().take(SHOWN_SCHEMA_CHARS).collect();
+    cut.push_str("...");
+    cut
+}
+
 /// An answer of the engine: one JSON document on one line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Reply {
@@ -393,5 +412,22 @@ mod dialect_tests {
             assert!(!tagged.head_schema_matches(Some(&bad)), "{bad}");
         }
         assert!(!tagged.head_schema_matches(None));
+    }
+
+    #[test]
+    fn a_foreign_schema_is_shown_short_and_escaped() {
+        use serde_json::json;
+        assert_eq!(shown_schema(None), "none");
+        assert_eq!(shown_schema(Some(&json!(2))), "2");
+        assert_eq!(shown_schema(Some(&json!("x/1"))), r#""x/1""#);
+        let long = shown_schema(Some(&json!("y".repeat(10_000))));
+        assert_eq!(long.chars().count(), SHOWN_SCHEMA_CHARS + 3, "{long}");
+        assert!(long.ends_with("..."), "{long}");
+        // A line break or an escape of the engine stays escaped: one line, nothing for a terminal.
+        let raw = shown_schema(Some(&json!("a\nb\u{1b}[2J")));
+        assert!(!raw.chars().any(char::is_control), "{raw:?}");
+        // Cut at a character, not in the middle of one.
+        let wide = shown_schema(Some(&json!("\u{e4}".repeat(200))));
+        assert_eq!(wide.chars().count(), SHOWN_SCHEMA_CHARS + 3, "{wide}");
     }
 }

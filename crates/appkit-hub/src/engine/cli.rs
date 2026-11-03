@@ -307,9 +307,7 @@ impl Inner {
         if !self.cfg.dialect.head_schema_matches(head.schema.as_ref()) {
             return Err(EngineError::Protocol(format!(
                 "unsupported schema {}",
-                head.schema
-                    .as_ref()
-                    .map_or_else(|| "none".to_owned(), Value::to_string)
+                self.scrub(&super::shown_schema(head.schema.as_ref()))
             )));
         }
         let kind = head.kind.unwrap_or_default();
