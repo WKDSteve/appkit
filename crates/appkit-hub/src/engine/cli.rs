@@ -71,7 +71,8 @@ pub struct CliEngineConfig {
 /// The head every document starts with.
 #[derive(Deserialize)]
 struct Head {
-    schema: Option<u64>,
+    /// A number, or the text of a dialect with a `schema_tag`.
+    schema: Option<Value>,
     kind: Option<String>,
     code: Option<String>,
     message: Option<String>,
@@ -303,10 +304,12 @@ impl Inner {
                 detail: self.scrub(&format!("no document: {stderr}")),
             });
         };
-        if head.schema != Some(self.cfg.dialect.schema) {
+        if !self.cfg.dialect.head_schema_matches(head.schema.as_ref()) {
             return Err(EngineError::Protocol(format!(
-                "unsupported schema {:?}",
+                "unsupported schema {}",
                 head.schema
+                    .as_ref()
+                    .map_or_else(|| "none".to_owned(), Value::to_string)
             )));
         }
         let kind = head.kind.unwrap_or_default();

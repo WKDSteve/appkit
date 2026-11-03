@@ -31,6 +31,10 @@ pub use wire::ascii_json;
 pub struct EngineDialect {
     /// The contract version the app speaks.
     pub schema: u64,
+    /// How the head of every document names the contract when the engine writes it as a text
+    /// (testing.nvim: `"testing-export/1"`) instead of the number [`Self::schema`]. `None`: the head
+    /// holds the number. `hello` lists the versions as numbers (`schemas`) either way.
+    pub schema_tag: Option<&'static str>,
     /// The `kind` of a document by which the engine refuses or fails (`tasks.error`).
     pub error_kind: &'static str,
     /// The file name of the persistent host, next to the script of the engine (`tasks-host.lua`).
@@ -45,6 +49,20 @@ pub struct EngineDialect {
     pub hello: Method,
     /// How a message names the engine ("the tasks.nvim checkout").
     pub engine_name: &'static str,
+}
+
+impl EngineDialect {
+    /// Does the `schema` of a document's head name the contract this app speaks? The number
+    /// [`Self::schema`], or, for a dialect with a [`Self::schema_tag`], exactly that text: the other
+    /// form is refused, so a document of another contract with the same number does not pass.
+    #[must_use]
+    pub fn head_schema_matches(&self, schema: Option<&Value>) -> bool {
+        match (self.schema_tag, schema) {
+            (Some(tag), Some(Value::String(s))) => s == tag,
+            (None, Some(n)) => n.as_u64() == Some(self.schema),
+            _ => false,
+        }
+    }
 }
 
 /// An answer of the engine: one JSON document on one line.
@@ -288,6 +306,7 @@ mod dialect_tests {
 
     const RULES: EngineDialect = EngineDialect {
         schema: 2,
+        schema_tag: None,
         error_kind: "rules.error",
         host_script: "rules-host.lua",
         vault_var: "RULES_VAULT",
@@ -340,5 +359,39 @@ mod dialect_tests {
             needs: RULES.schema,
         };
         assert!(schema.to_string().contains("needs 2"), "{schema}");
+    }
+
+    #[test]
+    fn a_head_names_the_contract_by_the_number_or_by_the_tag_of_the_dialect_never_by_the_other() {
+        use serde_json::json;
+        // The number of the dialect, and nothing that only looks like it.
+        assert!(RULES.head_schema_matches(Some(&json!(2))));
+        for bad in [
+            json!(1),
+            json!(2.5),
+            json!("2"),
+            json!("rules-export/2"),
+            json!(null),
+        ] {
+            assert!(!RULES.head_schema_matches(Some(&bad)), "{bad}");
+        }
+        assert!(!RULES.head_schema_matches(None));
+        // A dialect with a tag takes exactly that text: not the number, not another contract's tag.
+        let tagged = EngineDialect {
+            schema: 1,
+            schema_tag: Some("testing-export/1"),
+            ..RULES
+        };
+        assert!(tagged.head_schema_matches(Some(&json!("testing-export/1"))));
+        for bad in [
+            json!(1),
+            json!("testing-export/2"),
+            json!("tasks-export/1"),
+            json!("testing-export/1 "),
+            json!(null),
+        ] {
+            assert!(!tagged.head_schema_matches(Some(&bad)), "{bad}");
+        }
+        assert!(!tagged.head_schema_matches(None));
     }
 }

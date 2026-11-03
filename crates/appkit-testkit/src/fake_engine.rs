@@ -188,7 +188,8 @@ fn respond(
         .get("kind")
         .and_then(Value::as_str)
         .map_or_else(|| dialect.kind(method).to_owned(), str::to_owned);
-    let schema = fake.get("schema").and_then(Value::as_u64).unwrap_or(1);
+    // As given: a number, or the text of an engine that names its contract so (`schema_tag`).
+    let schema = fake.get("schema").cloned().unwrap_or_else(|| json!(1));
     let mut doc = json!({
         "schema": schema,
         "plugin": dialect.plugin,
