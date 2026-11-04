@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Preferences, StreamSession, type StreamDeps } from './session.svelte';
 import type { SseMessage } from './sse';
 
@@ -162,5 +162,52 @@ describe('StreamSession', () => {
     expect(log).toEqual([]);
     session.resume();
     expect(session.stopped).toBe(false);
+  });
+
+  /** A hub whose streams stay open until they are cut, and that says how many are open and with which token. */
+  function holdingHub() {
+    const tokens: string[] = [];
+    let open = 0;
+    const fetchFn = (async (_url: string, init: RequestInit) => {
+      tokens.push(new Headers(init.headers).get('Authorization') ?? '');
+      open += 1;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          init.signal?.addEventListener('abort', () => {
+            open -= 1;
+            controller.error(new DOMException('cut', 'AbortError'));
+          });
+        },
+      });
+      return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    }) as unknown as typeof fetch;
+    return { fetchFn, tokens, openStreams: () => open };
+  }
+
+  it('stays one reader when a page stops and starts again at once, and reads on with the new token', async () => {
+    const hub = holdingHub();
+    const { session, d } = deps([], { fetchFn: hub.fetchFn, bearer: () => 'old' });
+    const first = session.follow(d);
+    await vi.waitFor(() => expect(hub.openStreams()).toBe(1));
+
+    // What a page does with a pairing link pasted into the tab.
+    session.stop();
+    session.resume();
+    const second = session.follow({ ...d, bearer: () => 'new' });
+    await vi.waitFor(() => expect(hub.tokens.at(-1)).toBe('Bearer new'));
+    await new Promise((resolve) => setTimeout(resolve));
+    expect(hub.openStreams()).toBe(1);
+    expect(hub.tokens).toEqual(['Bearer old', 'Bearer new']);
+
+    session.stop();
+    await Promise.all([first, second]);
+    expect(hub.openStreams()).toBe(0);
+  });
+
+  it('starts a new reader once the last one has ended', async () => {
+    const { session, d, log } = deps([() => new Response('', { status: 401 }), () => new Response('', { status: 401 })]);
+    await session.follow(d);
+    await session.follow(d);
+    expect(log).toEqual(['fetch', 'lost', 'fetch', 'lost']);
   });
 });

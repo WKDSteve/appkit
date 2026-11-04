@@ -101,6 +101,8 @@ export class StreamSession {
   /** The page was stopped: nothing is read, nothing started again. */
   stopped = false;
   private abort: AbortController | null = null;
+  private deps: StreamDeps | null = null;
+  private reader: Promise<void> | null = null;
 
   /** The page starts (or starts again after it was stopped). */
   resume(): void {
@@ -121,10 +123,34 @@ export class StreamSession {
   /**
    * Read the stream, and again after it breaks, a little later each time up to half a minute, until the page stops, the
    * session is gone or the hub refuses it.
+   *
+   * There is one reader. A page that stops and starts again at once (a pairing link pasted into the tab) finds the one
+   * that ran still going: it is not joined by a second, its stream is cut and it reads on with what this call brings.
    */
-  async follow(deps: StreamDeps): Promise<void> {
+  follow(deps: StreamDeps): Promise<void> {
+    this.deps = deps;
+    if (this.reader) {
+      this.abort?.abort();
+      return this.reader;
+    }
+    this.reader = this.read();
+    return this.reader;
+  }
+
+  private async read(): Promise<void> {
+    try {
+      await this.readUntilDone();
+    } finally {
+      // In the same step as the loop's last check, so that no later `follow` can find a reader that has already ended.
+      this.reader = null;
+    }
+  }
+
+  private async readUntilDone(): Promise<void> {
     let attempt = 0;
-    while (!this.stopped && deps.hasToken()) {
+    for (;;) {
+      const deps = this.deps;
+      if (deps === null || this.stopped || !deps.hasToken()) return;
       this.abort = new AbortController();
       try {
         await readStream(
@@ -150,7 +176,8 @@ export class StreamSession {
       } finally {
         this.open = false;
       }
-      if (this.stopped || !deps.hasToken()) return;
+      const now = this.deps;
+      if (now === null || this.stopped || !now.hasToken()) return;
       this.connection = 'reconnecting';
       await deps.sleep(backoffSeconds(attempt++) * 1000);
     }
