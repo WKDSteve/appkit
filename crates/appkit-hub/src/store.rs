@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use axum::body::Bytes;
 use serde::de::{DeserializeSeed, IgnoredAny, MapAccess, Visitor};
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::{broadcast, Mutex as AsyncMutex, Notify};
 use tokio::task::JoinHandle;
@@ -186,6 +186,8 @@ pub struct SnapshotStore {
     engine: Option<Arc<dyn Engine>>,
     shape: SnapshotShape,
     options: StoreOptions,
+    /// What the snapshot is asked with, every time.
+    params: Option<Value>,
     state: Mutex<Option<Arc<Cached>>>,
     /// One fetch at a time; the others wait and then find it done.
     fetching: AsyncMutex<()>,
@@ -208,11 +210,25 @@ impl SnapshotStore {
         shape: SnapshotShape,
         options: StoreOptions,
     ) -> Arc<Self> {
+        Self::with_params(engine, shape, options, None)
+    }
+
+    /// A store whose snapshot is asked with these parameters, for an engine that cannot find what
+    /// it reads by itself (a child with an allow-listed environment). They are the same for every
+    /// question: there is one snapshot.
+    #[must_use]
+    pub fn with_params(
+        engine: Option<Arc<dyn Engine>>,
+        shape: SnapshotShape,
+        options: StoreOptions,
+        params: Option<Value>,
+    ) -> Arc<Self> {
         let (events, _) = broadcast::channel(64);
         Arc::new(Self {
             engine,
             shape,
             options,
+            params,
             state: Mutex::new(None),
             fetching: AsyncMutex::new(()),
             seq: AtomicU64::new(0),
@@ -282,7 +298,10 @@ impl SnapshotStore {
         let Some(engine) = &self.engine else {
             return Err(EngineError::Spawn("no engine".to_owned()));
         };
-        Ok(engine.call(self.shape.call, None).await?.text)
+        Ok(engine
+            .call(self.shape.call, self.params.as_ref())
+            .await?
+            .text)
     }
 
     /// Ask the engine, wait out a transitional state once, install the
@@ -579,6 +598,58 @@ mod tests {
                     .collect(),
             ),
         }
+    }
+
+    /// An engine in the test that keeps what it was asked with.
+    #[derive(Default)]
+    struct Asked(Mutex<Vec<Option<Value>>>);
+
+    impl Engine for Asked {
+        fn call<'a>(
+            &'a self,
+            method: Method,
+            params: Option<&'a Value>,
+        ) -> crate::engine::CallFuture<'a> {
+            Box::pin(async move {
+                lock(&self.0).push(params.cloned());
+                Ok(crate::engine::Reply {
+                    kind: method.reply_kind().to_owned(),
+                    text: r#"{"rules":[]}"#.to_owned(),
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn every_read_of_the_snapshot_carries_the_parameters_of_the_store() {
+        let engine = Arc::new(Asked::default());
+        let params = json!({ "state_dir": "/state" });
+        let store = SnapshotStore::with_params(
+            Some(Arc::clone(&engine) as Arc<dyn Engine>),
+            SHAPE,
+            StoreOptions {
+                max_age: None,
+                ..StoreOptions::default()
+            },
+            Some(params.clone()),
+        );
+        store.current().await.unwrap();
+        store.refresh("fs").await.unwrap();
+        assert_eq!(
+            *lock(&engine.0),
+            [Some(params.clone()), Some(params)],
+            "the fetch of a request and the scan of a change"
+        );
+
+        // Without any: as ever.
+        let plain = Arc::new(Asked::default());
+        let store = SnapshotStore::new(
+            Some(Arc::clone(&plain) as Arc<dyn Engine>),
+            SHAPE,
+            StoreOptions::default(),
+        );
+        store.current().await.unwrap();
+        assert_eq!(*lock(&plain.0), [None]);
     }
 
     #[test]
