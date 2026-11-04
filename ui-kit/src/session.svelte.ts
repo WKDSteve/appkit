@@ -102,7 +102,8 @@ export class StreamSession {
   stopped = false;
   private abort: AbortController | null = null;
   private deps: StreamDeps | null = null;
-  private reader: Promise<void> | null = null;
+  private reading = false;
+  private reader: Promise<void> = Promise.resolve();
 
   /** The page starts (or starts again after it was stopped). */
   resume(): void {
@@ -129,57 +130,54 @@ export class StreamSession {
    */
   follow(deps: StreamDeps): Promise<void> {
     this.deps = deps;
-    if (this.reader) {
+    if (this.reading) {
       this.abort?.abort();
       return this.reader;
     }
+    this.reading = true;
     this.reader = this.read();
     return this.reader;
   }
 
   private async read(): Promise<void> {
     try {
-      await this.readUntilDone();
-    } finally {
-      // In the same step as the loop's last check, so that no later `follow` can find a reader that has already ended.
-      this.reader = null;
-    }
-  }
-
-  private async readUntilDone(): Promise<void> {
-    let attempt = 0;
-    for (;;) {
-      const deps = this.deps;
-      if (deps === null || this.stopped || !deps.hasToken()) return;
-      this.abort = new AbortController();
-      try {
-        await readStream(
-          deps.fetchFn,
-          deps.url(),
-          deps.bearer(),
-          {
-            onOpen: () => {
-              attempt = 0;
-              this.open = true;
-              this.connection = 'live';
-              deps.onOpen();
+      let attempt = 0;
+      for (;;) {
+        const deps = this.deps;
+        if (deps === null || this.stopped || !deps.hasToken()) return;
+        this.abort = new AbortController();
+        try {
+          await readStream(
+            deps.fetchFn,
+            deps.url(),
+            deps.bearer(),
+            {
+              onOpen: () => {
+                attempt = 0;
+                this.open = true;
+                this.connection = 'live';
+                deps.onOpen();
+              },
+              onMessage: (m) => deps.onMessage(m),
             },
-            onMessage: (m) => deps.onMessage(m),
-          },
-          this.abort.signal,
-        );
-      } catch (error) {
-        if (error instanceof StreamRefused && error.status === 401) {
-          deps.onLost();
-          return;
+            this.abort.signal,
+          );
+        } catch (error) {
+          if (error instanceof StreamRefused && error.status === 401) {
+            deps.onLost();
+            return;
+          }
+        } finally {
+          this.open = false;
         }
-      } finally {
-        this.open = false;
+        const now = this.deps;
+        if (now === null || this.stopped || !now.hasToken()) return;
+        this.connection = 'reconnecting';
+        await deps.sleep(backoffSeconds(attempt++) * 1000);
       }
-      const now = this.deps;
-      if (now === null || this.stopped || !now.hasToken()) return;
-      this.connection = 'reconnecting';
-      await deps.sleep(backoffSeconds(attempt++) * 1000);
+    } finally {
+      // In the same step as the last check of the loop: a later `follow` never finds a reader that has already ended.
+      this.reading = false;
     }
   }
 }

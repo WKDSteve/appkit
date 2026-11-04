@@ -210,4 +210,30 @@ describe('StreamSession', () => {
     await session.follow(d);
     expect(log).toEqual(['fetch', 'lost', 'fetch', 'lost']);
   });
+
+  it('reads after a follow that had no session and ended at once', async () => {
+    const none = deps([() => new Response('', { status: 401 })], { hasToken: () => false });
+    await none.session.follow(none.d);
+    await none.session.follow({ ...none.d, hasToken: () => true });
+    expect(none.log).toEqual(['fetch', 'lost']);
+  });
+
+  it('does not join a reader at the very moment it ends', async () => {
+    let second: Promise<void> = Promise.resolve();
+    const { session, d, log } = deps([() => new Response('', { status: 401 })]);
+    const later = { ...d, hasToken: () => true };
+    const ending: StreamDeps = {
+      ...d,
+      hasToken: () => {
+        // Runs after the check that ends the reader, before anything that waits for its end.
+        queueMicrotask(() => {
+          second = session.follow(later);
+        });
+        return false;
+      },
+    };
+    await session.follow(ending);
+    await second;
+    expect(log).toEqual(['fetch', 'lost']);
+  });
 });
