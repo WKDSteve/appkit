@@ -4,8 +4,8 @@
 # `pull_request` trigger: a pull request would run its own workflow code on that machine. Contributions are
 # checked by the maintainer before they land. ShellCheck of the release-kit shell scripts runs on the same runner.
 #
-# The one exception is `rust-other-systems`: there is no local macOS or Linux runner, so the tests of those two systems
-# run on GitHub's hosted runners (free for a public repository).
+# The one exception is `rust-other-systems`: there is no local macOS or Linux runner, so clippy and the tests of those
+# two systems run on GitHub's hosted runners (free for a public repository).
 #
 # The tools (cargo, rustfmt, clippy, cargo-audit, cargo-deny, pnpm, python) are expected on the runner's PATH and are
 # not pinned here; the jobs print their versions.
@@ -58,8 +58,8 @@ jobs:
             exit 1
           fi
 
-  # The same tests on the systems of the code behind `cfg(not(windows))` and `cfg(unix)`, which `cargo check --target`
-  # compiles but never runs. Formatting, clippy and the other jobs do not depend on the system and stay on the runner.
+  # Clippy and the tests on the systems of the code behind `cfg(not(windows))` and `cfg(unix)`, which the Windows runner
+  # neither lints nor runs. Formatting and the other jobs do not need a second system and stay on the runner.
   rust-other-systems:
     name: rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -77,8 +77,9 @@ jobs:
         with:
           persist-credentials: false
       # The image's toolchain can be older than the workspace's rust-version.
-      - run: rustup toolchain install stable --profile minimal --no-self-update && rustup default stable
+      - run: rustup toolchain install stable --profile minimal --component clippy --no-self-update && rustup default stable
       - run: cargo --version && rustc --version
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: cargo test (nothing left in the temp dir)
         run: |
           t="$RUNNER_TEMP/appkit-test-temp"
