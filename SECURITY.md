@@ -96,8 +96,10 @@ touched by tabs). What limits this:
   page that asks was served by that hub and not by another program that took the port after the hub
   stopped (see below, another process of the same user).
 * The question carries 128 random bits and an answer counts only for it; an answer whose token is not
-  printable ASCII of the length of a token is not taken. Without an answer in 400 ms the new tab pairs
-  the way a first tab does.
+  printable ASCII of the length of a token is not taken. Without an answer in 400 ms the new tab offers
+  to pair the way a first tab does. A later answer to the same question still counts, with the same
+  checks (on a busy machine an open tab can take seconds): the tab then takes the session, unless it
+  has paired by then.
 * A tab that shares a session shares its limits too: the live connections of a session are counted
   across all its tabs.
 

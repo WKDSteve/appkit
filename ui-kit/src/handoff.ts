@@ -16,7 +16,10 @@ export interface ChannelLike {
   removeEventListener(type: 'message', listener: (event: { data: unknown }) => void): void;
 }
 
-/** How long a new tab waits for an answer before it pairs the way a first tab does. */
+/**
+ * How long a new tab waits for an answer before it offers to pair the way a first tab does. On a busy machine an open
+ * tab can take seconds to answer (it is in the background, its process is the last to run): see `onLate`.
+ */
 export const ASK_MS = 400;
 
 /** A token as the hub hands it out: printable ASCII, not long. Anything else in an answer is not taken. */
@@ -75,6 +78,12 @@ export interface AskOptions {
   clearTimeout: (handle: unknown) => void;
   /** Default `ASK_MS`. */
   waitMs?: number;
+  /**
+   * An answer after the wait (the promise has already said null): the page may still take the token. Called at most
+   * once. Without it the question ends with the wait. With it the listener stays until an answer comes, which costs one
+   * function on a channel the page keeps anyway.
+   */
+  onLate?: (token: string) => void;
 }
 
 /** Ask the open tabs of the page for a session: the token of the first that answers, or null after the wait. */
@@ -84,17 +93,25 @@ export function askForSession(options: AskOptions): Promise<string | null> {
   if (!NONCE.test(nonce)) return Promise.resolve(null);
   return new Promise((resolve) => {
     let timer: unknown = null;
-    const done = (token: string | null): void => {
-      options.channel.removeEventListener('message', onMessage);
+    let waited = false;
+    const stopListening = (): void => options.channel.removeEventListener('message', onMessage);
+    const onMessage = (event: { data: unknown }): void => {
+      const token = answerOf(event.data, nonce);
+      if (token === null) return;
+      stopListening();
+      if (waited) {
+        options.onLate?.(token);
+        return;
+      }
       if (timer !== null) options.clearTimeout(timer);
       resolve(token);
     };
-    const onMessage = (event: { data: unknown }): void => {
-      const token = answerOf(event.data, nonce);
-      if (token !== null) done(token);
-    };
     options.channel.addEventListener('message', onMessage);
-    timer = options.setTimeout(() => done(null), options.waitMs ?? ASK_MS);
+    timer = options.setTimeout(() => {
+      waited = true;
+      if (options.onLate === undefined) stopListening();
+      resolve(null);
+    }, options.waitMs ?? ASK_MS);
     options.channel.postMessage({ appkitSession: 1, ask: nonce } satisfies Ask);
   });
 }

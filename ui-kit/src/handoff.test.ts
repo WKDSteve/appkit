@@ -87,6 +87,37 @@ describe('handoff of the session to a new tab', () => {
     expect(await asked).toBeNull();
   });
 
+  it('an answer after the wait reaches onLate once, and the promise has said null', async () => {
+    const make = bus();
+    const late = make();
+    const fresh = make();
+    const c = clock();
+    const taken: string[] = [];
+    const asked = askForSession({ channel: fresh, random, ...c, onLate: (t) => taken.push(t) });
+    c.fire();
+    expect(await asked).toBeNull();
+    expect(fresh.listening()).toBe(1);
+    // Not an answer to this question: it keeps waiting.
+    late.postMessage({ appkitSession: 1, answer: 'ff'.repeat(16), token: TOKEN });
+    expect(taken).toEqual([]);
+    late.postMessage({ appkitSession: 1, answer: NONCE, token: TOKEN });
+    expect(taken).toEqual([TOKEN]);
+    expect(fresh.listening()).toBe(0);
+    late.postMessage({ appkitSession: 1, answer: NONCE, token: 'cd'.repeat(32) });
+    expect(taken).toEqual([TOKEN]);
+  });
+
+  it('an answer in time does not reach onLate', async () => {
+    const make = bus();
+    shareSession({ channel: make(), token: () => TOKEN, live: () => true });
+    const fresh = make();
+    const taken: string[] = [];
+    const token = await askForSession({ channel: fresh, random, ...clock(), onLate: (t) => taken.push(t) });
+    expect(token).toBe(TOKEN);
+    expect(taken).toEqual([]);
+    expect(fresh.listening()).toBe(0);
+  });
+
   it('answers only a question that is one, and stops answering when stopped', () => {
     const make = bus();
     const old = make();
