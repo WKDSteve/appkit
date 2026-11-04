@@ -60,8 +60,8 @@ import './palette.css';
 import 'appkit-ui/base.css';
 ```
 
-`palette.css` is generated, never written by hand: `node palettes.mjs install` in `tasks-vault/TOOLS/scripts/app-icons`
-writes it into the repository of each app, and `node palettes.mjs check` names a copy that differs. It sets the
+`palette.css` is generated, never written by hand: `node palettes.mjs install` (the tool of the app icons, kept
+outside this repository) writes it into the repository of each app, and `node palettes.mjs check` names a copy that differs. It sets the
 colours of the tokens (surfaces, text, `--line`, `--accent`, `--accent-text`, `--focus`, the meaning colours stay
 those of the kit) and those of group 3b: `--accent-hover` (the fill of an accent button under the pointer),
 `--secondary`, `--tertiary`, `--chart-1` to `--chart-6` and the scale `--accent-50` to `--accent-900`. Without a
