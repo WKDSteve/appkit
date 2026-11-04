@@ -43,6 +43,10 @@ pub const APP_PORTS: &[PortUse] = &[
         owner: "testing-desktop",
     },
     PortUse {
+        port: 17619,
+        owner: "pult",
+    },
+    PortUse {
         port: 17650,
         owner: "streamtap (sink)",
     },
