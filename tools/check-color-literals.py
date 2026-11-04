@@ -18,6 +18,10 @@ strings and url(...) inside CSS (`content: "#1"`, `url(#fade)`). `color-mix()` o
 
     python tools/check-color-literals.py --root ui-kit/src --tokens ui-kit/src/tokens.css   (appkit)
     python tools/check-color-literals.py --root ui/src                                      (an app)
+    python tools/check-color-literals.py --root ui/src --tokens ui/src/palette.css          (an app with a palette)
+
+`--tokens` names a file that may hold colours, and may be given more than once: the tokens of appkit-ui and the
+palette of an app (generated from the colours of its icon, loaded after tokens.css) are the only such files.
 
 Paths are those of the repository, whatever the current folder; a root may be written with backslashes.
 
@@ -115,9 +119,14 @@ def normal(path):
 
 
 def checked(path, roots, tokens):
-    """Is this tracked file one to read: a stylesheet or component under a root, and not the tokens?"""
+    """Is this tracked file one to read: a stylesheet or component under a root, and none of the token files?
+
+    `tokens` is one path or a list of them (the tokens of appkit-ui, the palette of an app)."""
+    if isinstance(tokens, str):
+        tokens = [tokens]
+    allowed = {normal(t) for t in tokens if t}
     inside = any(path.startswith(normal(root) + "/") for root in roots)
-    return inside and path.endswith((".css", ".svelte")) and path != normal(tokens)
+    return inside and path.endswith((".css", ".svelte")) and path not in allowed
 
 
 def git(*args):
@@ -138,7 +147,9 @@ def tracked_files():
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--root", action="append", default=[], help="a folder to read (repeatable)")
-    parser.add_argument("--tokens", default="", help="the one file that may hold colours")
+    parser.add_argument(
+        "--tokens", action="append", default=[], help="a file that may hold colours (repeatable: tokens, palette)"
+    )
     args = parser.parse_args(argv)
     roots = args.root or ["ui/src"]
     top, files = tracked_files()

@@ -128,6 +128,14 @@ class Files(unittest.TestCase):
         self.assertFalse(colors.checked("ui-kit/srcx/a.css", roots, tokens))
         self.assertFalse(colors.checked("docs/style.css", roots, tokens))
 
+    def test_several_token_files(self):
+        roots = ["ui/src"]
+        tokens = ["ui/src/tokens.css", "ui\\src\\palette.css"]
+        self.assertFalse(colors.checked("ui/src/tokens.css", roots, tokens))
+        self.assertFalse(colors.checked("ui/src/palette.css", roots, tokens))
+        self.assertTrue(colors.checked("ui/src/app.css", roots, tokens))
+        self.assertTrue(colors.checked("ui/src/palette.css", roots, []))
+
     def test_a_root_in_another_spelling(self):
         for root in ["ui-kit\\src", "./ui-kit/src", "ui-kit/src/", ".\\ui-kit\\src\\"]:
             with self.subTest(root=root):
@@ -144,6 +152,7 @@ class Main(unittest.TestCase):
         os.makedirs(os.path.join(self.top, "ui", "src", "views"))
         files = {
             "ui/src/app.css": ".a { color: var(--text); }\n",
+            "ui/src/palette.css": ":root { --accent: light-dark(#0f6e56, #5dcaa5); }\n",
             "ui/src/views/Bad.svelte": "<style>\n  .b { color: #fff; }\n</style>\n",
         }
         for path, text in files.items():
@@ -164,9 +173,19 @@ class Main(unittest.TestCase):
         return code, [str(c.args[0]) for c in printed.call_args_list]
 
     def test_a_finding_fails_and_is_named(self):
-        code, lines = self.run_main(["--root", "ui/src"])
+        code, lines = self.run_main(["--root", "ui/src", "--tokens", "ui/src/palette.css"])
         self.assertEqual(code, 1)
         self.assertIn("ui/src/views/Bad.svelte:2: #fff", lines)
+        self.assertFalse(any("palette.css" in line for line in lines))
+
+    def test_the_palette_is_a_finding_unless_it_is_named(self):
+        os.remove(os.path.join(self.top, "ui", "src", "views", "Bad.svelte"))
+        subprocess.run(["git", "add", "-A"], cwd=self.top, check=True, capture_output=True)
+        code, lines = self.run_main(["--root", "ui/src"])
+        self.assertEqual(code, 1)
+        self.assertIn("ui/src/palette.css:1: #0f6e56", lines)
+        code, _ = self.run_main(["--root", "ui/src", "--tokens", "ui/src/tokens.css", "--tokens", "ui/src/palette.css"])
+        self.assertEqual(code, 0)
 
     def test_from_a_subfolder_and_with_backslashes(self):
         code, _ = self.run_main(["--root", "ui\\src"], cwd=os.path.join(self.top, "ui"))
@@ -179,7 +198,7 @@ class Main(unittest.TestCase):
     def test_a_clean_tree_passes(self):
         os.remove(os.path.join(self.top, "ui", "src", "views", "Bad.svelte"))
         subprocess.run(["git", "add", "-A"], cwd=self.top, check=True, capture_output=True)
-        code, _ = self.run_main([])
+        code, _ = self.run_main(["--tokens", "ui/src/palette.css"])
         self.assertEqual(code, 0)
 
 

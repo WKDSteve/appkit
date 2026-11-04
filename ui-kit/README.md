@@ -5,7 +5,7 @@ bundler (Vite with the Svelte plugin) compiles them, there is no build here.
 
 | What | File |
 |---|---|
-| The design tokens in ten groups: surfaces, text, lines and accent (`--line`, `--accent-soft`, `--focus`), meaning colours, depth and marks (`--shadow`, `--shadow-sm`, `--backdrop`, `--mark`), shape, type (`--font-size`, `--line-height`), the theme (`light-dark()` follows the system, `data-theme` on the root overrides it), the base rules, and the check `tools/check-color-literals.py` (which every app runs over its own page too): no hex colour or colour function where the CSS of a page states a colour, outside the tokens; scripts, `.ts` and `.svg` files and named colours are not looked at. `--border` is an alias of `--line` while the pages move | `tokens.css` |
+| The design tokens in ten groups: surfaces, text, lines and accent (`--line`, `--accent-soft`, `--focus`), meaning colours, depth and marks (`--shadow`, `--shadow-sm`, `--backdrop`, `--mark`), shape, type (`--font-size`, `--line-height`), the palette of an app (`--accent-hover`, `--secondary`, `--tertiary`, `--chart-1` to `--chart-6`, `--accent-50` to `--accent-900`; see "The palette of an app"), the theme (`light-dark()` follows the system, `data-theme` on the root overrides it), the base rules, and the check `tools/check-color-literals.py` (which every app runs over its own page too): no hex colour or colour function where the CSS of a page states a colour, outside the tokens; scripts, `.ts` and `.svg` files and named colours are not looked at. `--border` is an alias of `--line` while the pages move | `tokens.css` |
 | The base rules that come with them: box model, page, focus ring, headings, the hint popup, the info button, `.sr-only`, reduced motion | `base.css` |
 | The menu bar of an application (a row of menus with the keys of the ARIA pattern, sections with a heading and a line, shortcuts on the right, Alt+letter mnemonics, type-ahead) | `MenuBar.svelte`, `menu.ts` |
 | The command palette (Ctrl+K): the box, the list and the keys in `Palette.svelte`; the loose matching, the frecency (what was chosen before comes first) and the list of actions and entries (tasks, rules) as plain functions in `palette.ts`. The page builds the list, runs the choice and keeps the frecency, so the component knows neither `App` nor a data contract | `Palette.svelte`, `palette.ts` |
@@ -48,6 +48,25 @@ import 'appkit-ui/base.css';
 import MenuBar, { type Menu } from 'appkit-ui/MenuBar.svelte';
 import { installTooltips, tooltip } from 'appkit-ui/tooltip';
 ```
+
+### The palette of an app
+
+The tokens are blue. An app takes the colours of its icon by loading its palette after `tokens.css` and before
+`base.css`:
+
+```ts
+import 'appkit-ui/tokens.css';
+import './palette.css';
+import 'appkit-ui/base.css';
+```
+
+`palette.css` is generated, never written by hand: `node palettes.mjs install` in `tasks-vault/TOOLS/scripts/app-icons`
+writes it into the repository of each app, and `node palettes.mjs check` names a copy that differs. It sets the
+colours of the tokens (surfaces, text, `--line`, `--accent`, `--accent-text`, `--focus`, the meaning colours stay
+those of the kit) and those of group 3b: `--accent-hover` (the fill of an accent button under the pointer),
+`--secondary`, `--tertiary`, `--chart-1` to `--chart-6` and the scale `--accent-50` to `--accent-900`. Without a
+palette these have the values of the blue of the kit. The check of an app names the palette as a second file that may
+hold colours: `python tools/check-color-literals.py --root ui/src --tokens ui/src/palette.css`.
 
 The kit has almost no words: `installTooltips` takes the name of its region from the app (`regionLabel`), the components
 take every label as a prop, and `i18n.ts` only fills holes and picks a language.
