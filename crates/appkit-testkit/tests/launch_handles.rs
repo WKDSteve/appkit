@@ -14,10 +14,19 @@ fn a_standard_handle_of_the_hub_is_not_inherited_by_the_started_program() {
 
     use appkit_hub::launch::{spawn, LaunchOpts, Window};
     use appkit_scratch::Scratch;
-    use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT};
+    use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT};
     use windows_sys::Win32::System::Console::{GetStdHandle, SetStdHandle, STD_OUTPUT_HANDLE};
 
     const PROBE: &str = env!("CARGO_BIN_EXE_launch-probe");
+
+    /// Puts the standard output back when the test ends, also when an assertion stops it.
+    struct RestoreStdout(HANDLE);
+    impl Drop for RestoreStdout {
+        fn drop(&mut self) {
+            // SAFETY: puts the handle back that was there before.
+            unsafe { SetStdHandle(STD_OUTPUT_HANDLE, self.0) };
+        }
+    }
 
     fn wait_for(out: &Path) -> serde_json::Value {
         let deadline = Instant::now() + Duration::from_secs(30);
@@ -33,14 +42,18 @@ fn a_standard_handle_of_the_hub_is_not_inherited_by_the_started_program() {
     let dir = Scratch::new("launch-handles");
     // The standard output of a hub that was started with a pipe: an inheritable handle.
     let file = std::fs::File::create(dir.join("stdout.txt")).unwrap();
+    // The number alone proves nothing: the child holds most small numbers itself, so the probe says
+    // which file is behind it.
+    let path = std::fs::canonicalize(dir.join("stdout.txt")).unwrap();
+    let path = path.to_str().unwrap();
     let raw = file.as_raw_handle();
     // SAFETY: the handle of `file`, open for the call; only its inherit flag changes.
     assert!(
         unsafe { SetHandleInformation(raw as _, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) } != 0
     );
-    // SAFETY: reads the current standard output handle, and puts it back at the end.
-    let before = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
-    // SAFETY: `raw` stays open until the end of the test.
+    // SAFETY: reads the current standard output handle; the guard puts it back at the end.
+    let _restore = RestoreStdout(unsafe { GetStdHandle(STD_OUTPUT_HANDLE) });
+    // SAFETY: `raw` stays open longer than the guard, `file` was made first.
     assert!(unsafe { SetStdHandle(STD_OUTPUT_HANDLE, raw as _) } != 0);
     let number = raw as usize;
     let probe_arg = format!("--probe-handle={number}");
@@ -57,7 +70,8 @@ fn a_standard_handle_of_the_hub_is_not_inherited_by_the_started_program() {
         .unwrap();
     let seen = wait_for(&control);
     assert_eq!(
-        seen["handles"][0]["open"], true,
+        seen["handles"][0]["file"].as_str(),
+        Some(path),
         "the control start did not inherit the handle, so the test proves nothing: {seen}"
     );
 
@@ -73,9 +87,7 @@ fn a_standard_handle_of_the_hub_is_not_inherited_by_the_started_program() {
     )
     .unwrap();
     let seen = wait_for(&out);
-    // SAFETY: puts the handle back that was there before.
-    unsafe { SetStdHandle(STD_OUTPUT_HANDLE, before) };
-    assert_eq!(seen["handles"][0]["open"], false, "{seen}");
+    assert_ne!(seen["handles"][0]["file"].as_str(), Some(path), "{seen}");
 }
 
 #[cfg(not(windows))]

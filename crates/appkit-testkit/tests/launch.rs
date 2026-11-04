@@ -59,6 +59,29 @@ fn the_arguments_arrive_as_they_were_given_and_the_folder_is_the_one_named() {
     assert_eq!(plain(cwd), plain(work.to_str().unwrap()), "{cwd}");
 }
 
+/// A child that inherited nothing still has most small numbers open. That is why `launch_handles`
+/// looks at the file behind a number: a test of the number alone failed whenever the handle of the
+/// test process happened to have one of them (104 and 180 on the runner).
+#[cfg(windows)]
+#[test]
+fn a_handle_the_probe_holds_itself_is_not_taken_for_a_file_of_the_test() {
+    let dir = Scratch::new("launch-own-handles");
+    let name = dir.join("not-inherited.txt");
+    let _file = std::fs::File::create(&name).unwrap();
+    let path = std::fs::canonicalize(&name).unwrap();
+    let numbers: Vec<String> = (1..=100)
+        .map(|n| format!("--probe-handle={}", n * 4))
+        .collect();
+    let args: Vec<&str> = numbers.iter().map(String::as_str).collect();
+    let seen = run(Window::Default, &args, &dir, &dir.join("seen.json"));
+    let handles = seen["handles"].as_array().unwrap();
+    assert!(handles.iter().any(|h| h["open"] == true), "{seen}");
+    assert!(
+        handles.iter().all(|h| h["file"].as_str() != path.to_str()),
+        "{seen}"
+    );
+}
+
 #[cfg(windows)]
 #[test]
 fn the_standard_streams_of_the_child_are_the_null_device() {

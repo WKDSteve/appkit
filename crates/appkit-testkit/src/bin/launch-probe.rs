@@ -4,7 +4,9 @@
 //! `launch-probe <out> [args...]` writes `<out>` (a JSON file, made whole in one rename) with the
 //! arguments after `<out>`, the working folder, what each standard stream is (`null`, `other` or
 //! `none`), how many processes share its console (Windows) and, for each `--probe-handle=<n>`
-//! argument, whether the handle with that number is open in this process (Windows).
+//! argument, whether a handle with that number is open in this process and which file it is
+//! (Windows). `open` alone says nothing about inheritance: a process holds most small numbers
+//! itself, so whether a handle was inherited is a question for `file`.
 #![allow(unsafe_code)]
 
 use std::path::Path;
@@ -18,7 +20,10 @@ fn main() {
     let handles: Vec<Value> = rest
         .iter()
         .filter_map(|a| a.strip_prefix("--probe-handle="))
-        .map(|n| json!({ "handle": n, "open": handle_is_open(n.parse().unwrap_or(0)) }))
+        .map(|n| {
+            let value = n.parse().unwrap_or(0);
+            json!({ "handle": n, "open": handle_is_open(value), "file": handle_file(value) })
+        })
         .collect();
     let doc = json!({
         "args": rest,
@@ -39,7 +44,10 @@ fn write_whole(path: &Path, text: &str) {
 #[cfg(windows)]
 mod sys {
     use windows_sys::Win32::Foundation::{GetHandleInformation, HANDLE, INVALID_HANDLE_VALUE};
-    use windows_sys::Win32::Storage::FileSystem::{GetFileType, FILE_TYPE_CHAR};
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileType, GetFinalPathNameByHandleW, FILE_NAME_NORMALIZED, FILE_TYPE_CHAR,
+        FILE_TYPE_DISK, VOLUME_NAME_DOS,
+    };
     use windows_sys::Win32::System::Console::{
         GetConsoleMode, GetConsoleProcessList, GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE,
         STD_OUTPUT_HANDLE,
@@ -80,6 +88,31 @@ mod sys {
         // one makes it fail, it reads and writes nothing else.
         unsafe { GetHandleInformation(value as HANDLE, &raw mut flags) != 0 }
     }
+
+    /// The path of the file behind a handle number, in the spelling of `std::fs::canonicalize`.
+    /// None for a number that is no handle and for any handle that is not a file on a disk: asking
+    /// a pipe for its path can block.
+    pub fn handle_file(value: usize) -> Option<String> {
+        const CAPACITY: u32 = 1024;
+        let handle = value as HANDLE;
+        // SAFETY: the call only asks the type; a number that is not a handle gives "unknown".
+        if unsafe { GetFileType(handle) } != FILE_TYPE_DISK {
+            return None;
+        }
+        let mut path = [0u16; CAPACITY as usize];
+        // SAFETY: `path` is a valid place for the CAPACITY characters the call may write.
+        let length = unsafe {
+            GetFinalPathNameByHandleW(
+                handle,
+                path.as_mut_ptr(),
+                CAPACITY,
+                FILE_NAME_NORMALIZED | VOLUME_NAME_DOS,
+            )
+        };
+        // 0 is a failure, and a length of CAPACITY or more is a path that did not fit.
+        (length > 0 && length < CAPACITY)
+            .then(|| String::from_utf16_lossy(&path[..length as usize]))
+    }
 }
 
 #[cfg(windows)]
@@ -94,6 +127,10 @@ fn console_processes() -> u32 {
 fn handle_is_open(value: usize) -> bool {
     sys::handle_is_open(value)
 }
+#[cfg(windows)]
+fn handle_file(value: usize) -> Option<String> {
+    sys::handle_file(value)
+}
 
 #[cfg(not(windows))]
 fn stdio() -> Vec<&'static str> {
@@ -106,4 +143,8 @@ fn console_processes() -> u32 {
 #[cfg(not(windows))]
 fn handle_is_open(_value: usize) -> bool {
     false
+}
+#[cfg(not(windows))]
+fn handle_file(_value: usize) -> Option<String> {
+    None
 }
