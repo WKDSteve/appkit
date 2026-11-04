@@ -146,7 +146,7 @@ pnpm -C ui-kit install --frozen-lockfile && pnpm -C ui-kit check && pnpm -C ui-k
 pnpm -C web-kit test
 ```
 
-The CI runs them on Linux and Windows. See [SECURITY.md](SECURITY.md) for what the hub protects
+The CI runs all of them on Windows and `cargo test` also on macOS and Linux. See [SECURITY.md](SECURITY.md) for what the hub protects
 against and [docs/RELEASING.md](docs/RELEASING.md) for how a version is made.
 
 Comments and docs name the maintainer's design notes ("concept 5.5", "concept 13.14"); those notes
