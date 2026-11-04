@@ -104,6 +104,8 @@ export class StreamSession {
   private deps: StreamDeps | null = null;
   private reading = false;
   private reader: Promise<void> = Promise.resolve();
+  /** Ends the wait before the next try, while there is one. */
+  private endWait: (() => void) | null = null;
 
   /** The page starts (or starts again after it was stopped). */
   resume(): void {
@@ -126,12 +128,14 @@ export class StreamSession {
    * session is gone or the hub refuses it.
    *
    * There is one reader. A page that stops and starts again at once (a pairing link pasted into the tab) finds the one
-   * that ran still going: it is not joined by a second, its stream is cut and it reads on with what this call brings.
+   * that ran still going: it is not joined by a second, its stream is cut, a wait for the next try ends, and it reads on
+   * with what this call brings.
    */
   follow(deps: StreamDeps): Promise<void> {
     this.deps = deps;
     if (this.reading) {
       this.abort?.abort();
+      this.endWait?.();
       return this.reader;
     }
     this.reading = true;
@@ -173,11 +177,23 @@ export class StreamSession {
         const now = this.deps;
         if (now === null || this.stopped || !now.hasToken()) return;
         this.connection = 'reconnecting';
-        await deps.sleep(backoffSeconds(attempt++) * 1000);
+        await this.wait(deps, backoffSeconds(attempt++) * 1000);
       }
     } finally {
       // In the same step as the last check of the loop: a later `follow` never finds a reader that has already ended.
       this.reading = false;
+    }
+  }
+
+  /** Sleep before the next try, which a `follow` cuts short. */
+  private async wait(deps: StreamDeps, ms: number): Promise<void> {
+    try {
+      await new Promise<void>((resolve, reject) => {
+        this.endWait = resolve;
+        deps.sleep(ms).then(resolve, reject);
+      });
+    } finally {
+      this.endWait = null;
     }
   }
 }

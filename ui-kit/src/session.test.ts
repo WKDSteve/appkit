@@ -204,6 +204,62 @@ describe('StreamSession', () => {
     expect(hub.openStreams()).toBe(0);
   });
 
+  it('reads on at once with a new token when a follow comes during the wait, even if the wait never ends', async () => {
+    const tokens: (string | null)[] = [];
+    const { session, d, log } = deps([], {
+      fetchFn: (async (_url: string, init: RequestInit) => {
+        const bearer = new Headers(init.headers).get('Authorization');
+        tokens.push(bearer);
+        if (bearer === 'Bearer old') throw new TypeError('the stream is down');
+        return new Response('', { status: 401 });
+      }) as typeof fetch,
+      bearer: () => 'old',
+      sleep: () => new Promise<void>(() => {}),
+    });
+    const first = session.follow(d);
+    await vi.waitFor(() => expect(session.connection).toBe('reconnecting'));
+
+    const second = session.follow({ ...d, bearer: () => 'new' });
+    await Promise.all([first, second]);
+    expect(tokens).toEqual(['Bearer old', 'Bearer new']);
+    expect(log).toEqual(['lost']);
+  });
+
+  it('a wait that was cut short does not cut the next one short when it ends', async () => {
+    const tokens: (string | null)[] = [];
+    const ends: (() => void)[] = [];
+    const { session, d } = deps([], {
+      fetchFn: (async (_url: string, init: RequestInit) => {
+        tokens.push(new Headers(init.headers).get('Authorization'));
+        throw new TypeError('the stream is down');
+      }) as typeof fetch,
+      sleep: () => new Promise<void>((resolve) => void ends.push(resolve)),
+    });
+    const reader = session.follow(d);
+    await vi.waitFor(() => expect(ends).toHaveLength(1));
+    void session.follow(d);
+    await vi.waitFor(() => expect(ends).toHaveLength(2));
+    expect(tokens).toHaveLength(2);
+
+    ends[0]!();
+    await new Promise((resolve) => setTimeout(resolve));
+    expect(tokens).toHaveLength(2);
+
+    session.stop();
+    ends[1]!();
+    await reader;
+  });
+
+  it('a wait that fails still ends the reader with its error', async () => {
+    const { session, d } = deps([], {
+      fetchFn: (async () => {
+        throw new TypeError('the stream is down');
+      }) as typeof fetch,
+      sleep: () => Promise.reject(new Error('no timer')),
+    });
+    await expect(session.follow(d)).rejects.toThrow('no timer');
+  });
+
   it('starts a new reader once the last one has ended', async () => {
     const { session, d, log } = deps([() => new Response('', { status: 401 }), () => new Response('', { status: 401 })]);
     await session.follow(d);
