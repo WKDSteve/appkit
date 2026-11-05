@@ -1,0 +1,27 @@
+[package]
+name = "sheet-driver"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Drives the window of a program for a test sheet of testing.nvim, the way a screen reader does: testing-sheet-driver/1 on stdin and stdout, UI Automation on Windows"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde_json = "1"
+
+[target.'cfg(windows)'.dependencies]
+png = "0.18"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Storage_Xps",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
+    "Win32_UI_Accessibility",
+    "Win32_UI_WindowsAndMessaging",
+] }

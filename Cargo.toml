@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/appkit-core", "crates/appkit-hub", "crates/appkit-scratch", "crates/appkit-testkit"]
+members = ["crates/appkit-core", "crates/appkit-hub", "crates/appkit-scratch", "crates/appkit-testkit", "crates/sheet-driver"]
 
 [workspace.package]
 edition = "2024"
