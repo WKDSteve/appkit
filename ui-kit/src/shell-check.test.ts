@@ -80,6 +80,17 @@ describe('diffShell with a palette', () => {
     ]);
   });
 
+  it('names the recolour even where the first allowed colour is the kit colour unchanged', () => {
+    // A shared kit colour where the palette keeps one token's value and changes the other's: the unchanged value
+    // comes first in the allowed list, but a mismatch still names the recolour, since a second value is allowed too.
+    const shared = { 'rgb(29, 32, 36)': ['rgb(29, 32, 36)', 'rgb(25, 30, 28)'] };
+    const g: ShellSignature = { palette: style({ backgroundColor: 'rgb(29, 32, 36)' }) };
+    const actual: ShellSignature = { palette: style({ backgroundColor: 'rgb(1, 2, 3)' }) };
+    expect(diffShell('dark', actual, g, shared)).toEqual([
+      'dark: palette.backgroundColor is "rgb(1, 2, 3)", the shell has "rgb(29, 32, 36)" or "rgb(25, 30, 28)" ("rgb(29, 32, 36)" recoloured by the palette)',
+    ]);
+  });
+
   it('compares everything that is no colour as before', () => {
     const actual: ShellSignature = { palette: style({ backgroundColor: 'rgb(25, 30, 28)', borderRadius: '2px' }) };
     expect(diffShell('dark', actual, golden, recolor)).toEqual(['dark: palette.borderRadius is "2px", the shell has "10px"']);

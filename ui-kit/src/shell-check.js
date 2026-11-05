@@ -94,7 +94,7 @@ export function diffShell(label, actual, golden, recolor = {}) {
       const allowed = (COLOR_PROPS.has(prop) && recolor[want[prop]]) || [want[prop]];
       if (!allowed.includes(got[prop])) {
         const has = allowed.length === 1 ? JSON.stringify(allowed[0]) : allowed.map((v) => JSON.stringify(v)).join(' or ');
-        const of = allowed[0] === want[prop] ? '' : ` (${JSON.stringify(want[prop])} recoloured by the palette)`;
+        const of = allowed.length === 1 && allowed[0] === want[prop] ? '' : ` (${JSON.stringify(want[prop])} recoloured by the palette)`;
         lines.push(`${label}: ${name}.${prop} is ${JSON.stringify(got[prop])}, the shell has ${has}${of}`);
       }
     }
