@@ -471,8 +471,8 @@ mod tests {
 
     #[test]
     fn a_shot_names_its_file_and_takes_no_path() {
-        let dir = std::env::temp_dir().join(format!("sheet-driver-{}", std::process::id()));
-        let out = dir.to_string_lossy().replace('\\', "/");
+        let scratch = appkit_scratch::Scratch::new("sheet-driver-shot");
+        let out = scratch.path().to_string_lossy().replace('\\', "/");
         let mut f = fake();
         send(
             &mut f,
@@ -488,7 +488,6 @@ mod tests {
         assert_eq!(f.shots.len(), 1);
         let a = run(&mut f, &json!({ "shot": "../x" }));
         assert_eq!(a["ok"], false);
-        std::fs::remove_dir_all(dir).expect("the folder of the test");
     }
 
     #[test]

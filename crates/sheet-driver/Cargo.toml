@@ -13,6 +13,9 @@ workspace = true
 [dependencies]
 serde_json = "1"
 
+[dev-dependencies]
+appkit-scratch = { path = "../appkit-scratch" }
+
 [target.'cfg(windows)'.dependencies]
 png = "0.18"
 windows = { version = "0.62", features = [
