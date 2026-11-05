@@ -68,6 +68,21 @@ those of the kit) and those of group 3b: `--accent-hover` (the fill of an accent
 palette these have the values of the blue of the kit. The check of an app names the palette as a second file that may
 hold colours: `python tools/check-color-literals.py --root ui/src --tokens ui/src/palette.css`.
 
+The check of the shell (`shell.golden.json`) holds the colours of the kit. An app with a palette passes what the palette
+does to them, so a colour of a token is met by the colour the palette gives that token, and type, line and shape are
+compared as before:
+
+```ts
+import { diffShell, paletteRecolor } from 'appkit-ui/shell-check';
+import tokensCss from 'appkit-ui/tokens.css?raw';
+import paletteCss from '../src/palette.css?raw';
+
+const recolor = paletteRecolor(tokensCss, paletteCss);
+expect(diffShell(scheme, seen, golden[scheme], recolor[scheme])).toEqual([]);
+```
+
+In a Playwright test, which is no Vite, read the two files from the disk instead (`readFileSync`).
+
 The kit has almost no words: `installTooltips` takes the name of its region from the app (`regionLabel`), the components
 take every label as a prop, and `i18n.ts` only fills holes and picks a language.
 
