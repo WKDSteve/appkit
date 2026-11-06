@@ -107,6 +107,7 @@ class Refused(unittest.TestCase):
             "\\\\host\\x",
             "~/x",
             "$HOME/x",
+            "${HOME}/x",
             "%USERPROFILE%\\x",
             "../x",
             "a/../../x",
@@ -157,6 +158,12 @@ class Refused(unittest.TestCase):
         self.assertEqual(intent.problems(encode(doc)), [])
         doc["finding"]["run"]["url"] = "https://evil.example/x"
         self.refused(doc, "finding.run.url")
+
+    def test_deep_nesting_never_raises(self):
+        for depth in (500, 900, 950, 990, 1100, 20000):
+            with self.subTest(depth):
+                raw = b'{"schema":"wkd-intent/1","later":' + b"[" * depth + b"]" * depth + b"}"
+                self.assertIsInstance(intent.problems(raw), list)
 
     def test_unknown_fields_are_ignored(self):
         doc = example("tasks.new")

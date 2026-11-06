@@ -25,7 +25,7 @@ RUN_URL = "https://github.com/"
 CONTROL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 # One word that leaves the repository: an absolute path, a home, a `..` segment. Quotes and `=` start a word too, so
 # `--out="/etc/x"` and `--out=/etc/x` are seen.
-ESCAPE = re.compile(r"""(?:^|[\s"'=])(?:[/\\]|[A-Za-z]:[/\\]|~[/\\]|\$HOME\b|%[A-Za-z]+%)|(?:^|[\s"'=/\\])\.\.(?:[/\\]|\s|$)""")
+ESCAPE = re.compile(r"""(?:^|[\s"'=])(?:[/\\]|[A-Za-z]:[/\\]|~[/\\]|\$\{?HOME\b|%[A-Za-z]+%)|(?:^|[\s"'=/\\])\.\.(?:[/\\]|\s|$)""")
 
 
 def leaves_repo(text):
@@ -33,15 +33,17 @@ def leaves_repo(text):
 
 
 def _strings(value):
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, dict):
-        for key, item in value.items():
-            yield key
-            yield from _strings(item)
-    elif isinstance(value, list):
-        for item in value:
-            yield from _strings(item)
+    # A loop, not recursion: what the JSON parser just managed to nest must not overflow here.
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            yield item
+        elif isinstance(item, dict):
+            stack.extend(item.keys())
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
 
 
 def _too_long(text, limit):
