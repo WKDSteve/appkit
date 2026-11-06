@@ -75,7 +75,7 @@
 >
   <!-- Nothing of the documents is read or drawn while the window is shut. -->
   {#if open}
-    <header>
+    <header class="float-clear">
       <h2>{labels.title}</h2>
       <button type="button" class="close" aria-label={labels.close} onclick={() => dialog?.close()}>×</button>
     </header>

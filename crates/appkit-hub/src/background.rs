@@ -648,16 +648,17 @@ pub enum LinkStart {
     /// `start --open`: in the background, and the browser opens the page. The console closes by itself.
     #[default]
     OpenPage,
-    /// `serve`, in a minimized console that stays: closing it ends the hub.
-    ServeMinimized,
+    /// No argument, as a double click on the program: what that does is the app's to say. It opens the page itself and
+    /// says what went wrong, which a bare `serve` in a minimized window would not.
+    AsClicked,
 }
 
 /// What `install` was asked for.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct InstallOptions {
-    /// What the link is called, when one is made.
+    /// What the link is called, when one is made (on Windows; a launcher elsewhere keeps its own name).
     pub link_name: LinkName,
-    /// How the link starts the app, when one is made.
+    /// How the link starts the app, when one is made (on Windows; a launcher elsewhere runs `start --open`).
     pub link_start: LinkStart,
     /// Register the installed program with the login of the user.
     pub autostart: bool,
@@ -1137,8 +1138,7 @@ pub fn desktop_link_name(title: &str) -> String {
     format!("{title}.lnk")
 }
 
-/// The link of the app: it starts `target` the way `start` says, minimized (the console of `start --open` closes by
-/// itself, that of `serve` stays and is the hub); the description names the app.
+/// The link of the app: it starts `target` the way `start` says, minimized; the description names the app.
 #[must_use]
 pub fn app_link(app: &str, target: &Path, start: LinkStart) -> crate::shell_link::Link {
     let target = target.to_string_lossy().into_owned();
@@ -1151,13 +1151,13 @@ pub fn app_link(app: &str, target: &Path, start: LinkStart) -> crate::shell_link
         target,
         arguments: match start {
             LinkStart::OpenPage => "start --open",
-            LinkStart::ServeMinimized => "serve",
+            LinkStart::AsClicked => "",
         }
         .to_owned(),
         working_dir,
         description: match start {
             LinkStart::OpenPage => format!("{app}: start the hub and open the page"),
-            LinkStart::ServeMinimized => format!("{app}: run the hub in a minimized console"),
+            LinkStart::AsClicked => format!("{app}: start the hub and open the page"),
         },
         show_command: 7,
     }
@@ -1186,6 +1186,14 @@ fn shortcut(
             LinkName::Title => app.identity().title,
             LinkName::App => app.identity().app,
         };
+        // A link to this program under the other name is from an earlier install: two links would do different things.
+        let other = match name {
+            LinkName::Title => app.identity().app,
+            LinkName::App => app.identity().title,
+        };
+        if other != link_name {
+            let _ = remove_link_in(&dir, place, other, &app.identity().program_file());
+        }
         out.push_str(&make_link_in(
             &dir,
             place,
@@ -1251,7 +1259,7 @@ mod tests {
     }
 
     #[test]
-    fn a_link_can_be_named_by_the_app_and_run_the_hub_in_a_minimized_console() {
+    fn a_link_can_be_named_by_the_app_and_start_it_as_a_click_does() {
         let desktop = Scratch::new("hub-link-app");
         let exe = Path::new(r"C:\Apps\rules-hub.exe");
         make_link_in(
@@ -1260,7 +1268,7 @@ mod tests {
             IDENTITY.app,
             IDENTITY.app,
             exe,
-            LinkStart::ServeMinimized,
+            LinkStart::AsClicked,
         )
         .unwrap();
         let link = desktop.join(format!("{}.lnk", IDENTITY.app));
@@ -1269,8 +1277,8 @@ mod tests {
             crate::shell_link::target_path(&bytes).as_deref(),
             Some(r"C:\Apps\rules-hub.exe")
         );
-        let made = app_link(IDENTITY.app, exe, LinkStart::ServeMinimized);
-        assert_eq!(made.arguments, "serve");
+        let made = app_link(IDENTITY.app, exe, LinkStart::AsClicked);
+        assert_eq!(made.arguments, "");
         assert_eq!(made.show_command, 7);
         // Taken away under that name as under the title: it points at this program.
         remove_link_in(&desktop, LinkPlace::Desktop, IDENTITY.app, "rules-hub.exe").unwrap();

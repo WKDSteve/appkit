@@ -166,6 +166,11 @@ function floatingUnder(storeKey: string, node: HTMLDialogElement, params: Floati
 
   function up(e: PointerEvent): void {
     if (drag === null) return;
+    // Closed during the drag (Escape): a closed dialog measures nothing, and that must not become its place.
+    if (!node.open) {
+      drag = null;
+      return;
+    }
     if (drag.mode === 'move') {
       if (e.pointerId !== drag.id) return;
       const start = drag.start;

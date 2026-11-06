@@ -45,6 +45,27 @@ describe('floatingIn', () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
+  it('a float that closes during a drag keeps the place it had', () => {
+    const dialog = document.createElement('dialog');
+    document.body.append(dialog);
+    const action = floatingIn('an-app.floats')(dialog, { kind: 'docs', moveLabel: 'Move', moveHint: 'Drag' });
+    dialog.setAttribute('open', '');
+    const at = (x: number) => ({ left: x, top: 10, width: 100, height: 100 }) as DOMRect;
+    dialog.getBoundingClientRect = () => at(50);
+    const handle = dialog.querySelector('.float-move') as HTMLElement;
+    handle.setPointerCapture = () => {};
+    const pointer = (type: string, clientX: number) =>
+      Object.assign(new MouseEvent(type, { bubbles: true, button: 0, clientX, clientY: 10 }), { pointerId: 1 });
+    handle.dispatchEvent(pointer('pointerdown', 60));
+    // Closed: what it measures now is nothing.
+    dialog.removeAttribute('open');
+    dialog.getBoundingClientRect = () => at(0);
+    handle.dispatchEvent(pointer('pointerup', 60));
+    expect(window.localStorage.getItem('an-app.floats')).toBeNull();
+    action.destroy();
+    dialog.remove();
+  });
+
   it('keeps the place under the key of the app', () => {
     const dialog = document.createElement('dialog');
     document.body.append(dialog);

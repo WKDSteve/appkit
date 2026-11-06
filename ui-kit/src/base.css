@@ -139,6 +139,7 @@ dialog.floating .float-move:hover {
   border-color: var(--accent);
 }
 /* The title a float is named by leaves room for the handle in the corner. */
-dialog.floating:has(> .float-move) .float-head {
+dialog.floating:has(> .float-move) .float-head,
+dialog.floating:has(> .float-move) .float-clear {
   padding-right: 2.25rem;
 }

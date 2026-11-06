@@ -99,6 +99,7 @@
   }}
 >
   <input
+    class="float-clear"
     bind:this={input}
     type="text"
     role="combobox"
