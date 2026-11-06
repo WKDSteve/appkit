@@ -32,6 +32,9 @@ pub struct GuardRules {
     /// The one address besides this origin that the page may fetch from (`https://api.github.com`); none:
     /// this origin only.
     connect_src: Option<String>,
+    /// POST paths that take a file as it is: any size, any type, and as long as it takes. A session and the origin are
+    /// asked as for any other route; the route itself has to stream the body and give up on one that stalls.
+    upload_paths: Vec<String>,
 }
 
 /// The routes of the core itself: an app cannot name one of them as its own.
@@ -128,6 +131,7 @@ impl GuardRules {
         Self {
             hello_path,
             coarse_post_paths,
+            upload_paths: Vec::new(),
             connect_src: None,
         }
     }
@@ -150,6 +154,33 @@ impl GuardRules {
         );
         self.connect_src = Some(origin);
         self
+    }
+
+    /// A route that takes a file as it is (see `upload_paths`). It has to read the body as a stream, with
+    /// `DefaultBodyLimit::disable()`, and end a transfer that stalls: the guard no longer does.
+    ///
+    /// # Panics
+    ///
+    /// When `path` is not a plain route below `/api/`, or is `hello` or a route of the core.
+    #[must_use]
+    pub fn with_upload_path(mut self, path: impl Into<String>) -> Self {
+        let path = path.into();
+        assert!(
+            plain_api_path(&path),
+            "an upload path must be a plain route below /api/, not {path:?}"
+        );
+        assert!(
+            path != self.hello_path && !CORE_PATHS.contains(&path.as_str()),
+            "an upload path must be a route of the app, not {path:?}"
+        );
+        self.upload_paths.push(path);
+        self
+    }
+
+    /// Is `path` a route that takes a file as it is?
+    #[must_use]
+    pub fn is_upload(&self, path: &str) -> bool {
+        self.upload_paths.iter().any(|p| p == path)
     }
 
     /// The extra address of `connect-src`, if the app named one.
@@ -256,8 +287,10 @@ pub async fn judge<R: Runtime>(st: &Core<R>, class: Class, req: Request, next: N
     // 2. Declared body size
     // (No header at all is fine: a GET, or a chunked body that the body
     // limit of the extractor bounds while it is read.)
+    let upload = class == Class::Api && st.guard_rules.is_upload(parts.uri.path());
     let body_limit = match class {
         Class::Exchange | Class::ControlPair => st.limits.small_body_bytes,
+        _ if upload => usize::MAX,
         _ => st.limits.max_body_bytes,
     };
     match single(headers, &header::CONTENT_LENGTH) {
@@ -382,7 +415,8 @@ pub async fn judge<R: Runtime>(st: &Core<R>, class: Class, req: Request, next: N
     }
 
     // 8. A mutation carries JSON
-    if mutation && !is_json_content_type(headers) {
+    // (A file is what it is. A form cannot post here all the same: the route needs the bearer token.)
+    if mutation && !upload && !is_json_content_type(headers) {
         return error_body(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             "bad_content_type",
@@ -391,6 +425,9 @@ pub async fn judge<R: Runtime>(st: &Core<R>, class: Class, req: Request, next: N
     }
 
     let req = Request::from_parts(parts, body);
+    if upload {
+        return next.run(req).await;
+    }
     match tokio::time::timeout(st.limits.request_timeout, next.run(req)).await {
         Ok(response) => response,
         Err(_) => error_body(
@@ -619,6 +656,27 @@ mod tests {
         );
         assert_eq!(r.hello_path(), "/api/my-app_2/hello.v1");
         assert!(r.is_coarse("/api/my-app_2/plan_for"));
+    }
+
+    #[test]
+    fn an_upload_path_is_a_route_the_app_named() {
+        let rules = GuardRules::new("/api/x/hello", Vec::new()).with_upload_path("/api/x/upload");
+        assert!(rules.is_upload("/api/x/upload"));
+        assert!(!rules.is_upload("/api/x/upload/"));
+        assert!(!rules.is_upload("/api/x/other"));
+        assert!(!GuardRules::new("/api/x/hello", Vec::new()).is_upload("/api/x/upload"));
+    }
+
+    #[test]
+    #[should_panic(expected = "route of the app")]
+    fn the_pairing_route_is_no_upload_path() {
+        let _ = GuardRules::new("/api/x/hello", Vec::new()).with_upload_path("/api/control/pair");
+    }
+
+    #[test]
+    #[should_panic(expected = "plain route")]
+    fn an_upload_path_is_below_the_api() {
+        let _ = GuardRules::new("/api/x/hello", Vec::new()).with_upload_path("/up");
     }
 
     #[test]

@@ -29,6 +29,8 @@ defaults.
 | 7 | the credential the route needs | 401 | see below |
 | 8 | a mutation is `application/json` | 415 | no form posts |
 
+A route an app names with `GuardRules::with_upload_path` takes a file as it is: no limit in row 2, no `application/json` in row 8, and no time limit for the request. Everything else is asked as for any route, a session and the origin first. Such a route has to stream the body to disk and end a transfer that stalls.
+
 Around that: the hub binds loopback only and refuses any other address; the number of connections
 is limited; a client has a few seconds to send its request head; the request line and headers
 together are at most 8 KiB.
