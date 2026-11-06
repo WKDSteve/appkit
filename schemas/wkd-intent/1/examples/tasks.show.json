@@ -1,0 +1,8 @@
+{
+  "schema": "wkd-intent/1",
+  "action": "tasks.show",
+  "mode": "form",
+  "source": { "app": "hub" },
+  "finding": null,
+  "target": { "id": "example.nvim/fix-the-parser" }
+}

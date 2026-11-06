@@ -1,0 +1,22 @@
+{
+  "schema": "wkd-intent/1",
+  "action": "tasks.new",
+  "mode": "form",
+  "source": { "app": "testing", "finding": "0123456789abcdef" },
+  "finding": {
+    "schema": "testing-finding/1",
+    "fp": "0123456789abcdef",
+    "kind": "case",
+    "repo": "example.nvim",
+    "area": "example.nvim",
+    "sha": "0123456789abcdef0123456789abcdef01234567",
+    "class": "public",
+    "where": { "file": "TESTS/parse_spec.lua", "line": 12 },
+    "run": { "source": "ci", "id": "1234", "os": "linux", "url": "https://github.com/example/example.nvim/actions/runs/1234" },
+    "title": "parse_spec: an empty line ends the list",
+    "excerpt": "expected 2 items, got 1 (<REPO>/TESTS/parse_spec.lua:12)",
+    "repro": "scripts/test.sh --file parse_spec",
+    "rule": null
+  },
+  "target": null
+}

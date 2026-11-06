@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/WKDSteve/appkit/schemas/wkd-intent/1/wkd-intent.schema.json",
+  "title": "wkd-intent/1",
+  "description": "An intent one app hands to another: create or show a task, show or create a rule, hand over to the AI. Fixed actions, never free operations. The target treats it as untrusted input; README.md holds the rules this schema cannot state (64 KiB, no absolute path, the actions of the target). A reader ignores unknown fields and refuses a higher schema.",
+  "type": "object",
+  "required": ["schema", "action", "mode", "source", "finding", "target"],
+  "properties": {
+    "schema": { "const": "wkd-intent/1" },
+    "action": { "enum": ["tasks.new", "tasks.show", "rules.show", "rules.new", "ai.handoff"] },
+    "mode": { "enum": ["form", "ai-draft", "agent"] },
+    "source": {
+      "type": "object",
+      "required": ["app"],
+      "properties": {
+        "app": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" },
+        "finding": { "type": ["string", "null"], "pattern": "^[0-9a-f]{16}$" }
+      }
+    },
+    "finding": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/finding" }] },
+    "target": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["id"],
+          "properties": { "id": { "type": "string", "minLength": 1, "maxLength": 300 } }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "action": { "enum": ["tasks.show", "rules.show"] } } },
+      "then": {
+        "properties": {
+          "mode": { "const": "form" },
+          "finding": { "type": "null" },
+          "target": { "type": "object" }
+        }
+      },
+      "else": {
+        "properties": {
+          "finding": { "type": "object" },
+          "target": { "type": "null" }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "finding": {
+      "description": "testing-finding/1 of testing.nvim, the fields a target reads. The full form is schemas/testing-finding/1 there; private and unclassified findings never become an intent.",
+      "type": "object",
+      "required": ["schema", "fp", "class", "title", "excerpt"],
+      "properties": {
+        "schema": { "const": "testing-finding/1" },
+        "fp": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+        "class": { "enum": ["public", "internal"] },
+        "title": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "excerpt": { "type": "string", "maxLength": 4096 },
+        "repro": { "type": ["string", "null"], "maxLength": 1000 },
+        "where": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["file"],
+              "properties": { "file": { "type": "string", "maxLength": 300 } }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

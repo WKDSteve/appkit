@@ -1,0 +1,8 @@
+{
+  "schema": "wkd-intent/1",
+  "action": "rules.show",
+  "mode": "form",
+  "source": { "app": "testing", "finding": "0123456789abcdef" },
+  "finding": null,
+  "target": { "id": "LUA-12" }
+}

@@ -1,0 +1,22 @@
+{
+  "schema": "wkd-intent/1",
+  "action": "ai.handoff",
+  "mode": "agent",
+  "source": { "app": "testing", "finding": "00112233aabbccdd" },
+  "finding": {
+    "schema": "testing-finding/1",
+    "fp": "00112233aabbccdd",
+    "kind": "flaky",
+    "repo": "example.nvim",
+    "area": "example.nvim",
+    "sha": null,
+    "class": "public",
+    "where": null,
+    "run": { "source": "local", "id": null, "os": "windows", "url": null },
+    "title": "a timeout under load, green alone",
+    "excerpt": "file exceeded 30 ms",
+    "repro": "scripts/test.sh --file timeout",
+    "rule": null
+  },
+  "target": null
+}

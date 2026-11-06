@@ -1,0 +1,22 @@
+{
+  "schema": "wkd-intent/1",
+  "action": "rules.new",
+  "mode": "ai-draft",
+  "source": { "app": "testing", "finding": "fedcba9876543210" },
+  "finding": {
+    "schema": "testing-finding/1",
+    "fp": "fedcba9876543210",
+    "kind": "lint",
+    "repo": "example.nvim",
+    "area": null,
+    "sha": null,
+    "class": "internal",
+    "where": { "file": "lua/example/init.lua", "line": 3 },
+    "run": null,
+    "title": "the same check fails in three repositories",
+    "excerpt": "a global is set at load time",
+    "repro": null,
+    "rule": null
+  },
+  "target": null
+}
