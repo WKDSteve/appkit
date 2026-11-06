@@ -6,6 +6,7 @@
   // (the default), or the first one with a count of the rest.
   import type { ConflictItem, ConflictMode } from './conflicts';
   import { markHidden } from './text';
+  import type { FloatAction, FloatingParams } from './floating';
 
   interface Labels {
     title: string;
@@ -23,6 +24,8 @@
     viewSingle: string;
   }
 
+  const stayPut: FloatAction = () => ({ update() {}, destroy() {} });
+
   let {
     open,
     items,
@@ -34,7 +37,12 @@
     oncancel,
     labels,
     show = markHidden,
+    float = stayPut,
+    floatParams = { kind: 'conflictcenter', moveLabel: '', moveHint: '' },
   }: {
+    /** Makes the dialog movable and sizable: the action of the app (`floatingIn`), with its words. */
+    float?: FloatAction;
+    floatParams?: FloatingParams;
     open: boolean;
     items: readonly ConflictItem[];
     mode: ConflictMode;
@@ -61,6 +69,7 @@
 </script>
 
 <dialog
+  use:float={floatParams}
   bind:this={dialog}
   aria-labelledby="conflicts-title"
   use:closeOnBackdrop

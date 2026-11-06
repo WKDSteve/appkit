@@ -5,6 +5,7 @@
   import { closeOnBackdrop } from './backdrop';
   import { stepIndex, type PaletteItem } from './palette';
   import { markHidden } from './text';
+  import type { FloatAction, FloatingParams } from './floating';
 
   interface Labels {
     /** The name of the dialog and of the list. */
@@ -19,6 +20,8 @@
     entry: string;
   }
 
+  const stayPut: FloatAction = () => ({ update() {}, destroy() {} });
+
   let {
     open,
     items,
@@ -26,7 +29,12 @@
     onclose,
     labels,
     show = markHidden,
+    float = stayPut,
+    floatParams = { kind: 'palette', moveLabel: '', moveHint: '' },
   }: {
+    /** Makes the dialog movable and sizable: the action of the app (`floatingIn`), with its words. */
+    float?: FloatAction;
+    floatParams?: FloatingParams;
     open: boolean;
     /** The list for the words in the box; read inside the component, so the page's own state is tracked. */
     items: (query: string) => PaletteItem[];
@@ -81,6 +89,7 @@
   not be closed by the event of the one before, so only a dialog that is shut now counts.
 -->
 <dialog
+  use:float={floatParams}
   bind:this={dialog}
   aria-label={labels.title}
   use:closeOnBackdrop

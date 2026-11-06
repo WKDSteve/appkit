@@ -17,6 +17,8 @@
     "./conflicts": "./src/conflicts.ts",
     "./contextmenu": "./src/contextmenu.ts",
     "./docs": "./src/docs.ts",
+    "./floating": "./src/floating.ts",
+    "./floats": "./src/floats.ts",
     "./handoff": "./src/handoff.ts",
     "./i18n": "./src/i18n.ts",
     "./keymap": "./src/keymap.ts",

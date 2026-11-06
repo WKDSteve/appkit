@@ -102,3 +102,43 @@ pre {
     animation: none !important;
   }
 }
+
+/* A float the person can move and size (floating.ts): the browser's grip in its lower right corner, and the
+   handles. They are global: the handle is added by the action, outside the styles of the dialog's component. */
+dialog.floating {
+  resize: both;
+  min-width: min(240px, calc(100vw - 16px));
+  min-height: min(120px, calc(100vh - 16px));
+}
+dialog.floating [data-float-handle],
+dialog.floating .float-head {
+  cursor: move;
+  touch-action: none;
+  user-select: none;
+}
+dialog.floating .float-move {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.35rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.75rem;
+  min-height: 1.75rem;
+  padding: 0;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: move;
+  touch-action: none;
+  font-size: 1rem;
+  line-height: 1;
+}
+dialog.floating .float-move:hover {
+  border-color: var(--accent);
+}
+/* The title a float is named by leaves room for the handle in the corner. */
+dialog.floating:has(> .float-move) .float-head {
+  padding-right: 2.25rem;
+}

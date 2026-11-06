@@ -6,6 +6,7 @@
   import { searchDocs, type DocEntry } from './docs';
   import { parseMarkdown } from './markdown';
   import Blocks from './Blocks.svelte';
+  import type { FloatAction, FloatingParams } from './floating';
 
   interface Labels {
     title: string;
@@ -18,13 +19,20 @@
     close: string;
   }
 
+  const stayPut: FloatAction = () => ({ update() {}, destroy() {} });
+
   let {
     open,
     docs,
     docId = null,
     onclose,
     labels,
+    float = stayPut,
+    floatParams = { kind: 'docsdialog', moveLabel: '', moveHint: '' },
   }: {
+    /** Makes the dialog movable and sizable: the action of the app (`floatingIn`), with its words. */
+    float?: FloatAction;
+    floatParams?: FloatingParams;
     open: boolean;
     docs: readonly DocEntry[];
     /** The document the window starts at; the first one when it is null or unknown. */
@@ -56,6 +64,7 @@
 </script>
 
 <dialog
+  use:float={floatParams}
   bind:this={dialog}
   aria-label={labels.title}
   use:closeOnBackdrop
