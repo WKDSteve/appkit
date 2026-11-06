@@ -632,9 +632,33 @@ pub fn installed_program(app: &Background<'_>, env: &Env) -> Result<PathBuf, Str
     Ok(install_dir(app, env)?.join(app.identity().program_file()))
 }
 
+/// What the link of the app is called.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LinkName {
+    /// The title of the app (`Rules.lnk`).
+    #[default]
+    Title,
+    /// The name of the app (`hub-desktop.lnk`).
+    App,
+}
+
+/// How the link of the app starts it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LinkStart {
+    /// `start --open`: in the background, and the browser opens the page. The console closes by itself.
+    #[default]
+    OpenPage,
+    /// `serve`, in a minimized console that stays: closing it ends the hub.
+    ServeMinimized,
+}
+
 /// What `install` was asked for.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct InstallOptions {
+    /// What the link is called, when one is made.
+    pub link_name: LinkName,
+    /// How the link starts the app, when one is made.
+    pub link_start: LinkStart,
     /// Register the installed program with the login of the user.
     pub autostart: bool,
     /// Put a link (named by the title of the app) on the desktop and in the Start menu (Windows).
@@ -819,7 +843,7 @@ async fn install_steps_beside(
         out.push_str(&autostart_for(app, Autostart::On, &target)?);
     }
     if opts.shortcut {
-        out.push_str(&shortcut(app, &target)?);
+        out.push_str(&shortcut(app, &target, opts.link_name, opts.link_start)?);
     }
     Ok(())
 }
@@ -1073,19 +1097,16 @@ fn remove_shortcut(app: &Background<'_>, env: &Env) -> Result<String, String> {
     let reg = RegExe(system_program("reg.exe")?);
     let mut out = String::new();
     let mut failed = None;
-    for place in LinkPlace::ALL {
-        let removed = shell_folder(env, &reg, &place).and_then(|dir| {
-            remove_link_in(
-                &dir,
-                place,
-                app.identity().title,
-                &app.identity().program_file(),
-            )
-        });
-        match removed {
-            Ok(text) => out.push_str(&text),
-            Err(e) => {
-                failed.get_or_insert(e);
+    // Under either name: the program does not know how it was installed. Only a link to this program is taken away.
+    for name in [app.identity().title, app.identity().app] {
+        for place in LinkPlace::ALL {
+            let removed = shell_folder(env, &reg, &place)
+                .and_then(|dir| remove_link_in(&dir, place, name, &app.identity().program_file()));
+            match removed {
+                Ok(text) => out.push_str(&text),
+                Err(e) => {
+                    failed.get_or_insert(e);
+                }
             }
         }
     }
@@ -1116,10 +1137,10 @@ pub fn desktop_link_name(title: &str) -> String {
     format!("{title}.lnk")
 }
 
-/// The link of the app: it starts `target` with `start --open`, minimized (the console of
-/// `start` closes by itself); the description names the app.
+/// The link of the app: it starts `target` the way `start` says, minimized (the console of `start --open` closes by
+/// itself, that of `serve` stays and is the hub); the description names the app.
 #[must_use]
-pub fn app_link(app: &str, target: &Path) -> crate::shell_link::Link {
+pub fn app_link(app: &str, target: &Path, start: LinkStart) -> crate::shell_link::Link {
     let target = target.to_string_lossy().into_owned();
     // The folder by the text of the path: a Windows path, whatever system builds the link.
     let working_dir = target
@@ -1128,9 +1149,16 @@ pub fn app_link(app: &str, target: &Path) -> crate::shell_link::Link {
         .unwrap_or_default();
     crate::shell_link::Link {
         target,
-        arguments: "start --open".to_owned(),
+        arguments: match start {
+            LinkStart::OpenPage => "start --open",
+            LinkStart::ServeMinimized => "serve",
+        }
+        .to_owned(),
         working_dir,
-        description: format!("{app}: start the hub and open the page"),
+        description: match start {
+            LinkStart::OpenPage => format!("{app}: start the hub and open the page"),
+            LinkStart::ServeMinimized => format!("{app}: run the hub in a minimized console"),
+        },
         show_command: 7,
     }
 }
@@ -1138,7 +1166,12 @@ pub fn app_link(app: &str, target: &Path) -> crate::shell_link::Link {
 /// A link on the desktop and in the Start menu (named by the title of the app) that starts the hub and opens the page.
 /// It is written as a file (`shell_link`), not through the script host, which an endpoint
 /// protection stops when an unsigned program starts it.
-fn shortcut(app: &Background<'_>, exe: &Path) -> Result<String, String> {
+fn shortcut(
+    app: &Background<'_>,
+    exe: &Path,
+    name: LinkName,
+    start: LinkStart,
+) -> Result<String, String> {
     if !cfg!(windows) {
         let platform =
             loginitems::Platform::current().ok_or("a launcher is not built for this system")?;
@@ -1149,12 +1182,17 @@ fn shortcut(app: &Background<'_>, exe: &Path) -> Result<String, String> {
     let mut out = String::new();
     for place in LinkPlace::ALL {
         let dir = shell_folder(&env, &reg, &place)?;
+        let link_name = match name {
+            LinkName::Title => app.identity().title,
+            LinkName::App => app.identity().app,
+        };
         out.push_str(&make_link_in(
             &dir,
             place,
-            app.identity().title,
+            link_name,
             app.identity().app,
             exe,
+            start,
         )?);
     }
     Ok(out)
@@ -1166,12 +1204,16 @@ fn make_link_in(
     title: &str,
     app: &str,
     exe: &Path,
+    start: LinkStart,
 ) -> Result<String, String> {
     // The Start menu folder of a fresh profile may not be there yet.
     std::fs::create_dir_all(dir)
         .map_err(|e| format!("the link {} could not be made: {e}", place.said()))?;
-    crate::shell_link::write(&dir.join(desktop_link_name(title)), &app_link(app, exe))
-        .map_err(|e| format!("the link {} could not be made: {e}", place.said()))?;
+    crate::shell_link::write(
+        &dir.join(desktop_link_name(title)),
+        &app_link(app, exe, start),
+    )
+    .map_err(|e| format!("the link {} could not be made: {e}", place.said()))?;
     Ok(format!("a link \"{title}\" is {}\n", place.said()))
 }
 
@@ -1206,6 +1248,33 @@ mod tests {
 
     fn purge_settings(dir: &Path) -> Result<String, String> {
         super::purge_settings(&APP, dir)
+    }
+
+    #[test]
+    fn a_link_can_be_named_by_the_app_and_run_the_hub_in_a_minimized_console() {
+        let desktop = Scratch::new("hub-link-app");
+        let exe = Path::new(r"C:\Apps\rules-hub.exe");
+        make_link_in(
+            &desktop,
+            LinkPlace::Desktop,
+            IDENTITY.app,
+            IDENTITY.app,
+            exe,
+            LinkStart::ServeMinimized,
+        )
+        .unwrap();
+        let link = desktop.join(format!("{}.lnk", IDENTITY.app));
+        let bytes = std::fs::read(&link).unwrap();
+        assert_eq!(
+            crate::shell_link::target_path(&bytes).as_deref(),
+            Some(r"C:\Apps\rules-hub.exe")
+        );
+        let made = app_link(IDENTITY.app, exe, LinkStart::ServeMinimized);
+        assert_eq!(made.arguments, "serve");
+        assert_eq!(made.show_command, 7);
+        // Taken away under that name as under the title: it points at this program.
+        remove_link_in(&desktop, LinkPlace::Desktop, IDENTITY.app, "rules-hub.exe").unwrap();
+        assert!(!link.exists());
     }
 
     #[test]
@@ -1285,6 +1354,7 @@ mod tests {
             IDENTITY.title,
             IDENTITY.app,
             exe,
+            LinkStart::OpenPage,
         )
         .unwrap();
         assert!(text.contains("\"Rules\""), "{text}");
@@ -1294,7 +1364,7 @@ mod tests {
             crate::shell_link::target_path(&bytes).as_deref(),
             Some(r"C:\Apps\rules-hub.exe")
         );
-        let made = app_link(IDENTITY.app, exe);
+        let made = app_link(IDENTITY.app, exe, LinkStart::OpenPage);
         assert_eq!(made.arguments, "start --open");
         assert_eq!(made.working_dir, r"C:\Apps");
         assert!(made.description.starts_with("rules-desktop:"));
@@ -1304,8 +1374,15 @@ mod tests {
         // The name of the program on Windows, where the link is made (`program_file` has no
         // `.exe` on the system that runs the test elsewhere).
         let program = format!("{}.exe", IDENTITY.binary);
-        crate::shell_link::write(&link, &app_link("mine", Path::new(r"C:\Apps\editor.exe")))
-            .unwrap();
+        crate::shell_link::write(
+            &link,
+            &app_link(
+                "mine",
+                Path::new(r"C:\Apps\editor.exe"),
+                LinkStart::OpenPage,
+            ),
+        )
+        .unwrap();
         remove_link_in(&desktop, LinkPlace::Desktop, IDENTITY.title, &program).unwrap();
         assert!(link.is_file());
         // Ours goes.
@@ -1315,6 +1392,7 @@ mod tests {
             IDENTITY.title,
             IDENTITY.app,
             exe,
+            LinkStart::OpenPage,
         )
         .unwrap();
         remove_link_in(&desktop, LinkPlace::Desktop, IDENTITY.title, &program).unwrap();
@@ -1333,6 +1411,7 @@ mod tests {
             IDENTITY.title,
             IDENTITY.app,
             exe,
+            LinkStart::OpenPage,
         )
         .unwrap();
         assert_eq!(text, "a link \"Rules\" is in the Start menu\n");
