@@ -30,6 +30,7 @@ afterEach(() => {
 describe('the popup of the keyboard focus', () => {
   it('stays when the pointer moves on something without a hint, and goes with the focus', () => {
     const { a, tip, fire } = page();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
     a.focus();
     expect(tip.hidden).toBe(false);
     fire(document.body, 'mouseover');
@@ -37,6 +38,18 @@ describe('the popup of the keyboard focus', () => {
     vi.advanceTimersByTime(HIDE_DELAY_MS + 1);
     expect(tip.hidden).toBe(false);
     a.blur();
+    expect(tip.hidden).toBe(true);
+  });
+
+  it('given back after a click of the mouse goes with the pointer', () => {
+    const { a, b, tip, fire } = page();
+    fire(b, 'mousedown');
+    fire(b, 'mouseup');
+    // A dialog closed by that click gives the focus back: no press is under way any more.
+    a.focus();
+    expect(tip.hidden).toBe(false);
+    fire(document.body, 'mouseover');
+    vi.advanceTimersByTime(HIDE_DELAY_MS + 1);
     expect(tip.hidden).toBe(true);
   });
 

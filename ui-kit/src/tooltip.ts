@@ -202,6 +202,9 @@ export function installTooltips(
   let current: HTMLElement | null = null;
   let describedBefore: string | null = null;
   let viaFocus = false;
+  // The last hand on the machine was on the keyboard. The focus a dialog gives back after a click of the mouse is also a
+  // focus without a press, and that popup goes with the pointer as any other.
+  let keyboard = false;
   // The button of the mouse is down: the focus that comes with it is the press, not the keyboard.
   let pressing = false;
   // A press inside the popup keeps it: it goes with a press outside or Escape, not with the pointer or the focus.
@@ -340,7 +343,7 @@ export function installTooltips(
       cancelShow();
       // A popup the focus opened stays while the focus does (WCAG 1.4.13): a pointer that rests where a dialog moved to
       // gets a mouseover from the browser, and that is no reason to take the keyboard's hint away.
-      if (!tip.hidden && !viaFocus) scheduleHide();
+      if (!tip.hidden && !(viaFocus && keyboard)) scheduleHide();
       return;
     }
     cancelHide();
@@ -353,7 +356,7 @@ export function installTooltips(
   const onOut = (e: Event): void => {
     if (pinned) return;
     cancelShow();
-    if (!tip.hidden && !viaFocus && (hintOf(e.target) || (e.target instanceof win.Node && tip.contains(e.target)))) {
+    if (!tip.hidden && !(viaFocus && keyboard) && (hintOf(e.target) || (e.target instanceof win.Node && tip.contains(e.target)))) {
       scheduleHide();
     }
   };
@@ -364,6 +367,7 @@ export function installTooltips(
   // takes a kept popup away. A popup on a control never gets the press (pointer-events: none).
   const onDown = (e: Event): void => {
     pressing = true;
+    keyboard = false;
     // The main button only: another one opens a menu of the browser.
     if ((e as MouseEvent).button !== 0 || tip.hidden) return;
     if (e.target instanceof win.Node && tip.contains(e.target)) {
@@ -402,6 +406,7 @@ export function installTooltips(
   const onKey = (e: KeyboardEvent): void => {
     // A key after a press that never got its release (the button was let go outside the window) is the keyboard again.
     pressing = false;
+    keyboard = true;
     // Tab is the keyboard again: a kept popup is a kept one no longer (Ctrl+C copies from it, Escape closes it below).
     if (e.key === 'Tab' && pinned) hide();
     // The popup is closed by this Escape and by nothing else: it is not also the Escape of a dialog or a menu. A
