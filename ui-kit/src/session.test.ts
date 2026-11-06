@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Preferences, StreamSession, type StreamDeps } from './session.svelte';
+import { Preferences, StreamSession, type StreamDeps, type StreamNews, type StreamShare } from './session.svelte';
 import type { SseMessage } from './sse';
 
 function profile(initial: Record<string, string> = {}, broken = false) {
@@ -291,5 +291,187 @@ describe('StreamSession', () => {
     await session.follow(ending);
     await second;
     expect(log).toEqual(['fetch', 'lost']);
+  });
+});
+
+/** The lock and the channel of one browser, for windows that are sessions of this test. */
+function browser() {
+  const heard = new Set<(news: StreamNews) => void>();
+  const queue: { granted: () => Promise<void>; done: (v: unknown) => void; fail: (e: unknown) => void }[] = [];
+  let held = false;
+  const next = () => {
+    if (held) return;
+    const first = queue.shift();
+    if (!first) return;
+    held = true;
+    void first.granted().then(first.done, first.fail).finally(() => {
+      held = false;
+      next();
+    });
+  };
+  const share: StreamShare = {
+    name: 'one-session',
+    locks: {
+      request: (_name, options, granted) =>
+        new Promise((done, fail) => {
+          const entry = { granted, done, fail };
+          queue.push(entry);
+          options.signal?.addEventListener('abort', () => {
+            const at = queue.indexOf(entry);
+            if (at >= 0) {
+              queue.splice(at, 1);
+              fail(new DOMException('given up', 'AbortError'));
+            }
+          });
+          next();
+        }),
+    },
+    open(listener) {
+      heard.add(listener);
+      return {
+        post: (news) => {
+          for (const other of [...heard]) if (other !== listener) other(news);
+        },
+        close: () => void heard.delete(listener),
+      };
+    },
+  };
+  return share;
+}
+
+/** A hub: its streams stay open, say `tasks` once, and are counted while they last. */
+function hubOfStreams() {
+  const hub = { open: 0, most: 0, status: 200 };
+  const fetchFn = (async (_url: unknown, init?: RequestInit) => {
+    if (hub.status !== 200) return new Response('', { status: hub.status });
+    hub.open++;
+    hub.most = Math.max(hub.most, hub.open);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('event: tasks\ndata: {}\n\n'));
+        init?.signal?.addEventListener('abort', () => {
+          hub.open--;
+          controller.error(new DOMException('cut', 'AbortError'));
+        });
+      },
+    });
+    return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+  }) as typeof fetch;
+  return { hub, fetchFn };
+}
+
+function aWindow(share: StreamShare, fetchFn: typeof fetch) {
+  // A real wait: a hub that stays down must not run the guard of `deps` out while the test looks.
+  const sleep = () => new Promise<void>((resolve) => setTimeout(resolve, 5));
+  const made = deps([], { fetchFn, sleep, share: () => share });
+  const reading = made.session.follow(made.d);
+  return { ...made, reading };
+}
+
+describe('StreamSession, shared by the windows of a session', () => {
+  it('holds one stream for eight windows, and all of them are live and hear it', async () => {
+    const share = browser();
+    const { hub, fetchFn } = hubOfStreams();
+    const first = aWindow(share, fetchFn);
+    await vi.waitFor(() => expect(first.log).toContain('message:tasks'));
+    const others = Array.from({ length: 7 }, () => aWindow(share, fetchFn));
+    for (const w of others) {
+      await vi.waitFor(() => expect(w.session.open).toBe(true));
+      expect(w.session.connection).toBe('live');
+      expect(w.log).toEqual(['open']);
+    }
+    expect(hub.most).toBe(1);
+    for (const w of [first, ...others]) w.session.stop();
+    await Promise.all([first, ...others].map((w) => w.reading));
+    expect(hub.open).toBe(0);
+  });
+
+  it('the next window takes over when the one that held it ends, and every window reads again', async () => {
+    const share = browser();
+    const { hub, fetchFn } = hubOfStreams();
+    const first = aWindow(share, fetchFn);
+    await vi.waitFor(() => expect(first.session.open).toBe(true));
+    const second = aWindow(share, fetchFn);
+    const third = aWindow(share, fetchFn);
+    await vi.waitFor(() => expect(third.session.open).toBe(true));
+    await vi.waitFor(() => expect(second.session.open).toBe(true));
+    const [opensOfSecond, opensOfThird] = [second, third].map((w) => w.log.filter((l) => l === 'open').length);
+
+    first.session.stop();
+    await first.reading;
+    await vi.waitFor(() => expect(second.log.filter((l) => l === 'open').length).toBe((opensOfSecond ?? 0) + 1));
+    await vi.waitFor(() => expect(third.log.filter((l) => l === 'open').length).toBe((opensOfThird ?? 0) + 1));
+    // What the new holder reads, the other one hears.
+    expect(third.log).toContain('message:tasks');
+    expect(hub.open).toBe(1);
+    expect(hub.most).toBe(1);
+    second.session.stop();
+    third.session.stop();
+    await Promise.all([second.reading, third.reading]);
+  });
+
+  it('a refused session reaches every window, and none reads on', async () => {
+    const share = browser();
+    const { hub, fetchFn } = hubOfStreams();
+    const first = aWindow(share, fetchFn);
+    await vi.waitFor(() => expect(first.session.open).toBe(true));
+    const second = aWindow(share, fetchFn);
+    await vi.waitFor(() => expect(second.session.open).toBe(true));
+    hub.status = 401;
+    first.session.cut();
+    await Promise.all([first.reading, second.reading]);
+    expect(first.log).toContain('lost');
+    expect(second.log).toContain('lost');
+  });
+
+  it('a stream that is down shows in the window that only hears it', async () => {
+    const share = browser();
+    const { hub, fetchFn } = hubOfStreams();
+    const first = aWindow(share, fetchFn);
+    await vi.waitFor(() => expect(first.session.open).toBe(true));
+    const second = aWindow(share, fetchFn);
+    await vi.waitFor(() => expect(second.session.open).toBe(true));
+    hub.status = 503;
+    first.session.cut();
+    await vi.waitFor(() => expect(second.session.connection).toBe('reconnecting'));
+    expect(second.session.open).toBe(false);
+    first.session.stop();
+    second.session.stop();
+    await Promise.all([first.reading, second.reading]);
+  });
+
+  it('a browser that gives no lock leaves each window its own stream', async () => {
+    const share: StreamShare = {
+      ...browser(),
+      locks: { request: () => Promise.reject(new DOMException('no', 'SecurityError')) },
+    };
+    const { hub, fetchFn } = hubOfStreams();
+    const w = aWindow(share, fetchFn);
+    await vi.waitFor(() => expect(w.session.open).toBe(true));
+    expect(hub.open).toBe(1);
+    w.session.stop();
+    await w.reading;
+  });
+
+  it('a new token is a new session: its window leaves the old share', async () => {
+    const share = browser();
+    const other: StreamShare = { ...browser(), name: 'another-session' };
+    const { hub, fetchFn } = hubOfStreams();
+    const made = deps([], { fetchFn, share: () => share });
+    const reading = made.session.follow(made.d);
+    await vi.waitFor(() => expect(made.session.open).toBe(true));
+    let asked = 0;
+    made.session.follow({
+      ...made.d,
+      share: () => {
+        asked++;
+        return other;
+      },
+    });
+    await vi.waitFor(() => expect(asked).toBeGreaterThan(0));
+    await vi.waitFor(() => expect(made.session.open).toBe(true));
+    expect(hub.open).toBe(1);
+    made.session.stop();
+    await reading;
   });
 });
