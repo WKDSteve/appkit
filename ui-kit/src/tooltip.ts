@@ -338,7 +338,9 @@ export function installTooltips(
     const el = hintOf(e.target);
     if (!el) {
       cancelShow();
-      if (!tip.hidden) scheduleHide();
+      // A popup the focus opened stays while the focus does (WCAG 1.4.13): a pointer that rests where a dialog moved to
+      // gets a mouseover from the browser, and that is no reason to take the keyboard's hint away.
+      if (!tip.hidden && !viaFocus) scheduleHide();
       return;
     }
     cancelHide();
@@ -351,7 +353,7 @@ export function installTooltips(
   const onOut = (e: Event): void => {
     if (pinned) return;
     cancelShow();
-    if (!tip.hidden && (hintOf(e.target) || (e.target instanceof win.Node && tip.contains(e.target)))) {
+    if (!tip.hidden && !viaFocus && (hintOf(e.target) || (e.target instanceof win.Node && tip.contains(e.target)))) {
       scheduleHide();
     }
   };

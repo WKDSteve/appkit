@@ -27,6 +27,30 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
+describe('the popup of the keyboard focus', () => {
+  it('stays when the pointer moves on something without a hint, and goes with the focus', () => {
+    const { a, tip, fire } = page();
+    a.focus();
+    expect(tip.hidden).toBe(false);
+    fire(document.body, 'mouseover');
+    fire(a, 'mouseout');
+    vi.advanceTimersByTime(HIDE_DELAY_MS + 1);
+    expect(tip.hidden).toBe(false);
+    a.blur();
+    expect(tip.hidden).toBe(true);
+  });
+
+  it('of the pointer goes when the pointer leaves, as before', () => {
+    const { a, tip, fire } = page();
+    fire(a, 'mouseover');
+    vi.advanceTimersByTime(SHOW_DELAY_MS);
+    expect(tip.hidden).toBe(false);
+    fire(document.body, 'mouseover');
+    vi.advanceTimersByTime(HIDE_DELAY_MS + 1);
+    expect(tip.hidden).toBe(true);
+  });
+});
+
 describe('the popup and the press of the mouse', () => {
   it('shows nothing for the focus of a press, also when the popup of another element is warm', () => {
     const { a, b, tip, fire } = page();
