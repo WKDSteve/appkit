@@ -662,7 +662,9 @@ pub struct InstallOptions {
     pub link_start: LinkStart,
     /// Register the installed program with the login of the user.
     pub autostart: bool,
-    /// Put a link (named by the title of the app) on the desktop and in the Start menu (Windows).
+    /// Also put a link (named by the title of the app) on the desktop (Windows; a launcher elsewhere). The link in
+    /// the Start menu is made by every install on Windows, with or without this (unless the tests of the program
+    /// ask for no changes to the machine, see `NO_LOGIN_SYNC`).
     pub shortcut: bool,
 }
 
@@ -844,7 +846,25 @@ async fn install_steps_beside(
         out.push_str(&autostart_for(app, Autostart::On, &target)?);
     }
     if opts.shortcut {
-        out.push_str(&shortcut(app, &target, opts.link_name, opts.link_start)?);
+        let places = &LinkPlace::ALL;
+        out.push_str(&shortcut(
+            app,
+            &target,
+            opts.link_name,
+            opts.link_start,
+            places,
+        )?);
+    } else if cfg!(windows) && env.get(&no_login_sync(app)).is_none() {
+        // The Start menu is where the program is found: it is not left to a flag. A link that cannot be
+        // made is said, and the install (which is done) still succeeds.
+        let places = [LinkPlace::StartMenu];
+        match shortcut(app, &target, opts.link_name, opts.link_start, &places) {
+            Ok(text) => out.push_str(&text),
+            Err(e) => out.push_str(&format!(
+                "no link in the Start menu: {e}
+"
+            )),
+        }
     }
     Ok(())
 }
@@ -1163,7 +1183,7 @@ pub fn app_link(app: &str, target: &Path, start: LinkStart) -> crate::shell_link
     }
 }
 
-/// A link on the desktop and in the Start menu (named by the title of the app) that starts the hub and opens the page.
+/// A link in each of `places` (named by the title of the app) that starts the hub and opens the page.
 /// It is written as a file (`shell_link`), not through the script host, which an endpoint
 /// protection stops when an unsigned program starts it.
 fn shortcut(
@@ -1171,6 +1191,7 @@ fn shortcut(
     exe: &Path,
     name: LinkName,
     start: LinkStart,
+    places: &[LinkPlace],
 ) -> Result<String, String> {
     if !cfg!(windows) {
         let platform =
@@ -1180,7 +1201,7 @@ fn shortcut(
     let env = Env::from_process();
     let reg = RegExe(system_program("reg.exe")?);
     let mut out = String::new();
-    for place in LinkPlace::ALL {
+    for &place in places {
         let dir = shell_folder(&env, &reg, &place)?;
         let link_name = match name {
             LinkName::Title => app.identity().title,
