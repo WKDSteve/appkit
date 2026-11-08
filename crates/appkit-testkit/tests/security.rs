@@ -23,3 +23,17 @@ async fn an_app_that_names_one_https_host_gets_exactly_that_one() {
     )
     .await;
 }
+
+mod demo_installable {
+    appkit_testkit::security_matrix!(appkit_testkit::subjects::DemoInstallable);
+}
+
+#[tokio::test]
+async fn an_installable_page_has_its_own_policy_and_nothing_more() {
+    appkit_testkit::security::the_installable_page_has_its_own_policy_and_nothing_more(
+        &appkit_testkit::subjects::DemoInstallable,
+        appkit_testkit::subjects::INSTALLABLE_PREFIX,
+        appkit_testkit::subjects::INSTALLABLE_WORKER_POLICY,
+    )
+    .await;
+}

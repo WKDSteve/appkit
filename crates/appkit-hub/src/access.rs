@@ -14,7 +14,10 @@ pub async fn shell<R: Runtime>(State(st): State<Arc<Core<R>>>, uri: axum::http::
     }
     // Under /assets/ only what the build holds; the page itself is the
     // placeholder until an interface is there.
-    if uri.path().starts_with("/assets/") || st.ui.has_index() {
+    if uri.path().starts_with("/assets/")
+        || st.guard_rules.is_installable(uri.path())
+        || st.ui.has_index()
+    {
         return error_body(StatusCode::NOT_FOUND, "not_found", "no such file");
     }
     let app = st.app;

@@ -2,4 +2,7 @@
 
 mod demo;
 
-pub use self::demo::{Demo, DemoWide, IDENTITY as DEMO_IDENTITY, WIDE_ORIGIN};
+pub use self::demo::{
+    Demo, DemoInstallable, DemoWide, IDENTITY as DEMO_IDENTITY, INSTALLABLE_PREFIX,
+    INSTALLABLE_WORKER_POLICY, WIDE_ORIGIN,
+};

@@ -669,6 +669,107 @@ pub async fn the_page_may_connect_to(s: &dyn Subject, extra: Option<&str>) {
     assert!(csp.contains(&want), "{csp}");
 }
 
+/// The directives of a policy, by name.
+fn directives(csp: &str) -> std::collections::HashMap<String, String> {
+    csp.split(';')
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+        .map(|d| match d.split_once(' ') {
+            Some((name, value)) => (name.to_owned(), value.to_owned()),
+            None => (d.to_owned(), String::new()),
+        })
+        .collect()
+}
+
+/// An app with an installable page under `prefix` (`GuardRules::with_installable_page`) that serves `{prefix}/`:
+/// that page and the files below it are shells with no token needed, `GET` only; their policy is the page's plus
+/// `manifest-src 'self'`, `worker-src 'self'` and the worker policy next to Svelte's, and nothing else is wider;
+/// the policy of `/` stays without them; `{prefix}` without a slash and a path below the prefix the app does not
+/// serve are not found, and a path that climbs out of the prefix reaches no data route.
+pub async fn the_installable_page_has_its_own_policy_and_nothing_more(
+    s: &dyn Subject,
+    prefix: &str,
+    worker_policy: &str,
+) {
+    let h = Harness::new(s).await;
+    let desk = get(&h, "/", &[]).await;
+    let page = get(&h, &format!("{prefix}/"), &[]).await;
+    assert_eq!(page.status, 200, "{page:?}");
+    let desk_csp = directives(desk.header("content-security-policy").unwrap());
+    let page_csp = directives(page.header("content-security-policy").unwrap());
+    assert_eq!(
+        page_csp.get("manifest-src").map(String::as_str),
+        Some("'self'")
+    );
+    assert_eq!(
+        page_csp.get("worker-src").map(String::as_str),
+        Some("'self'")
+    );
+    assert_eq!(
+        page_csp.get("trusted-types").map(String::as_str),
+        Some(format!("svelte-trusted-html {worker_policy}").as_str())
+    );
+    // Everything else is the desktop page's, word for word.
+    for (name, value) in &desk_csp {
+        if name != "trusted-types" {
+            assert_eq!(page_csp.get(name), Some(value), "{name} differs");
+        }
+    }
+    assert_eq!(
+        page_csp.len(),
+        desk_csp.len() + 2,
+        "only manifest-src and worker-src are added: {page_csp:?}"
+    );
+    assert!(!desk_csp.contains_key("manifest-src") && !desk_csp.contains_key("worker-src"));
+    assert_eq!(
+        desk_csp.get("trusted-types").map(String::as_str),
+        Some("svelte-trusted-html")
+    );
+    for header in [
+        "x-content-type-options",
+        "referrer-policy",
+        "cache-control",
+        "permissions-policy",
+    ] {
+        assert_eq!(page.header(header), desk.header(header), "{header}");
+    }
+    // A file below the prefix carries the same policy.
+    let worker = get(&h, &format!("{prefix}/sw.js"), &[]).await;
+    assert_eq!(worker.status, 200, "{worker:?}");
+    assert_eq!(
+        worker.header("content-security-policy"),
+        page.header("content-security-policy")
+    );
+    // No credential needed, no other method, nothing that is not there.
+    for path in [
+        prefix.to_owned(),
+        format!("{prefix}/nope.js"),
+        format!("{prefix}x/"),
+    ] {
+        let r = get(&h, &path, &[]).await;
+        assert_eq!(r.status, 404, "{path}: {r:?}");
+        assert!(
+            !r.header("content-security-policy")
+                .unwrap_or("")
+                .contains("worker-src")
+                || path.starts_with(&format!("{prefix}/")),
+            "{path} has the installable policy"
+        );
+    }
+    let r = post(
+        &h,
+        &format!("{prefix}/"),
+        &[("Origin", h.origin().as_str())],
+        "{}",
+    )
+    .await;
+    assert_eq!(r.status, 405, "{r:?}");
+    // Climbing out of the prefix is not a way to a data route without a session.
+    let climb = format!("{prefix}/..{}", h.route(s.data_routes()[0]));
+    let r = get(&h, &climb, &[]).await;
+    assert_eq!(r.status, 404, "{climb}: {r:?}");
+}
+
 pub async fn every_answer_carries_the_security_headers(s: &dyn Subject) {
     let h = Harness::new(s).await;
     let host = h.host();

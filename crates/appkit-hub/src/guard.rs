@@ -35,6 +35,44 @@ pub struct GuardRules {
     /// POST paths that take a file as it is: any size, any type, and as long as it takes. A session and the origin are
     /// asked as for any other route; the route itself has to stream the body and give up on one that stalls.
     upload_paths: Vec<String>,
+    /// A second page of the app that can be installed (a PWA for a phone), below its own path prefix.
+    installable: Option<Installable>,
+}
+
+/// A page below `prefix` (`/m`) that a browser can install: it is a shell like `/`, and its policy also lets the
+/// page name its manifest and its service worker, and make one more Trusted Types policy (`worker_policy`), the one
+/// the page turns the address of its worker into a script URL with. Everything else of the policy is the shell's.
+#[derive(Debug, Clone)]
+struct Installable {
+    prefix: String,
+    worker_policy: String,
+}
+
+/// The first parts of a path that are the core's: an installable page cannot live there.
+const RESERVED_PREFIXES: [&str; 4] = ["/api", "/assets", "/auth", "/index.html"];
+
+/// Is `prefix` one plain path part after a slash: lower-case letters, digits and `-`, at most 32 of them?
+fn plain_prefix(prefix: &str) -> bool {
+    prefix.strip_prefix('/').is_some_and(|part| {
+        (1..=32).contains(&part.len())
+            && !part.starts_with('-')
+            && part
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    })
+}
+
+/// Is `name` a name for a Trusted Types policy that cannot widen the policy list: lower-case letters, digits and `-`,
+/// starting with a letter, not a keyword of the directive and not the shell's own policy?
+fn plain_policy_name(name: &str) -> bool {
+    (1..=64).contains(&name.len())
+        && name.bytes().next().is_some_and(|b| b.is_ascii_lowercase())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && name != "svelte-trusted-html"
+        && name != "default"
+        && name != "none"
 }
 
 /// The routes of the core itself: an app cannot name one of them as its own.
@@ -133,6 +171,71 @@ impl GuardRules {
             coarse_post_paths,
             upload_paths: Vec::new(),
             connect_src: None,
+            installable: None,
+        }
+    }
+
+    /// Serve a second page that can be installed (a PWA) below `prefix` (`/m`): `/m/` and every file below it are
+    /// asked for by the app's `Pages` as `/m/...`, as shells (no credential, `GET` only), with the shell's headers.
+    /// Their policy also says `manifest-src 'self'; worker-src 'self'` and allows the Trusted Types policy
+    /// `worker_policy` next to Svelte's: the page needs it to register its service worker under
+    /// `require-trusted-types-for 'script'`, and should let it turn exactly one string, the worker's address, into a
+    /// script URL. The policy of every other path stays as it is.
+    ///
+    /// # Panics
+    ///
+    /// When `prefix` is not one plain part (`/` + lower-case letters, digits, `-`), or is a part of the core
+    /// (`/api`, `/assets`, `/auth`), or when `worker_policy` is not a plain name (lower-case letters, digits, `-`,
+    /// starting with a letter) or is Svelte's own, `default` or `none`; or when it is called twice.
+    #[must_use]
+    pub fn with_installable_page(
+        mut self,
+        prefix: impl Into<String>,
+        worker_policy: impl Into<String>,
+    ) -> Self {
+        let prefix = prefix.into();
+        let worker_policy = worker_policy.into();
+        assert!(
+            plain_prefix(&prefix) && !RESERVED_PREFIXES.contains(&prefix.as_str()),
+            "the prefix of an installable page must be one plain path part like /m, not {prefix:?}"
+        );
+        assert!(
+            plain_policy_name(&worker_policy),
+            "the worker policy must be a plain name of its own, not {worker_policy:?}"
+        );
+        assert!(
+            self.installable.is_none(),
+            "an app has at most one installable page"
+        );
+        self.installable = Some(Installable {
+            prefix,
+            worker_policy,
+        });
+        self
+    }
+
+    /// The prefix of the installable page, if the app has one (`/m`).
+    #[must_use]
+    pub fn installable_prefix(&self) -> Option<&str> {
+        self.installable.as_ref().map(|i| i.prefix.as_str())
+    }
+
+    /// Is `path` the installable page or a file below it (`/m/`, `/m/sw.js`)? `/m` itself is not: relative
+    /// addresses of the page would resolve against `/`.
+    #[must_use]
+    pub fn is_installable(&self, path: &str) -> bool {
+        self.installable.as_ref().is_some_and(|i| {
+            path.strip_prefix(i.prefix.as_str())
+                .is_some_and(|rest| rest.starts_with('/'))
+        })
+    }
+
+    /// The Trusted Types policy of the installable page, when `path` is on it.
+    fn worker_policy_for(&self, path: &str) -> Option<&str> {
+        if self.is_installable(path) {
+            self.installable.as_ref().map(|i| i.worker_policy.as_str())
+        } else {
+            None
         }
     }
 
@@ -204,6 +307,7 @@ pub fn classify(path: &str, rules: &GuardRules) -> Class {
     match path {
         "/" | "/index.html" => Class::Shell,
         p if p.starts_with("/assets/") => Class::Shell,
+        p if rules.is_installable(p) => Class::Shell,
         p if p == rules.hello_path => Class::Hello,
         "/auth/exchange" => Class::Exchange,
         "/api/control/pair" => Class::ControlPair,
@@ -266,8 +370,17 @@ pub async fn guard<R: Runtime>(
     next: Next,
 ) -> Response {
     let class = classify(req.uri().path(), &st.guard_rules);
+    let worker_policy = st
+        .guard_rules
+        .worker_policy_for(req.uri().path())
+        .map(str::to_owned);
     let mut response = judge(&st, class, req, next).await;
-    set_security_headers(&mut response, class, st.guard_rules.connect_src());
+    set_page_headers(
+        &mut response,
+        class,
+        st.guard_rules.connect_src(),
+        worker_policy.as_deref(),
+    );
     response
 }
 
@@ -447,10 +560,24 @@ pub fn too_many() -> Response {
 }
 
 /// The policy of the page: this origin only, plus the one address an app named for `connect-src`.
+#[cfg(test)]
 fn shell_policy(connect_src: Option<&str>) -> HeaderValue {
+    page_policy(connect_src, None)
+}
+
+/// The policy of a page; with `worker_policy` the one of the installable page (`with_installable_page`): the same,
+/// plus its manifest, its service worker from this origin and the one more Trusted Types policy it names.
+fn page_policy(connect_src: Option<&str>, worker_policy: Option<&str>) -> HeaderValue {
     let connect = match connect_src {
         Some(origin) => format!("'self' {origin}"),
         None => "'self'".to_owned(),
+    };
+    let (install, trusted) = match worker_policy {
+        Some(name) => (
+            " manifest-src 'self'; worker-src 'self';",
+            format!("svelte-trusted-html {name}"),
+        ),
+        None => ("", "svelte-trusted-html".to_owned()),
     };
     // Nothing is allowed that the page does not name. Scripts and styles come from this origin only (no
     // inline), and a sink that takes a string as HTML or script (`innerHTML`, `eval`) is refused unless the
@@ -458,17 +585,27 @@ fn shell_policy(connect_src: Option<&str>) -> HeaderValue {
     // is drawn as elements).
     let policy = format!(
         "default-src 'none'; script-src 'self'; style-src 'self'; \
-         img-src 'self'; connect-src {connect}; base-uri 'none'; \
+         img-src 'self'; connect-src {connect};{install} base-uri 'none'; \
          object-src 'none'; frame-ancestors 'none'; form-action 'none'; \
-         require-trusted-types-for 'script'; trusted-types svelte-trusted-html"
+         require-trusted-types-for 'script'; trusted-types {trusted}"
     );
-    // The origin was checked when the rules were made (plain ASCII), so this cannot fail; the fallback is
-    // the strictest policy.
+    // The origin and the policy name were checked when the rules were made (plain ASCII), so this cannot fail;
+    // the fallback is the strictest policy.
     HeaderValue::from_str(&policy)
         .unwrap_or_else(|_| HeaderValue::from_static("default-src 'none'"))
 }
 
 pub fn set_security_headers(response: &mut Response, class: Class, connect_src: Option<&str>) {
+    set_page_headers(response, class, connect_src, None);
+}
+
+/// The headers of every answer; `worker_policy` is set for a path of the installable page only.
+pub fn set_page_headers(
+    response: &mut Response,
+    class: Class,
+    connect_src: Option<&str>,
+    worker_policy: Option<&str>,
+) {
     let h = response.headers_mut();
     h.insert(
         HeaderName::from_static("x-content-type-options"),
@@ -489,7 +626,10 @@ pub fn set_security_headers(response: &mut Response, class: Class, connect_src: 
         // string as HTML or script (`innerHTML`, `eval`) is refused unless
         // the one policy of the page made it: Svelte's own, which wraps
         // nothing a task's text could reach (the body is drawn as elements).
-        h.insert(header::CONTENT_SECURITY_POLICY, shell_policy(connect_src));
+        h.insert(
+            header::CONTENT_SECURITY_POLICY,
+            page_policy(connect_src, worker_policy),
+        );
         h.insert(
             HeaderName::from_static("cross-origin-opener-policy"),
             HeaderValue::from_static("same-origin"),
@@ -585,6 +725,79 @@ mod tests {
                 "{bad:?}"
             );
         }
+    }
+
+    #[test]
+    fn an_installable_page_takes_one_plain_prefix_and_one_plain_policy_name() {
+        let r = rules().with_installable_page("/m", "tasks-mobile-worker");
+        assert_eq!(r.installable_prefix(), Some("/m"));
+        for yes in ["/m/", "/m/index.html", "/m/sw.js", "/m/assets/a.js"] {
+            assert!(r.is_installable(yes), "{yes}");
+            assert!(matches!(classify(yes, &r), Class::Shell), "{yes}");
+        }
+        for no in ["/m", "/mx/", "/x/m/", "/", "/api/m/"] {
+            assert!(!r.is_installable(no), "{no}");
+        }
+        assert_eq!(r.worker_policy_for("/m/sw.js"), Some("tasks-mobile-worker"));
+        assert_eq!(r.worker_policy_for("/"), None);
+        // Without the option nothing is installable.
+        assert!(!rules().is_installable("/m/"));
+        assert!(matches!(classify("/m/", &rules()), Class::Other));
+
+        for bad in [
+            "m",
+            "/",
+            "/M",
+            "/m/",
+            "/m/x",
+            "/a b",
+            "/api",
+            "/assets",
+            "/auth",
+            "/-m",
+            "/m;",
+            "/0123456789012345678901234567890123",
+        ] {
+            assert!(
+                std::panic::catch_unwind(|| rules().with_installable_page(bad, "w")).is_err(),
+                "{bad:?}"
+            );
+        }
+        for bad in [
+            "",
+            "svelte-trusted-html",
+            "default",
+            "none",
+            "Worker",
+            "1w",
+            "w x",
+            "w;",
+            "'none'",
+            "w*",
+        ] {
+            assert!(
+                std::panic::catch_unwind(|| rules().with_installable_page("/m", bad)).is_err(),
+                "{bad:?}"
+            );
+        }
+        assert!(std::panic::catch_unwind(|| rules()
+            .with_installable_page("/m", "w")
+            .with_installable_page("/n", "v"))
+        .is_err());
+    }
+
+    #[test]
+    fn the_installable_policy_adds_three_words_and_nothing_else() {
+        let plain = super::page_policy(None, None);
+        let page = super::page_policy(None, Some("w1"));
+        assert_eq!(
+            page.to_str()
+                .unwrap()
+                .replace(" manifest-src 'self'; worker-src 'self';", "")
+                .replace("svelte-trusted-html w1", "svelte-trusted-html"),
+            plain.to_str().unwrap()
+        );
+        assert_eq!(plain, super::shell_policy(None));
     }
 
     fn rules() -> GuardRules {

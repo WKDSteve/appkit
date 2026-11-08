@@ -236,8 +236,14 @@ where
 /// The routes of the core, the routes of the app, and the guard in front of both.
 fn router<R: Runtime>(core: &Arc<Core<R>>, app: Router<Arc<Core<R>>>) -> Router {
     let small = core.limits.small_body_bytes;
-    Router::new()
-        .route("/", get(shell::<R>))
+    let mut base = Router::new();
+    // The installable page and the files below it: shells too, asked of the app's `Pages` by their full path.
+    if let Some(prefix) = core.guard_rules.installable_prefix() {
+        base = base
+            .route(&format!("{prefix}/"), get(shell::<R>))
+            .route(&format!("{prefix}/{{*rest}}"), get(shell::<R>));
+    }
+    base.route("/", get(shell::<R>))
         .route("/index.html", get(shell::<R>))
         .route("/assets/{name}", get(shell::<R>))
         .route(core.guard_rules.hello_path(), get(hello::<R>))

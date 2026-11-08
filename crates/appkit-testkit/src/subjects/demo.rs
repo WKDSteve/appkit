@@ -66,6 +66,45 @@ pub struct Demo;
 /// The same hub, whose page may also fetch from one other `https` host (`GuardRules::with_connect_src`).
 pub struct DemoWide;
 
+/// The same hub with a desktop page and an installable page under `/m` (`GuardRules::with_installable_page`).
+pub struct DemoInstallable;
+
+/// The prefix and the worker policy `DemoInstallable` names.
+pub const INSTALLABLE_PREFIX: &str = "/m";
+pub const INSTALLABLE_WORKER_POLICY: &str = "demo-worker";
+
+/// A desktop page at `/` and an installable one at `/m/`, with its worker and manifest.
+struct TwoPages;
+
+impl Pages for TwoPages {
+    fn page(&self, request_path: &str) -> Option<Page> {
+        let (bytes, content_type): (&'static [u8], &'static str) = match request_path {
+            "/" | "/index.html" => (
+                b"<!doctype html><title>desk</title>",
+                "text/html; charset=utf-8",
+            ),
+            "/m/" => (
+                b"<!doctype html><title>phone</title>",
+                "text/html; charset=utf-8",
+            ),
+            "/m/sw.js" => (
+                b"self.addEventListener('fetch', () => {});",
+                "text/javascript; charset=utf-8",
+            ),
+            "/m/manifest.webmanifest" => (b"{}", "application/manifest+json"),
+            _ => return None,
+        };
+        Some(Page {
+            bytes: axum::body::Bytes::from_static(bytes),
+            content_type,
+        })
+    }
+
+    fn has_index(&self) -> bool {
+        true
+    }
+}
+
 /// The host `DemoWide` names.
 pub const WIDE_ORIGIN: &str = "https://api.example.org";
 
@@ -76,6 +115,14 @@ fn rules() -> GuardRules {
 fn start_with(
     cfg: StartConfig,
     guard_rules: GuardRules,
+) -> BoxFuture<'static, std::io::Result<RunningServer>> {
+    start_with_pages(cfg, guard_rules, Arc::new(NoPages))
+}
+
+fn start_with_pages(
+    cfg: StartConfig,
+    guard_rules: GuardRules,
+    ui: Arc<dyn Pages>,
 ) -> BoxFuture<'static, std::io::Result<RunningServer>> {
     Box::pin(async move {
         serve(
@@ -90,7 +137,7 @@ fn start_with(
                 version: "0.0.0",
                 build_id: None,
                 guard_rules,
-                ui: Arc::new(NoPages),
+                ui,
                 runtime: DemoRuntime { status: cfg.status },
                 build: Arc::new(|()| DemoRuntime {
                     status: HubStatus {
@@ -128,6 +175,24 @@ impl Subject for DemoWide {
 
     fn start(&self, cfg: StartConfig) -> BoxFuture<'_, std::io::Result<RunningServer>> {
         start_with(cfg, rules().with_connect_src(WIDE_ORIGIN))
+    }
+
+    fn data_routes(&self) -> Vec<&'static str> {
+        vec!["items", "item", "ops"]
+    }
+}
+
+impl Subject for DemoInstallable {
+    fn identity(&self) -> &'static AppIdentity {
+        &IDENTITY
+    }
+
+    fn start(&self, cfg: StartConfig) -> BoxFuture<'_, std::io::Result<RunningServer>> {
+        start_with_pages(
+            cfg,
+            rules().with_installable_page(INSTALLABLE_PREFIX, INSTALLABLE_WORKER_POLICY),
+            Arc::new(TwoPages),
+        )
     }
 
     fn data_routes(&self) -> Vec<&'static str> {

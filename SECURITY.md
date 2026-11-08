@@ -45,6 +45,17 @@ address, no path, no other scheme (a mistake ends the program). The matrix check
 `connect-src` is `'self'` and at most one such host, and `the_page_may_connect_to` that the named host is the
 one in the header.
 
+An app may have one second page that a browser can install (a PWA for a phone), below a prefix of its own:
+`GuardRules::with_installable_page("/m", "tasks-mobile-worker")` (today: tasks-desktop, for tasks-mobile). `/m/` and
+every path below it are shells: no credential, `GET` only, served by the app's `Pages` by their full path, and a
+path the app does not serve is 404 (never the placeholder page). Their policy is the page's plus
+`manifest-src 'self'` and `worker-src 'self'`, and `trusted-types` allows one more policy, the named one, next to
+Svelte's: registering a service worker is a script-URL sink under `require-trusted-types-for 'script'`, and the page
+uses that policy to turn exactly the worker's address into a script URL. Every other path keeps the policy above,
+word for word. The prefix is one plain part (`/` + lower-case letters, digits, `-`, not `/api`, `/assets`, `/auth`)
+and the name a plain one (not Svelte's, `default` or `none`), checked when the hub is made; a mistake ends the
+program. `the_installable_page_has_its_own_policy_and_nothing_more` holds an app to this.
+
 Routes are classified by their raw path. Everything under `/api/` needs a session unless it is on
 the short list below, so a route an app adds is closed until it is opened on purpose; a path with
 percent escapes or a trailing slash is not the list's path and needs a session too. A path outside
