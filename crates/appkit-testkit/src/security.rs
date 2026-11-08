@@ -1285,6 +1285,8 @@ async fn device_login(h: &Harness, device: &TestDevice, id: &str, sign_origin: &
     .await
 }
 
+/// The status of a data route with this session: 401 when the hub does not take it; anything else when it does (an app
+/// without an engine answers 503, which still means the session got past the guard).
 async fn data_status(h: &Harness, s: &dyn Subject, token: &str) -> u16 {
     let auth = bearer(token);
     get(h, &h.route(s.data_routes()[0]), &[("Authorization", &auth)])
@@ -1304,7 +1306,11 @@ pub async fn a_device_pairs_once_and_then_logs_in_with_its_key(s: &dyn Subject) 
         assert_eq!(r.status, 200, "{r:?}");
         let id = r.json()["device"].as_str().expect("a device id").to_owned();
         let token = r.json()["token"].as_str().expect("a token").to_owned();
-        assert_eq!(data_status(&h, s, &token).await, 200);
+        assert_ne!(
+            data_status(&h, s, &token).await,
+            401,
+            "the session is taken"
+        );
         // The code is spent, also for a second pairing.
         let again = device_pair(&h, &code, "Phone 2", &TestDevice::new(8).public()).await;
         assert_eq!(again.status, 401, "{again:?}");
@@ -1315,7 +1321,11 @@ pub async fn a_device_pairs_once_and_then_logs_in_with_its_key(s: &dyn Subject) 
     let r = device_login(&h, &device, &id, &h.origin()).await;
     assert_eq!(r.status, 200, "{r:?}");
     let token = r.json()["token"].as_str().expect("a token").to_owned();
-    assert_eq!(data_status(&h, s, &token).await, 200);
+    assert_ne!(
+        data_status(&h, s, &token).await,
+        401,
+        "the session is taken"
+    );
     // Signed for another origin: a page elsewhere relaying the challenge gets nothing.
     let r = device_login(&h, &device, &id, "http://127.0.0.1:1").await;
     assert_eq!(r.status, 401, "{r:?}");
