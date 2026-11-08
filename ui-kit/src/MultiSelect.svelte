@@ -21,6 +21,7 @@
     searchLabel,
     hint = '',
     note = '',
+    clearLabel = '',
     match,
   }: {
     label: string;
@@ -33,6 +34,11 @@
     hint?: string;
     /** One line at the top of the open popup, e.g. how the chosen values combine ("any of these"). */
     note?: string;
+    /**
+     * The words of the x that shows on the button while something is chosen and takes the choice away in one click
+     * ("Remove the selection Status", `kit.select.clear`). Left out, it is `resetLabel: label`.
+     */
+    clearLabel?: string;
     /**
      * A switch between "any of the chosen values" and "all of them", for a field a task can hold several values of
      * (tags). Left out, the choice has no switch; the app says in `note` how its values combine.
@@ -74,6 +80,25 @@
     }
     return `${label}: ${selected.length}`;
   });
+
+  // The x that empties the choice: named for a screen reader, never an empty spot while nothing is chosen.
+  const clearName = $derived(clearLabel !== '' ? clearLabel : `${resetLabel}: ${label}`);
+
+  // The x takes this choice away without opening the popup; the focus goes to the button, since the x is gone.
+  function clear(event: Event): void {
+    event.stopPropagation();
+    if (open) close(false);
+    onchange([]);
+    button?.focus();
+  }
+
+  // Delete or Backspace on the closed button take the choice away too, for the keyboard (the x is also a tab stop).
+  function onButtonKey(event: KeyboardEvent): void {
+    if ((event.key === 'Delete' || event.key === 'Backspace') && !open && selected.length > 0) {
+      event.preventDefault();
+      onchange([]);
+    }
+  }
 
   function toggle(value: string): void {
     onchange(selected.includes(value) ? selected.filter((v) => v !== value) : [...selected, value]);
@@ -135,16 +160,31 @@
     type="button"
     class="trigger"
     class:active={selected.length > 0}
+    class:clearable={selected.length > 0}
     aria-haspopup="true"
     aria-expanded={open}
     class:held={open && openWidth > 0}
     style:width={open && openWidth > 0 ? `${openWidth}px` : undefined}
     use:tooltip={open ? '' : hint}
     onclick={() => (open ? close(false) : openPopup())}
+    onkeydown={onButtonKey}
   >
     <span class="summary">{summary}</span>
     <span class="caret" aria-hidden="true">▾</span>
   </button>
+  {#if selected.length > 0}
+    <!-- Beside the button in the DOM (a button holds no button), drawn inside its border. -->
+    <button
+      type="button"
+      class="clear"
+      aria-label={clearName}
+      use:tooltip={clearName}
+      onmousedown={(e) => e.preventDefault()}
+      onclick={clear}
+    >
+      <span aria-hidden="true">×</span>
+    </button>
+  {/if}
   {#if open}
     <!-- The listener steers the focus only (see onPopupMouseDown); the group itself is not interactive. -->
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -221,6 +261,33 @@
   }
   .trigger.active {
     border-color: var(--accent);
+  }
+  /* Room for the x, which sits inside the border on the right (see .clear). */
+  .trigger.clearable {
+    padding-right: 1.9rem;
+  }
+  .clear {
+    position: absolute;
+    top: 50%;
+    right: 0.3rem;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.3rem;
+    height: 1.3rem;
+    padding: 0;
+    border: none;
+    border-radius: var(--radius);
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+    line-height: 1;
+  }
+  .clear:hover,
+  .clear:focus-visible {
+    background: var(--surface);
+    color: var(--text);
   }
   /* A held button cuts its label instead of growing with it (see openWidth). */
   .trigger.held {

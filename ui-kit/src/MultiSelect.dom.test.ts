@@ -103,3 +103,66 @@ describe('the note and the any/all switch', () => {
     expect(changes).toEqual(['all']);
   });
 });
+
+describe('the x of a choice', () => {
+  const clearButton = () => document.querySelector<HTMLButtonElement>('button.clear');
+
+  it('shows no x while nothing is chosen', () => {
+    build();
+    expect(clearButton()).toBeNull();
+    expect(button().classList.contains('clearable')).toBe(false);
+  });
+
+  it('takes the whole choice away in one click, without opening the popup', async () => {
+    const changes: string[][] = [];
+    build({ selected: ['v1', 'v2'], clearLabel: 'Remove the selection Areas', onchange: (n: string[]) => changes.push(n) });
+    const x = clearButton()!;
+    expect(x.getAttribute('aria-label')).toBe('Remove the selection Areas');
+    x.click();
+    await tick();
+    expect(changes).toEqual([[]]);
+    expect(document.querySelector('.popup')).toBeNull();
+    expect(document.activeElement).toBe(button());
+  });
+
+  it('closes an open popup when the x is clicked', async () => {
+    build({ selected: ['v1'] });
+    await openIt();
+    expect(document.querySelector('.popup')).not.toBeNull();
+    clearButton()!.click();
+    await tick();
+    expect(document.querySelector('.popup')).toBeNull();
+  });
+
+  it('is named by the reset words and the label when the app gives no words of its own', () => {
+    build({ selected: ['v1'] });
+    expect(clearButton()!.getAttribute('aria-label')).toBe('Reset: Areas');
+  });
+
+  it('keeps the focus where it is when the x is pressed (no focusout that closes the popup)', () => {
+    build({ selected: ['v1'] });
+    const down = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+    clearButton()!.dispatchEvent(down);
+    expect(down.defaultPrevented).toBe(true);
+  });
+
+  it('takes the choice away with Delete or Backspace on the closed button', () => {
+    const changes: string[][] = [];
+    build({ selected: ['v1'], onchange: (n: string[]) => changes.push(n) });
+    for (const key of ['Delete', 'Backspace']) {
+      const press = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+      button().dispatchEvent(press);
+      expect(press.defaultPrevented).toBe(true);
+    }
+    expect(changes).toEqual([[], []]);
+  });
+
+  it('leaves Delete alone while nothing is chosen', () => {
+    const changes: string[][] = [];
+    build({ onchange: (n: string[]) => changes.push(n) });
+    const press = new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true });
+    button().dispatchEvent(press);
+    expect(press.defaultPrevented).toBe(false);
+    expect(changes).toEqual([]);
+  });
+});
