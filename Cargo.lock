@@ -27,6 +27,7 @@ dependencies = [
  "appkit-core",
  "appkit-scratch",
  "axum",
+ "futures-core",
  "hyper",
  "hyper-util",
  "notify",

@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 appkit-core = { path = "../appkit-core" }
+futures-core = { version = "0.3", default-features = false }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json"] }
 hyper = { version = "1", default-features = false, features = ["http1", "server"] }
 hyper-util = { version = "0.1", default-features = false, features = ["server", "tokio", "service", "http1"] }

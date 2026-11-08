@@ -51,6 +51,7 @@ pub mod browser;
 pub mod client;
 pub mod config;
 pub mod discovery;
+pub mod editor;
 pub mod engine;
 pub mod env;
 pub mod fs_watch;
@@ -67,6 +68,7 @@ pub mod search;
 pub mod setup;
 pub mod shell_link;
 pub mod store;
+pub mod streams;
 pub mod usage;
 pub mod vaults;
 
