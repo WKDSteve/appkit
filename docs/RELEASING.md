@@ -22,8 +22,10 @@ tag (`pnpm-lock.yaml` holds the commit of each kit), and its CI checks that the 
    `ui/package.json` and both lock files). `python tools/bump-apps.py vX.Y.Z` edits all of them in
    `ai-desktop`, `docmap-desktop`, `tasks-desktop`, `rules-desktop`, `testing-desktop` and `hub-desktop` (`--apps a,b` for some,
    `--dry-run` to look first, `--commit` to also commit each app; it never pushes), refreshes the lock
-   files, and runs each app's own pin check. It refuses a tag that is not on origin, and skips an app
-   whose files to edit hold uncommitted work. Then push each app and watch its CI.
+   files, and runs each app's own pin check and, in an app that has one, its lock-age check (`--min-days`,
+   default 7): a crate the refresh pulled in younger than that is named and the app is not done; `--hold-back`
+   puts it back to the version of appkit's own `Cargo.lock` and checks again. It refuses a tag that is not on
+   origin, and skips an app whose files to edit hold uncommitted work. Then push each app and watch its CI.
 
    While working on appkit and an app at the same time, do not bump at all: use a `[patch]` in an
    uncommitted `.cargo/config.toml` of the app (README of appkit). Tag and bump when the change is done.

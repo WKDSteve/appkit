@@ -5,6 +5,7 @@
     python tools/bump-apps.py v0.23.2 --apps ai-desktop     only these (comma separated)
     python tools/bump-apps.py v0.23.2 --dry-run             say what would change, change nothing
     python tools/bump-apps.py v0.23.2 --commit              also commit each app (never pushes)
+    python tools/bump-apps.py v0.23.2 --hold-back           a crate the bump made too young goes back to appkit's version
 
 Why a script: an app pins appkit in several places that must agree (and its own check fails when they do
 not), and doing it by hand is what makes a small appkit fix cost an afternoon.
@@ -19,6 +20,13 @@ The tag must exist in this clone AND on origin, and name the same commit in both
 does not know turns every build red. An app whose files to edit have uncommitted changes of their own is
 skipped (another session's work is never swept into a bump commit). When done, each app's own pin check runs
 (tools/check-appkit-pin.py or tools/check-release-kit-pin.py); the exit code is 1 when one of them fails.
+A full app that has tools/check-lock-age.py runs it after the lock refresh (`--min-days`, default 7, as its CI): a
+`cargo update -p appkit-hub` can pull a dependency of the kit in at a version that is days old, and the app's CI
+would turn red on it. Such a crate is named and the app is not done (nothing committed). With `--hold-back` it is
+put back with `cargo update -p <name>@<version> --precise <v>` to the version appkit's own Cargo.lock holds (which
+passed the same gate here), and the check runs again; a crate appkit does not hold, or holds only at the same
+version, stays a failure. The check asks crates.io; `--no-lock` skips it with the refresh.
+
 For work on appkit and an app at the same time, do not bump: use a `[patch]` in an uncommitted
 .cargo/config.toml (see the CLAUDE.md of tasks-desktop).
 
@@ -53,6 +61,9 @@ PIN_TAG = re.compile(r"^(tag\s*=\s*)v\d+\.\d+\.\d+(?=[ \t]*\r?$)", re.M)
 PIN_COMMIT = re.compile(r"^(commit\s*=\s*)[0-9a-f]{40}(?=[ \t]*\r?$)", re.M)
 CARGO = re.compile(r'(git\s*=\s*"https://github\.com/WKDSteve/appkit",\s*tag\s*=\s*")v\d+\.\d+\.\d+(")')
 # every package of the page the app takes from a folder of appkit: appkit-ui (ui-kit) and appkit-web (web-kit)
+# one line of check-lock-age.py: "  too young: ctutils 0.4.8 (5.9 days)"
+YOUNG = re.compile(r"^\s*too young: (\S+) (\S+) \(", re.M)
+APPKIT = Path(__file__).resolve().parent.parent
 UI = re.compile(r"(github:WKDSteve/appkit#)v\d+\.\d+\.\d+(&path:(?:ui-kit|web-kit))(?=\")")
 
 
@@ -173,6 +184,68 @@ def refresh_locks(app: Path) -> None:
         run([pnpm, "install"], app / "ui", dict(os.environ, NPM_CONFIG_USERCONFIG=str(rc)), secret=token)
 
 
+def young_crates(output: str) -> list[tuple[str, str]]:
+    """(name, version) of every crate check-lock-age.py calls too young."""
+    return YOUNG.findall(output)
+
+
+def registry_versions(lock_text: str, name: str) -> list[str]:
+    """The versions of a crate from a registry in a Cargo.lock, read the way check-lock-age.py reads them."""
+    found = []
+    for block in lock_text.split("[[package]]")[1:]:
+        n = re.search(r'^name = "([^"]+)"', block, re.M)
+        v = re.search(r'^version = "([^"]+)"', block, re.M)
+        if n and v and n.group(1) == name and re.search(r'^source = "registry\+', block, re.M):
+            found.append(v.group(1))
+    return found
+
+
+def hold_back_version(appkit_lock: str, name: str, young: str) -> str | None:
+    """The version to go back to: the one appkit's lock holds, when it holds exactly one other than the young one."""
+    versions = [v for v in registry_versions(appkit_lock, name) if v != young]
+    return versions[0] if len(versions) == 1 else None
+
+
+def check_lock_age(app: Path, min_days: int) -> list[tuple[str, str]] | None:
+    """The crates of the app's lock that are too young, by the app's own check; None when the app has no such check.
+    Raises when the check itself fails (crates.io not reachable: exit 2)."""
+    script = Path("tools") / "check-lock-age.py"
+    if not (app / script).is_file():
+        return None
+    cmd = [sys.executable, str(script), "--min-days", str(min_days)]
+    print(f"    $ {' '.join(cmd)}   (in {app.name})")
+    res = subprocess.run(cmd, cwd=app, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    young = young_crates(res.stdout)
+    if res.returncode == 0 and not young:
+        return []
+    if res.returncode == 1 and young:
+        return young
+    output = (res.stdout + res.stderr).strip()
+    raise RuntimeError("the lock-age check failed:\n      " + "\n      ".join(output.splitlines()[-12:]))
+
+
+def settle_lock_age(app: Path, min_days: int, hold_back: bool, appkit_lock: Path) -> None:
+    """Raise when the bump left a crate in the lock that is younger than the app's CI takes; with hold_back, first
+    put each such crate back to the version of appkit's lock, then check again."""
+    young = check_lock_age(app, min_days)
+    if not young:
+        return
+    if hold_back:
+        lock = read_exact(appkit_lock) if appkit_lock.is_file() else ""
+        for name, version in young:
+            target = hold_back_version(lock, name, version)
+            if target is None:
+                continue
+            run(["cargo", "update", "-p", f"{name}@{version}", "--precise", target], app)
+            print(f"   held back: {name} {version} -> {target} (the version of appkit's Cargo.lock)")
+        young = check_lock_age(app, min_days) or []
+        if not young:
+            return
+    names = ", ".join(f"{n} {v}" for n, v in young)
+    hint = "" if hold_back else " (--hold-back puts them back to the version of appkit's Cargo.lock)"
+    raise RuntimeError(f"younger than {min_days} days in Cargo.lock: {names}{hint}")
+
+
 def bump_app(name: str, repos: Path, tag: str, sha: str, args: argparse.Namespace) -> bool:
     mode = APPS[name]
     app = repos / name
@@ -205,6 +278,9 @@ def bump_app(name: str, repos: Path, tag: str, sha: str, args: argparse.Namespac
             refresh_locks(app)
         check = "check-appkit-pin.py" if mode == "full" else "check-release-kit-pin.py"
         run([sys.executable, str(Path("tools") / check)], app)
+        if mode == "full" and not args.no_lock:
+            settle_lock_age(app, getattr(args, "min_days", 7), getattr(args, "hold_back", False),
+                            Path(getattr(args, "appkit_lock", APPKIT / "Cargo.lock")))
     except RuntimeError as err:
         print(f"   FAILED: {err}\n   (files are edited, not committed: git -C {app} diff / git checkout -- . to undo)")
         return False
@@ -226,6 +302,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--commit", action="store_true", help="commit each app that was bumped (never pushes)")
     parser.add_argument("--no-lock", action="store_true", help="edit the files only: no cargo update / pnpm install")
+    parser.add_argument("--min-days", type=int, default=7, help="the minimum age of a crate, as the apps' CI (default 7)")
+    parser.add_argument("--hold-back", action="store_true",
+                        help="put a crate the bump made too young back to the version of appkit's Cargo.lock")
     parser.add_argument("--repos-dir", help="folder with the clones (default: the parent of this clone)")
     args = parser.parse_args(argv)
 
@@ -237,7 +316,8 @@ def main(argv: list[str] | None = None) -> int:
     if unknown:
         print(f"error: unknown app(s): {', '.join(unknown)} (known: {', '.join(APPS)})", file=sys.stderr)
         return 2
-    appkit = Path(__file__).resolve().parent.parent
+    appkit = APPKIT
+    args.appkit_lock = appkit / "Cargo.lock"
     repos = Path(args.repos_dir) if args.repos_dir else appkit.parent
     try:
         sha = resolve_tag(appkit, args.tag)

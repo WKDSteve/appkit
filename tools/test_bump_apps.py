@@ -249,6 +249,112 @@ class BumpAppTest(unittest.TestCase):
             self.assertTrue(bump.bump_app("ai-desktop", self.tmp, "v0.23.2", NEW_SHA, self.args))
 
 
+LOCK = (
+    'version = 4\n\n'
+    '[[package]]\nname = "ctutils"\nversion = "0.4.6"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n\n'
+    '[[package]]\nname = "appkit-hub"\nversion = "0.0.0"\nsource = "git+https://github.com/WKDSteve/appkit?tag=v0.42.0#0bbb"\n\n'
+    '[[package]]\nname = "serde"\nversion = "1.0.1"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n\n'
+    '[[package]]\nname = "serde"\nversion = "1.0.2"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n'
+)
+# A stand-in for an app's tools/check-lock-age.py: prints what the next answer in answers.txt says, exits with its code.
+FAKE_CHECK = (
+    "import sys\nfrom pathlib import Path\n"
+    "f = Path(__file__).with_name('answers.txt')\n"
+    "lines = f.read_text().split('\\n---\\n')\n"
+    "code, _, out = lines[0].partition('\\n')\n"
+    "f.write_text('\\n---\\n'.join(lines[1:]) if len(lines) > 1 else lines[0])\n"
+    "print(out)\nsys.exit(int(code))\n"
+)
+YOUNG_OUT = "1\n111 registry crates checked, minimum age 7 days\n  too young: ctutils 0.4.8 (5.9 days)"
+CLEAN_OUT = "0\n111 registry crates checked, minimum age 7 days"
+
+
+def give_check(app: Path, *answers: str) -> None:
+    """Put the stand-in check into the app, answering one run after the other."""
+    (app / "tools" / "check-lock-age.py").write_text(FAKE_CHECK, encoding="utf-8")
+    (app / "tools" / "answers.txt").write_text("\n---\n".join(answers), encoding="utf-8")
+
+
+class LockAgeTest(unittest.TestCase):
+    """The bump runs the app's own lock-age check: a crate that came in too young is named, and can be held back."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.app = make_app(self.tmp, "rules-desktop", full=True)
+        self.lock = self.tmp / "appkit.lock"
+        self.lock.write_text(LOCK, encoding="utf-8")
+
+    def test_the_lines_of_the_check_are_read(self) -> None:
+        out = "3 checked\n  too young: ctutils 0.4.8 (5.9 days)\n  too young: hybrid-array 0.4.1 (0.5 days)\n"
+        self.assertEqual(bump.young_crates(out), [("ctutils", "0.4.8"), ("hybrid-array", "0.4.1")])
+        self.assertEqual(bump.young_crates("3 checked, minimum age 7 days\n"), [])
+
+    def test_the_version_to_go_back_to_is_the_one_of_appkit(self) -> None:
+        self.assertEqual(bump.hold_back_version(LOCK, "ctutils", "0.4.8"), "0.4.6")
+        # appkit does not have it, has it only at the young version, or at two others: no guess
+        self.assertIsNone(bump.hold_back_version(LOCK, "hybrid-array", "0.4.1"))
+        self.assertIsNone(bump.hold_back_version(LOCK, "ctutils", "0.4.6"))
+        self.assertIsNone(bump.hold_back_version(LOCK, "serde", "1.0.3"))
+        # a crate from git is not one of the registry
+        self.assertEqual(bump.registry_versions(LOCK, "appkit-hub"), [])
+
+    def test_an_app_without_the_check_is_not_checked(self) -> None:
+        self.assertIsNone(bump.check_lock_age(self.app, 7))
+
+    def test_the_check_of_the_app_runs_and_its_answer_is_read(self) -> None:
+        give_check(self.app, YOUNG_OUT, CLEAN_OUT)
+        self.assertEqual(bump.check_lock_age(self.app, 7), [("ctutils", "0.4.8")])
+        self.assertEqual(bump.check_lock_age(self.app, 7), [])
+
+    def test_a_check_that_cannot_ask_crates_io_is_an_error_not_a_pass(self) -> None:
+        give_check(self.app, "2\ncannot check ctutils 0.4.8: timed out")
+        with self.assertRaisesRegex(RuntimeError, "timed out"):
+            bump.check_lock_age(self.app, 7)
+
+    def test_a_young_crate_fails_and_says_how_to_hold_it_back(self) -> None:
+        give_check(self.app, YOUNG_OUT)
+        with mock.patch.object(bump, "run") as run:
+            with self.assertRaisesRegex(RuntimeError, r"ctutils 0\.4\.8.*--hold-back"):
+                bump.settle_lock_age(self.app, 7, False, self.lock)
+        run.assert_not_called()
+
+    def test_hold_back_puts_the_crate_to_the_version_of_appkit_and_checks_again(self) -> None:
+        give_check(self.app, YOUNG_OUT, CLEAN_OUT)
+        with mock.patch.object(bump, "run") as run:
+            bump.settle_lock_age(self.app, 7, True, self.lock)
+        run.assert_called_once_with(["cargo", "update", "-p", "ctutils@0.4.8", "--precise", "0.4.6"], self.app)
+
+    def test_hold_back_without_a_version_of_appkit_still_fails(self) -> None:
+        give_check(self.app, YOUNG_OUT, YOUNG_OUT)
+        self.lock.write_text("version = 4\n", encoding="utf-8")
+        with mock.patch.object(bump, "run") as run:
+            with self.assertRaisesRegex(RuntimeError, "ctutils 0.4.8"):
+                bump.settle_lock_age(self.app, 7, True, self.lock)
+        run.assert_not_called()
+
+    def test_a_bump_that_leaves_a_young_crate_is_not_done_and_commits_nothing(self) -> None:
+        give_check(self.app, YOUNG_OUT)
+        for cmd in (["init", "-q"], ["add", "."], ["commit", "-q", "-m", "start"]):
+            subprocess.run(["git", "-C", str(self.app), "-c", "user.name=t", "-c", "user.email=t@t", *cmd],
+                           check=True, capture_output=True)
+        args = type("Args", (), {"dry_run": False, "commit": True, "no_lock": False, "hold_back": False,
+                                 "min_days": 7, "appkit_lock": self.lock})()
+        with mock.patch.object(bump, "run"), mock.patch.object(bump, "refresh_locks"):
+            self.assertFalse(bump.bump_app("rules-desktop", self.tmp, "v0.23.2", NEW_SHA, args))
+        log = subprocess.run(["git", "-C", str(self.app), "log", "--oneline"], capture_output=True, text=True).stdout
+        self.assertEqual(len(log.splitlines()), 1, "nothing was committed")
+
+    def test_no_lock_skips_the_check_with_the_refresh(self) -> None:
+        give_check(self.app, "2\nmust not run")
+        for cmd in (["init", "-q"], ["add", "."], ["commit", "-q", "-m", "start"]):
+            subprocess.run(["git", "-C", str(self.app), "-c", "user.name=t", "-c", "user.email=t@t", *cmd],
+                           check=True, capture_output=True)
+        args = type("Args", (), {"dry_run": False, "commit": False, "no_lock": True})()
+        with mock.patch.object(bump, "run"):
+            self.assertTrue(bump.bump_app("rules-desktop", self.tmp, "v0.23.2", NEW_SHA, args))
+
+
 class TagTest(unittest.TestCase):
     def test_only_vxyz_is_a_tag(self) -> None:
         for good in ("v0.23.2", "v1.0.0"):
