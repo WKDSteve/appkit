@@ -70,8 +70,8 @@
     display: inline-flex;
     align-items: center;
   }
-  /* Room for the x before the arrow of the browser. */
-  select.clearable {
+  /* Room for the x before the arrow of the browser; worded to win over a padding the page gives its selects. */
+  .clear-select > select.clearable {
     padding-right: 2.6rem;
   }
   .clear {
