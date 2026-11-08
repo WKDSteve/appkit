@@ -37,3 +37,48 @@ async fn an_installable_page_has_its_own_policy_and_nothing_more() {
     )
     .await;
 }
+
+mod demo_devices {
+    appkit_testkit::security_matrix!(appkit_testkit::subjects::DemoDevices::new());
+}
+
+#[tokio::test]
+async fn a_device_pairs_once_and_then_logs_in_with_its_key() {
+    appkit_testkit::security::a_device_pairs_once_and_then_logs_in_with_its_key(
+        &appkit_testkit::subjects::DemoDevices::new(),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn device_pairing_checks_before_it_spends_the_code() {
+    appkit_testkit::security::device_pairing_checks_before_it_spends_the_code(
+        &appkit_testkit::subjects::DemoDevices::new(),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn the_pc_revokes_a_device_and_its_sessions_end() {
+    appkit_testkit::security::the_pc_revokes_a_device_and_its_sessions_end(
+        &appkit_testkit::subjects::DemoDevices::new(),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn another_app_may_open_the_installable_page_and_nothing_else() {
+    appkit_testkit::security::another_app_may_open_the_installable_page_and_nothing_else(
+        &appkit_testkit::subjects::DemoDevices::new(),
+        appkit_testkit::subjects::INSTALLABLE_PREFIX,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn without_devices_there_are_no_device_routes() {
+    appkit_testkit::security::without_devices_there_are_no_device_routes(
+        &appkit_testkit::subjects::Demo,
+    )
+    .await;
+}

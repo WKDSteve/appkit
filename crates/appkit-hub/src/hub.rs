@@ -71,6 +71,8 @@ pub struct Core<R: Runtime> {
     /// One change of vault at a time, from the choice to the swap: two that overlap would leave the hub reading one
     /// vault while the settings name the other.
     pub switching: tokio::sync::Mutex<()>,
+    /// The paired devices, when the app keeps them (`GuardRules::with_devices`).
+    pub devices: Option<crate::devices::DeviceStore>,
 }
 
 impl<R: Runtime> Core<R> {
@@ -195,6 +197,14 @@ where
     let addr = listener.local_addr()?;
     let instance = parts.instance.to_hex();
     let limits = parts.limits.clone();
+    // A list of devices that cannot be read stops the start: the hub does not forget whom it trusts.
+    let devices = match parts.guard_rules.devices_file() {
+        Some(path) => Some(crate::devices::DeviceStore::open(
+            path,
+            Arc::clone(&parts.clock),
+        )?),
+        None => None,
+    };
     let core = Arc::new(Core {
         policy: HostPolicy::loopback(addr.port()),
         pairing: PairingStore::new(Arc::clone(&parts.clock), parts.pairing_ttl),
@@ -218,6 +228,7 @@ where
         build: parts.build,
         vaults: parts.vaults,
         switching: tokio::sync::Mutex::new(()),
+        devices,
     });
 
     let app = router(&core, routes(&core));
@@ -272,11 +283,45 @@ fn router<R: Runtime>(core: &Arc<Core<R>>, app: Router<Arc<Core<R>>>) -> Router 
             "/api/control/pair",
             post(control_pair::<R>).layer(DefaultBodyLimit::max(small)),
         )
+        .merge(device_routes(core))
         .merge(app)
         .fallback(not_found)
         .layer(DefaultBodyLimit::max(core.limits.max_body_bytes))
         .layer(middleware::from_fn_with_state(Arc::clone(core), guard::<R>))
         .with_state(Arc::clone(core))
+}
+
+/// The routes of device keys, when the app keeps devices.
+fn device_routes<R: Runtime>(core: &Arc<Core<R>>) -> Router<Arc<Core<R>>> {
+    use crate::guard::{
+        CONTROL_DEVICES_PATH, CONTROL_REVOKE_PATH, DEVICE_CHALLENGE_PATH, DEVICE_PAIR_PATH,
+        DEVICE_SESSION_PATH,
+    };
+    if core.devices.is_none() {
+        return Router::new();
+    }
+    let small = core.limits.small_body_bytes;
+    Router::new()
+        .route(
+            DEVICE_PAIR_PATH,
+            post(device_pair::<R>).layer(DefaultBodyLimit::max(small)),
+        )
+        .route(
+            DEVICE_CHALLENGE_PATH,
+            post(device_challenge::<R>).layer(DefaultBodyLimit::max(small)),
+        )
+        .route(
+            DEVICE_SESSION_PATH,
+            post(device_session::<R>).layer(DefaultBodyLimit::max(small)),
+        )
+        .route(
+            CONTROL_DEVICES_PATH,
+            post(control_devices::<R>).layer(DefaultBodyLimit::max(small)),
+        )
+        .route(
+            CONTROL_REVOKE_PATH,
+            post(control_revoke::<R>).layer(DefaultBodyLimit::max(small)),
+        )
 }
 
 async fn not_found() -> Response {
@@ -448,6 +493,7 @@ mod tests {
             build: Arc::new(OtherRuntime::new),
             vaults: Some(Arc::new(TwoVaults)),
             switching: tokio::sync::Mutex::new(()),
+            devices: None,
         })
     }
 

@@ -182,6 +182,55 @@ impl Subject for DemoWide {
     }
 }
 
+/// The hub with an installable page and paired devices (`GuardRules::with_devices`), its list of devices in a folder of
+/// its own that is removed when the value is dropped.
+pub struct DemoDevices {
+    dir: appkit_scratch::Scratch,
+}
+
+impl DemoDevices {
+    /// A new folder for the list of devices (a scratch folder, removed when the value is dropped, also after a
+    /// failed test).
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            dir: appkit_scratch::Scratch::new("testkit-devices"),
+        }
+    }
+
+    /// The file the hub keeps its devices in.
+    #[must_use]
+    pub fn file(&self) -> std::path::PathBuf {
+        self.dir.join("devices.json")
+    }
+}
+
+impl Default for DemoDevices {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Subject for DemoDevices {
+    fn identity(&self) -> &'static AppIdentity {
+        &IDENTITY
+    }
+
+    fn start(&self, cfg: StartConfig) -> BoxFuture<'_, std::io::Result<RunningServer>> {
+        start_with_pages(
+            cfg,
+            rules()
+                .with_installable_page(INSTALLABLE_PREFIX, INSTALLABLE_WORKER_POLICY)
+                .with_devices(self.file()),
+            Arc::new(TwoPages),
+        )
+    }
+
+    fn data_routes(&self) -> Vec<&'static str> {
+        vec!["items", "item", "ops"]
+    }
+}
+
 impl Subject for DemoInstallable {
     fn identity(&self) -> &'static AppIdentity {
         &IDENTITY

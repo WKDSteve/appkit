@@ -56,6 +56,13 @@ word for word. The prefix is one plain part (`/` + lower-case letters, digits, `
 and the name a plain one (not Svelte's, `default` or `none`), checked when the hub is made; a mistake ends the
 program. `the_installable_page_has_its_own_policy_and_nothing_more` holds an app to this.
 
+The installable page is opened by other apps too: a share target, a link in a mail, a launcher. The browser then sends
+`Sec-Fetch-Site: cross-site`, which step 3 refuses everywhere else. Below the installable prefix, and only for the page
+itself (`GET`, `Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`), that is let through: the page is static and
+needs no credential, and what it loads and asks afterwards comes from this origin and passes step 3 as usual. A fetch,
+a script or a route of data from elsewhere is still refused, and so is the desktop page
+(`another_app_may_open_the_installable_page_and_nothing_else`).
+
 Routes are classified by their raw path. Everything under `/api/` needs a session unless it is on
 the short list below, so a route an app adds is closed until it is opened on purpose; a path with
 percent escapes or a trailing slash is not the list's path and needs a session too. A path outside
@@ -68,7 +75,8 @@ percent escapes or a trailing slash is not the list's path and needs a session t
 | none | | the page, `GET /api/<ns>/hello` (name, version, instance id, whether the engine is ready, a short problem code; no data, no path) |
 | pairing code | 128 bits, one use, 60 s by default | `POST /auth/exchange` for a session token |
 | session token | 256 bits, in the memory of the hub only, a limited number open | the routes of the app |
-| control secret | 256 bits, in `control.secret` | `POST /api/control/pair`: mint a pairing code. Nothing else. |
+| device key | ECDSA P-256, made by the page with WebCrypto, non-extractable; the hub keeps the public key in `devices.json` | `POST /auth/device/session`: a session for a signed challenge (only an app that calls `with_devices`) |
+| control secret | 256 bits, in `control.secret` | `POST /api/control/pair`: mint a pairing code; `/api/control/devices` and `/api/control/devices/revoke`: list and revoke devices. Nothing else. |
 
 Comparisons are constant time and look at every stored entry. Secrets come from the operating
 system's random source and never print themselves. The answer for an unknown, a spent and an
@@ -86,6 +94,31 @@ expired code is the same.
 
 A pairing code is never handed out by an open endpoint. The only way to get one is to be a program
 that can read `control.secret`.
+
+### A device that keeps its pairing
+
+A session lives in the memory of the hub and of one page, so a phone that closes the app, or a hub that restarts, would
+need a new pairing code each time. An app that calls `GuardRules::with_devices(<settings>/devices.json)` lets a device
+pair once instead (`appkit-hub/src/devices.rs`, `appkit-ui/device`):
+
+1. Pairing: the page makes an ECDSA P-256 key pair that WebCrypto keeps non-extractable (a script of the page can sign
+   with it, nobody can read or copy it) and sends `POST /auth/device/pair` with the one-time code, a name and the public
+   key. The name and the key are checked before the code is spent. The hub writes the device (a random id, the name,
+   the public key, when it was paired and last used) to `devices.json` (to a file beside it first, then in place) and
+   answers with the id and a first session. The page keeps the id and the key pair in IndexedDB of its origin.
+2. Every start: `POST /auth/device/challenge` with the id gives 32 random bytes, good once for 60 s and for that
+   device; every id gets one, so the answer does not tell which devices exist. The page signs
+   `appkit-device-login/1`, the origin, the id and the challenge, and `POST /auth/device/session` checks the signature
+   against the kept key. The origin is the request's, which step 3 has checked: a signature made for a page elsewhere
+   opens nothing here. An unknown device, a wrong signature and a spent or old challenge get the same answer.
+3. The PC lists and revokes devices with the control secret (`/api/control/devices`, `/api/control/devices/revoke`); a
+   revoked device is gone from the file and its open sessions end at once. A session, the phone's own included, cannot
+   list or revoke.
+
+All three device routes are classified like `/auth/exchange`: no session, an Origin required, the same limit of
+attempts. `devices.json` holds public keys, names and times, no secret; a file that cannot be read stops the start, so
+the hub never half forgets whom it trusts. At most 16 devices. The sessions a device opens are tagged with its id, so
+that an app can later give each device its own rights.
 
 ### A new tab of the page
 

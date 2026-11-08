@@ -15,6 +15,7 @@
     "./cache": "./src/cache.ts",
     "./client": "./src/client.ts",
     "./conflicts": "./src/conflicts.ts",
+    "./device": "./src/device.ts",
     "./contextmenu": "./src/contextmenu.ts",
     "./docs": "./src/docs.ts",
     "./floating": "./src/floating.ts",

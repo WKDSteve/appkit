@@ -50,6 +50,7 @@ pub mod background;
 pub mod browser;
 pub mod client;
 pub mod config;
+pub mod devices;
 pub mod discovery;
 pub mod editor;
 pub mod engine;

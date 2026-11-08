@@ -25,13 +25,14 @@ path = "src/bin/launch-probe.rs"
 [dependencies]
 appkit-core = { path = "../appkit-core" }
 appkit-hub = { path = "../appkit-hub" }
+# The folder of the device list of `DemoDevices`, removed also when a test fails.
+appkit-scratch = { path = "../appkit-scratch" }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json"] }
 serde_json = "1"
+# Signs the challenges of the device tests the way a page does with WebCrypto (ECDSA P-256).
+p256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "time", "net", "io-util"] }
 
 # Only the launch probe and its tests look at handles and consoles (src/bin/launch-probe.rs).
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Console"] }
-
-[dev-dependencies]
-appkit-scratch = { path = "../appkit-scratch" }

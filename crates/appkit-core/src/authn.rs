@@ -295,7 +295,8 @@ impl PairingStore {
 /// restart ends every session.
 pub struct SessionStore {
     max: usize,
-    sessions: Mutex<VecDeque<Secret>>,
+    /// Each session with the device it was opened for (`None`: a browser on this machine, paired by code).
+    sessions: Mutex<VecDeque<(Secret, Option<String>)>>,
 }
 
 impl SessionStore {
@@ -313,13 +314,45 @@ impl SessionStore {
     ///
     /// [`RandomError`] when the system has no random source.
     pub fn create(&self) -> Result<Secret, RandomError> {
+        self.open(None)
+    }
+
+    /// Open a session for a paired device (its id), so that revoking the device closes it.
+    ///
+    /// # Errors
+    ///
+    /// [`RandomError`] when the system has no random source.
+    pub fn create_for_device(&self, device: &str) -> Result<Secret, RandomError> {
+        self.open(Some(device.to_owned()))
+    }
+
+    fn open(&self, device: Option<String>) -> Result<Secret, RandomError> {
         let token = Secret::generate(TOKEN_BYTES)?;
         let mut sessions = lock(&self.sessions);
         while sessions.len() >= self.max {
             sessions.pop_front();
         }
-        sessions.push_back(token.clone());
+        sessions.push_back((token.clone(), device));
         Ok(token)
+    }
+
+    /// Close every session of a device (it was revoked).
+    pub fn close_device(&self, device: &str) {
+        lock(&self.sessions).retain(|(_, d)| d.as_deref() != Some(device));
+    }
+
+    /// The device a session was opened for; `None` for a session of a code, or for no session.
+    #[must_use]
+    pub fn device_of(&self, text: &str) -> Option<String> {
+        let given = Secret::from_hex(text, TOKEN_BYTES)?;
+        let sessions = lock(&self.sessions);
+        let mut found = None;
+        for (token, device) in sessions.iter() {
+            if token.matches(&given) {
+                found.clone_from(device);
+            }
+        }
+        found
     }
 
     /// Is this the token of an open session?
@@ -330,7 +363,7 @@ impl SessionStore {
         };
         let sessions = lock(&self.sessions);
         let mut ok = false;
-        for token in sessions.iter() {
+        for (token, _) in sessions.iter() {
             ok |= token.matches(&given);
         }
         ok
@@ -511,6 +544,21 @@ mod tests {
         store.clear();
         assert!(!store.check(&b));
         assert!(!store.check("nonsense"));
+    }
+
+    #[test]
+    fn closing_a_device_closes_its_sessions_and_no_other() {
+        let store = SessionStore::new(8);
+        let code = store.create().unwrap().to_hex();
+        let phone = store.create_for_device("p1").unwrap().to_hex();
+        let phone_again = store.create_for_device("p1").unwrap().to_hex();
+        let tablet = store.create_for_device("t1").unwrap().to_hex();
+        assert_eq!(store.device_of(&phone).as_deref(), Some("p1"));
+        assert_eq!(store.device_of(&code), None);
+        assert_eq!(store.device_of("nonsense"), None);
+        store.close_device("p1");
+        assert!(!store.check(&phone) && !store.check(&phone_again));
+        assert!(store.check(&code) && store.check(&tablet));
     }
 
     #[test]

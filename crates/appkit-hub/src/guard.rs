@@ -37,7 +37,17 @@ pub struct GuardRules {
     upload_paths: Vec<String>,
     /// A second page of the app that can be installed (a PWA for a phone), below its own path prefix.
     installable: Option<Installable>,
+    /// Where the hub keeps its paired devices (`devices.json` in the settings); none: no device keys, only codes.
+    devices: Option<std::path::PathBuf>,
 }
+
+/// The routes of device keys (`with_devices`): pair with a code and a public key, ask a challenge, open a session.
+pub const DEVICE_PAIR_PATH: &str = "/auth/device/pair";
+pub const DEVICE_CHALLENGE_PATH: &str = "/auth/device/challenge";
+pub const DEVICE_SESSION_PATH: &str = "/auth/device/session";
+/// The routes of the PC for its devices, with the control secret: the list, and revoking one.
+pub const CONTROL_DEVICES_PATH: &str = "/api/control/devices";
+pub const CONTROL_REVOKE_PATH: &str = "/api/control/devices/revoke";
 
 /// A page below `prefix` (`/m`) that a browser can install: it is a shell like `/`, and its policy also lets the
 /// page name its manifest and its service worker, and make one more Trusted Types policy (`worker_policy`), the one
@@ -76,8 +86,10 @@ fn plain_policy_name(name: &str) -> bool {
 }
 
 /// The routes of the core itself: an app cannot name one of them as its own.
-const CORE_PATHS: [&str; 7] = [
+const CORE_PATHS: [&str; 9] = [
     "/api/control/pair",
+    CONTROL_DEVICES_PATH,
+    CONTROL_REVOKE_PATH,
     "/api/vaults",
     "/api/vaults/add",
     "/api/vaults/remove",
@@ -172,7 +184,24 @@ impl GuardRules {
             upload_paths: Vec::new(),
             connect_src: None,
             installable: None,
+            devices: None,
         }
+    }
+
+    /// Let devices pair once with a key of their own (`src/devices.rs`) and keep them in `path` (a file in the
+    /// settings of the app, `devices.json`). Adds the routes `/auth/device/pair`, `/auth/device/challenge` and
+    /// `/auth/device/session` (no session needed, like `/auth/exchange`, and counted by its limit) and, for the PC with
+    /// the control secret, `/api/control/devices` and `/api/control/devices/revoke`.
+    #[must_use]
+    pub fn with_devices(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.devices = Some(path.into());
+        self
+    }
+
+    /// The file of the devices, if the app keeps them.
+    #[must_use]
+    pub fn devices_file(&self) -> Option<&std::path::Path> {
+        self.devices.as_deref()
     }
 
     /// Serve a second page that can be installed (a PWA) below `prefix` (`/m`): `/m/` and every file below it are
@@ -310,10 +339,33 @@ pub fn classify(path: &str, rules: &GuardRules) -> Class {
         p if rules.is_installable(p) => Class::Shell,
         p if p == rules.hello_path => Class::Hello,
         "/auth/exchange" => Class::Exchange,
-        "/api/control/pair" => Class::ControlPair,
+        DEVICE_PAIR_PATH | DEVICE_CHALLENGE_PATH | DEVICE_SESSION_PATH
+            if rules.devices.is_some() =>
+        {
+            Class::Exchange
+        }
+        "/api/control/pair" | CONTROL_DEVICES_PATH | CONTROL_REVOKE_PATH => Class::ControlPair,
         p if p.starts_with("/api/") => Class::Api,
         _ => Class::Other,
     }
+}
+
+/// Another app opens the installable page: a share target, a link in a mail, a launcher. The browser says
+/// `Sec-Fetch-Site: cross-site` then. Only that, only as the page itself (`GET`, a navigation to a document) and only
+/// below the installable prefix, gets past the rule of `Sec-Fetch-Site`: the page is static and needs no credential,
+/// what it loads afterwards comes from this origin, and every route of data keeps the rule. The desktop page is not
+/// opened this way.
+fn navigation_into_installable_page(
+    rules: &GuardRules,
+    parts: &axum::http::request::Parts,
+    fetch_site: Option<&str>,
+) -> bool {
+    let header = |name: &str| parts.headers.get(name).and_then(|v| v.to_str().ok());
+    matches!(fetch_site, Some("cross-site" | "same-site"))
+        && parts.method == Method::GET
+        && rules.is_installable(parts.uri.path())
+        && header("sec-fetch-mode") == Some("navigate")
+        && header("sec-fetch-dest") == Some("document")
 }
 
 pub fn method_allowed(class: Class, method: &Method) -> bool {
@@ -458,7 +510,9 @@ pub async fn judge<R: Runtime>(st: &Core<R>, class: Class, req: Request, next: N
             );
         }
     };
-    if !fetch_site_ok(fetch_site.as_deref()) {
+    if !fetch_site_ok(fetch_site.as_deref())
+        && !navigation_into_installable_page(&st.guard_rules, &parts, fetch_site.as_deref())
+    {
         return error_body(
             StatusCode::FORBIDDEN,
             "bad_fetch_site",

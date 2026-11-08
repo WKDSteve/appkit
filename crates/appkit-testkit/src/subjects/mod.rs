@@ -3,6 +3,6 @@
 mod demo;
 
 pub use self::demo::{
-    Demo, DemoInstallable, DemoWide, IDENTITY as DEMO_IDENTITY, INSTALLABLE_PREFIX,
+    Demo, DemoDevices, DemoInstallable, DemoWide, IDENTITY as DEMO_IDENTITY, INSTALLABLE_PREFIX,
     INSTALLABLE_WORKER_POLICY, WIDE_ORIGIN,
 };

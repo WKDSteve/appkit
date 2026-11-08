@@ -104,3 +104,215 @@ pub async fn control_pair<R: Runtime>(State(st): State<Arc<Core<R>>>) -> Respons
         ),
     }
 }
+
+// ── device keys ─────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct DevicePairRequest {
+    pub code: String,
+    pub name: String,
+    /// The public key, SEC1 uncompressed P-256, lower-case hex.
+    pub key: String,
+}
+
+#[derive(Deserialize)]
+pub struct DeviceChallengeRequest {
+    pub device: String,
+}
+
+#[derive(Deserialize)]
+pub struct DeviceSessionRequest {
+    pub device: String,
+    pub challenge: String,
+    /// P1363 (r and s), lower-case hex, as WebCrypto signs.
+    pub signature: String,
+}
+
+#[derive(Deserialize)]
+pub struct DeviceRevokeRequest {
+    pub device: String,
+}
+
+fn no_devices() -> Response {
+    error_body(StatusCode::NOT_FOUND, "not_found", "no such route")
+}
+
+fn session_answer(
+    made: Result<Secret, appkit_core::authn::RandomError>,
+    device: Option<&str>,
+) -> Response {
+    match made {
+        Ok(token) => match device {
+            Some(id) => {
+                axum::Json(json!({ "device": id, "token": token.to_hex() })).into_response()
+            }
+            None => axum::Json(json!({ "token": token.to_hex() })).into_response(),
+        },
+        Err(_) => error_body(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            "no session could be made",
+        ),
+    }
+}
+
+/// Pair a device with a one-time code and its public key; the answer is its id and a first session.
+pub async fn device_pair<R: Runtime>(State(st): State<Arc<Core<R>>>, body: Bytes) -> Response {
+    let Some(devices) = &st.devices else {
+        return no_devices();
+    };
+    if !st.exchange_limit.allow() {
+        return error_body(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "too many attempts",
+        );
+    }
+    let Ok(request) = serde_json::from_slice::<DevicePairRequest>(&body) else {
+        return error_body(StatusCode::BAD_REQUEST, "bad_body", "invalid request body");
+    };
+    // The key and the name are checked before the code is spent: a mistake of the page does not cost the code.
+    if crate::devices::check_pairing(&request.name, &request.key).is_err() {
+        return error_body(
+            StatusCode::BAD_REQUEST,
+            "bad_device",
+            "the name or the key is not valid",
+        );
+    }
+    if !st.pairing.redeem(&request.code) {
+        return error_body(
+            StatusCode::UNAUTHORIZED,
+            "bad_code",
+            "the code is not valid",
+        );
+    }
+    match devices.pair(&request.name, &request.key) {
+        Ok(id) => session_answer(st.sessions.create_for_device(&id), Some(&id)),
+        Err(crate::devices::PairError::Full) => error_body(
+            StatusCode::CONFLICT,
+            "devices_full",
+            "the list of devices is full: revoke one on the PC",
+        ),
+        Err(crate::devices::PairError::Known) => error_body(
+            StatusCode::CONFLICT,
+            "device_known",
+            "this key is paired already",
+        ),
+        Err(crate::devices::PairError::BadName | crate::devices::PairError::BadKey) => error_body(
+            StatusCode::BAD_REQUEST,
+            "bad_device",
+            "the name or the key is not valid",
+        ),
+        Err(crate::devices::PairError::Io | crate::devices::PairError::Random) => error_body(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            "the device could not be kept",
+        ),
+    }
+}
+
+/// A challenge for a device to sign. Every id gets one: the answer does not tell which devices exist.
+pub async fn device_challenge<R: Runtime>(State(st): State<Arc<Core<R>>>, body: Bytes) -> Response {
+    let Some(devices) = &st.devices else {
+        return no_devices();
+    };
+    if !st.exchange_limit.allow() {
+        return error_body(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "too many attempts",
+        );
+    }
+    let Ok(request) = serde_json::from_slice::<DeviceChallengeRequest>(&body) else {
+        return error_body(StatusCode::BAD_REQUEST, "bad_body", "invalid request body");
+    };
+    match devices.challenge(&request.device) {
+        Ok(challenge) => axum::Json(json!({ "challenge": challenge })).into_response(),
+        Err(_) => error_body(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            "no challenge could be made",
+        ),
+    }
+}
+
+/// A session for a device that signed its challenge, for the origin the request comes from (the guard has
+/// checked it is this hub's).
+pub async fn device_session<R: Runtime>(
+    State(st): State<Arc<Core<R>>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Some(devices) = &st.devices else {
+        return no_devices();
+    };
+    if !st.exchange_limit.allow() {
+        return error_body(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "too many attempts",
+        );
+    }
+    let Ok(request) = serde_json::from_slice::<DeviceSessionRequest>(&body) else {
+        return error_body(StatusCode::BAD_REQUEST, "bad_body", "invalid request body");
+    };
+    // The guard requires an Origin on this route and has checked it; it is signed with the challenge, so a
+    // signature made for another origin opens nothing here.
+    let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) else {
+        return error_body(
+            StatusCode::FORBIDDEN,
+            "origin_required",
+            "an Origin is required",
+        );
+    };
+    // The same answer for an unknown device, a wrong signature and a spent or old challenge.
+    if !devices.login(
+        &request.device,
+        &request.challenge,
+        &request.signature,
+        origin,
+    ) {
+        return error_body(
+            StatusCode::UNAUTHORIZED,
+            "bad_signature",
+            "the device could not be verified",
+        );
+    }
+    session_answer(
+        st.sessions.create_for_device(&request.device),
+        Some(&request.device),
+    )
+}
+
+/// The paired devices, for the PC (control secret).
+pub async fn control_devices<R: Runtime>(State(st): State<Arc<Core<R>>>) -> Response {
+    let Some(devices) = &st.devices else {
+        return no_devices();
+    };
+    axum::Json(json!({ "devices": devices.list() })).into_response()
+}
+
+/// Revoke a device, for the PC (control secret): it is forgotten and its sessions are closed.
+pub async fn control_revoke<R: Runtime>(State(st): State<Arc<Core<R>>>, body: Bytes) -> Response {
+    let Some(devices) = &st.devices else {
+        return no_devices();
+    };
+    let Ok(request) = serde_json::from_slice::<DeviceRevokeRequest>(&body) else {
+        return error_body(StatusCode::BAD_REQUEST, "bad_body", "invalid request body");
+    };
+    match devices.revoke(&request.device) {
+        Ok(found) => {
+            // Closed also when the file could not be written below: a revoke that half failed still ends the sessions.
+            st.sessions.close_device(&request.device);
+            axum::Json(json!({ "revoked": found })).into_response()
+        }
+        Err(_) => {
+            st.sessions.close_device(&request.device);
+            error_body(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+                "the list of devices could not be written; the device's sessions are closed",
+            )
+        }
+    }
+}

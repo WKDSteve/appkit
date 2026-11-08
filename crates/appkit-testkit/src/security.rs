@@ -1211,3 +1211,267 @@ macro_rules! security_matrix {
         )*
     };
 }
+
+// ── device keys (`GuardRules::with_devices`) ────────────────────────────────
+
+/// A device as a page makes it: a P-256 key pair; the public half as SEC1 uncompressed hex.
+struct TestDevice {
+    key: p256::ecdsa::SigningKey,
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+impl TestDevice {
+    fn new(seed: u8) -> Self {
+        Self {
+            key: p256::ecdsa::SigningKey::from_slice(&[seed; 32]).expect("a key"),
+        }
+    }
+
+    fn public(&self) -> String {
+        hex(self.key.verifying_key().to_sec1_point(false).as_bytes())
+    }
+
+    fn sign(&self, origin: &str, device: &str, challenge: &str) -> String {
+        use p256::ecdsa::signature::Signer;
+        let message = appkit_hub::devices::login_message(origin, device, challenge);
+        let sig: p256::ecdsa::Signature = self.key.sign(message.as_bytes());
+        hex(&sig.to_bytes())
+    }
+}
+
+async fn device_pair(h: &Harness, code: &str, name: &str, key: &str) -> Reply {
+    let origin = h.origin();
+    let body = serde_json::json!({ "code": code, "name": name, "key": key }).to_string();
+    post(
+        h,
+        appkit_hub::guard::DEVICE_PAIR_PATH,
+        &[("Origin", &origin)],
+        &body,
+    )
+    .await
+}
+
+/// A challenge and a signed session for `device`, signed for `sign_origin`, sent with the hub's origin.
+async fn device_login(h: &Harness, device: &TestDevice, id: &str, sign_origin: &str) -> Reply {
+    let origin = h.origin();
+    let body = serde_json::json!({ "device": id }).to_string();
+    let r = post(
+        h,
+        appkit_hub::guard::DEVICE_CHALLENGE_PATH,
+        &[("Origin", &origin)],
+        &body,
+    )
+    .await;
+    assert_eq!(r.status, 200, "{r:?}");
+    let challenge = r.json()["challenge"]
+        .as_str()
+        .expect("a challenge")
+        .to_owned();
+    let body = serde_json::json!({
+        "device": id,
+        "challenge": challenge,
+        "signature": device.sign(sign_origin, id, &challenge),
+    })
+    .to_string();
+    post(
+        h,
+        appkit_hub::guard::DEVICE_SESSION_PATH,
+        &[("Origin", &origin)],
+        &body,
+    )
+    .await
+}
+
+async fn data_status(h: &Harness, s: &dyn Subject, token: &str) -> u16 {
+    let auth = bearer(token);
+    get(h, &h.route(s.data_routes()[0]), &[("Authorization", &auth)])
+        .await
+        .status
+}
+
+/// An app that keeps devices: a device pairs with a one-time code and its public key and gets a session; later it opens
+/// sessions with a signed challenge, as often as it starts, without a code; the pairing outlives a restart of the hub
+/// (the list is a file); a signature for another origin or another key opens nothing.
+pub async fn a_device_pairs_once_and_then_logs_in_with_its_key(s: &dyn Subject) {
+    let device = TestDevice::new(7);
+    let id = {
+        let h = Harness::new(s).await;
+        let code = mint_code(&h).await;
+        let r = device_pair(&h, &code, "Phone", &device.public()).await;
+        assert_eq!(r.status, 200, "{r:?}");
+        let id = r.json()["device"].as_str().expect("a device id").to_owned();
+        let token = r.json()["token"].as_str().expect("a token").to_owned();
+        assert_eq!(data_status(&h, s, &token).await, 200);
+        // The code is spent, also for a second pairing.
+        let again = device_pair(&h, &code, "Phone 2", &TestDevice::new(8).public()).await;
+        assert_eq!(again.status, 401, "{again:?}");
+        id
+    };
+    // Another run of the hub: its sessions are gone, the device is not.
+    let h = Harness::new(s).await;
+    let r = device_login(&h, &device, &id, &h.origin()).await;
+    assert_eq!(r.status, 200, "{r:?}");
+    let token = r.json()["token"].as_str().expect("a token").to_owned();
+    assert_eq!(data_status(&h, s, &token).await, 200);
+    // Signed for another origin: a page elsewhere relaying the challenge gets nothing.
+    let r = device_login(&h, &device, &id, "http://127.0.0.1:1").await;
+    assert_eq!(r.status, 401, "{r:?}");
+    // Another key under this id.
+    let r = device_login(&h, &TestDevice::new(9), &id, &h.origin()).await;
+    assert_eq!(r.status, 401, "{r:?}");
+    assert!(!r.body.contains("challenge"), "{}", r.body);
+}
+
+/// A bad name or key is refused before the code is spent; a pairing route without an Origin (a program) or with a
+/// foreign one is refused like `/auth/exchange`.
+pub async fn device_pairing_checks_before_it_spends_the_code(s: &dyn Subject) {
+    let h = Harness::new(s).await;
+    let code = mint_code(&h).await;
+    let good = TestDevice::new(7).public();
+    let bidi = format!("a{}b", char::from_u32(0x202E).expect("a char"));
+    for (name, key) in [
+        ("", good.as_str()),
+        ("Phone", "04"),
+        (bidi.as_str(), good.as_str()),
+    ] {
+        let r = device_pair(&h, &code, name, key).await;
+        assert_eq!(r.status, 400, "{name:?} {key}: {r:?}");
+    }
+    let body = serde_json::json!({ "code": code, "name": "Phone", "key": good }).to_string();
+    let r = post(&h, appkit_hub::guard::DEVICE_PAIR_PATH, &[], &body).await;
+    assert_eq!(r.status, 403, "no Origin: {r:?}");
+    let r = post(
+        &h,
+        appkit_hub::guard::DEVICE_PAIR_PATH,
+        &[("Origin", "http://evil.example")],
+        &body,
+    )
+    .await;
+    assert_eq!(r.status, 403, "foreign Origin: {r:?}");
+    // The code still works.
+    let r = device_pair(&h, &code, "Phone", &good).await;
+    assert_eq!(r.status, 200, "{r:?}");
+}
+
+/// The PC lists and revokes devices with the control secret, never with a session; a revoked device's sessions end
+/// at once and it cannot log in again.
+pub async fn the_pc_revokes_a_device_and_its_sessions_end(s: &dyn Subject) {
+    let h = Harness::new(s).await;
+    let device = TestDevice::new(7);
+    let code = mint_code(&h).await;
+    let r = device_pair(&h, &code, "Phone", &device.public()).await;
+    let id = r.json()["device"].as_str().expect("a device id").to_owned();
+    let token = r.json()["token"].as_str().expect("a token").to_owned();
+    let control = bearer(&h.control);
+    let session = bearer(&token);
+    let revoke_body = serde_json::json!({ "device": id }).to_string();
+    // A session (the phone's own) cannot list or revoke.
+    for path in [
+        appkit_hub::guard::CONTROL_DEVICES_PATH,
+        appkit_hub::guard::CONTROL_REVOKE_PATH,
+    ] {
+        let r = post(&h, path, &[("Authorization", &session)], &revoke_body).await;
+        assert_eq!(r.status, 401, "{path}: {r:?}");
+    }
+    let r = post(
+        &h,
+        appkit_hub::guard::CONTROL_DEVICES_PATH,
+        &[("Authorization", &control)],
+        "{}",
+    )
+    .await;
+    assert_eq!(r.status, 200, "{r:?}");
+    let list = r.json();
+    assert_eq!(list["devices"][0]["id"], id.as_str());
+    assert_eq!(list["devices"][0]["name"], "Phone");
+    assert!(
+        !r.body.contains(&device.public()),
+        "the list shows no key: {}",
+        r.body
+    );
+    let r = post(
+        &h,
+        appkit_hub::guard::CONTROL_REVOKE_PATH,
+        &[("Authorization", &control)],
+        &revoke_body,
+    )
+    .await;
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(r.json()["revoked"], true);
+    assert_eq!(
+        data_status(&h, s, &token).await,
+        401,
+        "the session of the revoked device ends"
+    );
+    let r = device_login(&h, &device, &id, &h.origin()).await;
+    assert_eq!(r.status, 401, "{r:?}");
+}
+
+/// Another app (a share target, a link) opens the installable page: the browser sends `Sec-Fetch-Site: cross-site`
+/// with a navigation to a document. That opens the page below `prefix` and nothing else: not the desktop page, not a
+/// fetch, not a script, not a route of data.
+pub async fn another_app_may_open_the_installable_page_and_nothing_else(
+    s: &dyn Subject,
+    prefix: &str,
+) {
+    let h = Harness::new(s).await;
+    let nav = [
+        ("Sec-Fetch-Site", "cross-site"),
+        ("Sec-Fetch-Mode", "navigate"),
+        ("Sec-Fetch-Dest", "document"),
+    ];
+    let page = format!("{prefix}/");
+    let r = get(&h, &format!("{page}?share_title=x"), &nav).await;
+    assert_eq!(r.status, 200, "{r:?}");
+    let r = get(&h, "/", &nav).await;
+    assert_eq!(r.status, 403, "the desktop page: {r:?}");
+    let fetch = [
+        ("Sec-Fetch-Site", "cross-site"),
+        ("Sec-Fetch-Mode", "cors"),
+        ("Sec-Fetch-Dest", "empty"),
+    ];
+    let r = get(&h, &page, &fetch).await;
+    assert_eq!(r.status, 403, "a fetch from elsewhere: {r:?}");
+    let script = [
+        ("Sec-Fetch-Site", "cross-site"),
+        ("Sec-Fetch-Mode", "no-cors"),
+        ("Sec-Fetch-Dest", "script"),
+    ];
+    let r = get(&h, &format!("{prefix}/sw.js"), &script).await;
+    assert_eq!(r.status, 403, "a script from elsewhere: {r:?}");
+    let token = session(&h).await;
+    let auth = bearer(&token);
+    let mut with_session = nav.to_vec();
+    with_session.push(("Authorization", &auth));
+    let r = get(&h, &h.route(s.data_routes()[0]), &with_session).await;
+    assert_eq!(
+        r.status, 403,
+        "a route of data, even as a navigation: {r:?}"
+    );
+}
+
+/// An app that keeps no devices has none of their routes.
+pub async fn without_devices_there_are_no_device_routes(s: &dyn Subject) {
+    let h = Harness::new(s).await;
+    let origin = h.origin();
+    for path in [
+        appkit_hub::guard::DEVICE_PAIR_PATH,
+        appkit_hub::guard::DEVICE_CHALLENGE_PATH,
+        appkit_hub::guard::DEVICE_SESSION_PATH,
+    ] {
+        let r = post(&h, path, &[("Origin", &origin)], "{}").await;
+        assert_eq!(r.status, 404, "{path}: {r:?}");
+    }
+    let control = bearer(&h.control);
+    let r = post(
+        &h,
+        appkit_hub::guard::CONTROL_DEVICES_PATH,
+        &[("Authorization", &control)],
+        "{}",
+    )
+    .await;
+    assert_eq!(r.status, 404, "{r:?}");
+}
