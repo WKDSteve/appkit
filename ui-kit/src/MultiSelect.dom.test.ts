@@ -107,6 +107,14 @@ describe('the note and the any/all switch', () => {
 describe('the x of a choice', () => {
   const clearButton = () => document.querySelector<HTMLButtonElement>('button.clear');
 
+  it('shares one box with the button, so it is placed against the button and not against the whole choice', () => {
+    build({ selected: ['v1'] });
+    const anchor = clearButton()!.parentElement!;
+    expect(anchor.classList.contains('anchor')).toBe(true);
+    expect(anchor.contains(button())).toBe(true);
+    expect(anchor.parentElement!.classList.contains('multi')).toBe(true);
+  });
+
   it('shows no x while nothing is chosen', () => {
     build();
     expect(clearButton()).toBeNull();

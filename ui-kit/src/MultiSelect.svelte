@@ -155,6 +155,9 @@
   }}
   role="presentation"
 >
+  <!-- The button and its x share one box: the x is placed against the button, not against the choice, which a grid or
+       a column stretches to its full width. -->
+  <span class="anchor">
   <button
     bind:this={button}
     type="button"
@@ -185,6 +188,7 @@
       <span aria-hidden="true">×</span>
     </button>
   {/if}
+  </span>
   {#if open}
     <!-- The listener steers the focus only (see onPopupMouseDown); the group itself is not interactive. -->
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -247,6 +251,11 @@
 <style>
   .multi {
     position: relative;
+  }
+  .anchor {
+    position: relative;
+    display: inline-flex;
+    max-width: 100%;
   }
   .trigger {
     display: inline-flex;
