@@ -119,6 +119,20 @@ pointer moves to another element with a hint, the popup of the one it left goes 
 To work on the kit and an app at once, point the app at the checkout (`pnpm add link:../path/to/appkit/ui-kit`) and
 put the tag back before committing.
 
+## Apps that rebuild kit behaviour by hand
+
+Two apps cannot take this package: docmap-desktop (plain JavaScript, no bundler) and the dashboard of ai-desktop (HTML
+served by a C++ program). They rebuild some of its behaviour in their own code. When the kit changes one of these, look
+at the copy too, or the apps drift apart:
+
+| Behaviour of the kit | Rebuilt in |
+|---|---|
+| An x in a choice (`MultiSelect` `clearLabel`, `ClearSelect`): one click, or Delete/Backspace, takes the choice away | ai-desktop `dashboard/index.html` (`#usage-provider-clear`) |
+| A click beside an open dialog closes it, as Escape does (`cancel`, then `close`) | docmap-desktop `src/lib/backdrop.js` |
+
+The design tokens are not rebuilt: docmap-desktop loads a pinned copy of `tokens.css` (`appkit-tokens.css`, checked by
+its `tools/check-appkit-tokens.py`).
+
 ## Checks
 
 ```
