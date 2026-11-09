@@ -19,8 +19,9 @@ tag (`pnpm-lock.yaml` holds the commit of each kit), and its CI checks that the 
    it: the change names the apps and their tasks.
 6. **Move the apps with one command.** An app pins the tag in several places that must agree (the
    `uses:` lines of its workflows, `tools/release-kit.pin`, and for the hub apps `Cargo.toml`,
-   `ui/package.json` and both lock files). `python tools/bump-apps.py vX.Y.Z` edits all of them in
-   `ai-desktop`, `docmap-desktop`, `tasks-desktop`, `rules-desktop`, `testing-desktop` and `hub-desktop` (`--apps a,b` for some,
+   `ui/package.json` and both lock files; for pult, which has no page, `Cargo.toml` and `Cargo.lock`).
+   `python tools/bump-apps.py vX.Y.Z` edits all of them in `ai-desktop`, `docmap-desktop`, `tasks-desktop`,
+   `rules-desktop`, `testing-desktop`, `hub-desktop` and `pult` (`--apps a,b` for some,
    `--dry-run` to look first, `--commit` to also commit each app; it never pushes), refreshes the lock
    files, and runs each app's own pin check and, in an app that has one, its lock-age check (`--min-days`,
    default 7): a crate the refresh pulled in younger than that is named and the app is not done; `--hold-back`

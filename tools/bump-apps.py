@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Move the apps that use appkit to one tag of appkit, in one command.
 
-    python tools/bump-apps.py v0.23.2                       all six apps, files edited, lock files refreshed, pins checked
+    python tools/bump-apps.py v0.23.2                       all seven apps, files edited, lock files refreshed, pins checked
     python tools/bump-apps.py v0.23.2 --apps ai-desktop     only these (comma separated)
     python tools/bump-apps.py v0.23.2 --dry-run             say what would change, change nothing
     python tools/bump-apps.py v0.23.2 --commit              also commit each app (never pushes)
@@ -15,6 +15,8 @@ not), and doing it by hand is what makes a small appkit fix cost an afternoon.
   full (tasks-desktop, rules-desktop, testing-desktop, hub-desktop)
                                           the same, and the tag in Cargo.toml and ui/package.json (appkit-ui and appkit-web); then
                                           `cargo update -p appkit-hub` and `pnpm install` rewrite the lock files
+  cargo (pult)                            the workflows and the tag in Cargo.toml, no page and no release-kit.pin;
+                                          `cargo update -p appkit-hub` rewrites Cargo.lock
 
 The tag must exist in this clone AND on origin, and name the same commit in both: a pin to a commit that GitHub
 does not know turns every build red. An app whose files to edit have uncommitted changes of their own is
@@ -52,6 +54,7 @@ APPS = {
     "rules-desktop": "full",
     "testing-desktop": "full",
     "hub-desktop": "full",
+    "pult": "cargo",
 }
 
 TAG = re.compile(r"^v\d+\.\d+\.\d+$")
@@ -115,8 +118,9 @@ def plan(app: Path, mode: str, tag: str, sha: str) -> tuple[dict[Path, str], lis
     if not any(USES.search(read_exact(wf)) for wf in workflows):
         problems.append(f"{app}: no workflow takes an action of the release-kit")
     apply(app / "tools" / "release-kit.pin", bump_pin, required=(mode == "kit"))
-    if mode == "full":
+    if mode in ("full", "cargo"):
         apply(app / "Cargo.toml", bump_cargo, required=True)
+    if mode == "full":
         apply(app / "ui" / "package.json", bump_package_json, required=True)
     return changes, problems
 
@@ -168,10 +172,13 @@ def run(cmd: list[str], cwd: Path, env: dict[str, str] | None = None, secret: st
         raise RuntimeError("failed:\n      " + "\n      ".join(output.splitlines()[-12:]))
 
 
-def refresh_locks(app: Path) -> None:
-    """Cargo.lock and the pnpm lock follow the new tag. pnpm reads the private appkit from codeload.github.com:
-    the token of the `gh` login goes into a file of this run only (never into the user's ~/.npmrc)."""
+def refresh_locks(app: Path, page: bool = True) -> None:
+    """Cargo.lock and the pnpm lock follow the new tag; an app without a page (`page=False`) has only Cargo.lock.
+    pnpm reads the private appkit from codeload.github.com: the token of the `gh` login goes into a file of this run
+    only (never into the user's ~/.npmrc)."""
     run(["cargo", "update", "-p", "appkit-hub"], app)
+    if not page:
+        return
     token = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True).stdout.strip()
     if not token:
         raise RuntimeError("gh has no login (gh auth login): pnpm cannot read the private appkit")
@@ -261,8 +268,10 @@ def bump_app(name: str, repos: Path, tag: str, sha: str, args: argparse.Namespac
         print(f"   already at {tag}")
         return True
     targets = list(changes)
+    if mode in ("full", "cargo"):
+        targets.append(app / "Cargo.lock")
     if mode == "full":
-        targets += [app / "Cargo.lock", app / "ui" / "pnpm-lock.yaml"]
+        targets.append(app / "ui" / "pnpm-lock.yaml")
     dirty = dirty_files(app, [p for p in targets if p.exists()])
     if dirty:
         print("   skipped: uncommitted changes in files this bump edits (not mine to sweep in):\n     " + "\n     ".join(dirty))
@@ -274,11 +283,12 @@ def bump_app(name: str, repos: Path, tag: str, sha: str, args: argparse.Namespac
     for path, text in changes.items():
         path.write_text(text, encoding="utf-8", newline="")
     try:
-        if mode == "full" and not args.no_lock:
-            refresh_locks(app)
-        check = "check-appkit-pin.py" if mode == "full" else "check-release-kit-pin.py"
+        crates = mode in ("full", "cargo")
+        if crates and not args.no_lock:
+            refresh_locks(app, page=(mode == "full"))
+        check = "check-appkit-pin.py" if crates else "check-release-kit-pin.py"
         run([sys.executable, str(Path("tools") / check)], app)
-        if mode == "full" and not args.no_lock:
+        if crates and not args.no_lock:
             settle_lock_age(app, getattr(args, "min_days", 7), getattr(args, "hold_back", False),
                             Path(getattr(args, "appkit_lock", APPKIT / "Cargo.lock")))
     except RuntimeError as err:
@@ -298,7 +308,7 @@ def bump_app(name: str, repos: Path, tag: str, sha: str, args: argparse.Namespac
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Move the apps to one tag of appkit.")
     parser.add_argument("tag", help="vX.Y.Z, already pushed to origin")
-    parser.add_argument("--apps", default=",".join(APPS), help="comma separated (default: all five)")
+    parser.add_argument("--apps", default=",".join(APPS), help="comma separated (default: all of them)")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--commit", action="store_true", help="commit each app that was bumped (never pushes)")
     parser.add_argument("--no-lock", action="store_true", help="edit the files only: no cargo update / pnpm install")

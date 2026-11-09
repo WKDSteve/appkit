@@ -52,6 +52,17 @@ def make_app(root: Path, name: str, full: bool) -> Path:
     return app
 
 
+def make_cargo_app(root: Path, name: str) -> Path:
+    """An app like pult: workflows with the release-kit and the crates in Cargo.toml, no page, no release-kit.pin."""
+    app = root / name
+    (app / ".github" / "workflows").mkdir(parents=True)
+    (app / "tools").mkdir()
+    (app / ".github" / "workflows" / "rolling.yml").write_text(WORKFLOW, encoding="utf-8", newline="")
+    (app / "Cargo.toml").write_text(CARGO, encoding="utf-8", newline="")
+    (app / "Cargo.lock").write_text("version = 4\n", encoding="utf-8", newline="")
+    return app
+
+
 class BumpTextTest(unittest.TestCase):
     def test_workflow_moves_only_the_release_kit_lines(self) -> None:
         new, n = bump.bump_workflow(WORKFLOW, "v0.23.2", NEW_SHA)
@@ -104,6 +115,15 @@ class PlanTest(unittest.TestCase):
         changes, problems = bump.plan(app, "full", "v0.23.2", NEW_SHA)
         self.assertEqual(problems, [])
         self.assertEqual({p.name for p in changes}, {"rolling.yml", "release-kit.pin", "Cargo.toml", "package.json"})
+
+    def test_a_cargo_app_edits_workflows_and_cargo_only(self) -> None:
+        app = make_cargo_app(self.tmp, "pult")
+        changes, problems = bump.plan(app, "cargo", "v0.23.2", NEW_SHA)
+        self.assertEqual(problems, [])
+        self.assertEqual(set(changes), {app / ".github" / "workflows" / "rolling.yml", app / "Cargo.toml"})
+
+    def test_pult_is_a_cargo_app(self) -> None:
+        self.assertEqual(bump.APPS["pult"], "cargo")
 
     def test_a_place_without_a_pin_is_a_problem_not_a_silent_skip(self) -> None:
         app = make_app(self.tmp, "tasks-desktop", full=True)
@@ -173,9 +193,33 @@ class BumpAppTest(unittest.TestCase):
         app = self.repo("tasks-desktop", full=True)
         with mock.patch.object(bump, "run") as run, mock.patch.object(bump, "refresh_locks") as refresh:
             self.assertTrue(bump.bump_app("tasks-desktop", self.tmp, "v0.23.2", NEW_SHA, self.args))
-        refresh.assert_called_once_with(app)
+        refresh.assert_called_once_with(app, page=True)
         self.assertEqual(run.call_args.args[0][-1], str(Path("tools") / "check-appkit-pin.py"))
         self.assertIn('tag = "v0.23.2"', (app / "Cargo.toml").read_text())
+
+    def test_a_cargo_app_refreshes_cargo_lock_only_runs_its_check_and_commits_the_lock(self) -> None:
+        app = make_cargo_app(self.tmp, "pult")
+        self.git(app, "init", "-q")
+        self.git(app, "add", ".")
+        self.git(app, "commit", "-q", "-m", "start")
+        self.args.commit = True
+
+        def refresh(target: Path, page: bool = True) -> None:
+            (target / "Cargo.lock").write_text("version = 4\n# refreshed\n", encoding="utf-8")
+
+        with mock.patch.object(bump, "run") as run, mock.patch.object(bump, "refresh_locks", side_effect=refresh) as fake:
+            self.assertTrue(bump.bump_app("pult", self.tmp, "v0.23.2", NEW_SHA, self.args))
+        fake.assert_called_once_with(app, page=False)
+        self.assertEqual(run.call_args.args[0][-1], str(Path("tools") / "check-appkit-pin.py"))
+        self.assertIn('tag = "v0.23.2"', (app / "Cargo.toml").read_text())
+        self.assertEqual(self.git(app, "status", "--porcelain").strip(), "", "the lock is in the commit")
+
+    def test_the_refresh_of_an_app_without_a_page_runs_no_pnpm(self) -> None:
+        with mock.patch.object(bump, "run") as run, mock.patch.object(bump.shutil, "which") as which:
+            bump.refresh_locks(self.tmp, page=False)
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0], ["cargo", "update", "-p", "appkit-hub"])
+        which.assert_not_called()
 
     def test_a_failing_lock_refresh_is_a_failure_and_leaves_the_edits_uncommitted(self) -> None:
         app = self.repo("tasks-desktop", full=True)
