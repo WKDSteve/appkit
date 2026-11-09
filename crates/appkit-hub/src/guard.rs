@@ -636,10 +636,11 @@ fn page_policy(connect_src: Option<&str>, worker_policy: Option<&str>) -> Header
     // Nothing is allowed that the page does not name. Scripts and styles come from this origin only (no
     // inline), and a sink that takes a string as HTML or script (`innerHTML`, `eval`) is refused unless the
     // one policy of the page made it: Svelte's own, which wraps nothing a task's text could reach (the body
-    // is drawn as elements).
+    // is drawn as elements). An image is of this origin, or a `blob:` the page made itself from an answer it read with
+    // its session (an image route needs one, which an `<img src>` does not send); a `data:` image is not allowed.
     let policy = format!(
         "default-src 'none'; script-src 'self'; style-src 'self'; \
-         img-src 'self'; connect-src {connect};{install} base-uri 'none'; \
+         img-src 'self' blob:; connect-src {connect};{install} base-uri 'none'; \
          object-src 'none'; frame-ancestors 'none'; form-action 'none'; \
          require-trusted-types-for 'script'; trusted-types {trusted}"
     );
@@ -838,6 +839,20 @@ mod tests {
             .with_installable_page("/m", "w")
             .with_installable_page("/n", "v"))
         .is_err());
+    }
+
+    #[test]
+    fn an_image_is_of_this_origin_or_a_blob_of_the_page_and_never_data() {
+        let policy = super::shell_policy(None);
+        let img = policy
+            .to_str()
+            .unwrap()
+            .split(';')
+            .map(str::trim)
+            .find_map(|d| d.strip_prefix("img-src "))
+            .unwrap()
+            .to_owned();
+        assert_eq!(img, "'self' blob:");
     }
 
     #[test]
