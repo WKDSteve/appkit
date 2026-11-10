@@ -233,7 +233,8 @@ if [ -z "$FILE" ]; then
     say "downloading $NAME ($CHANNEL)"
     fetch_release_file "$REPO" "$CHANNEL" "$NAME" "$WORK/$NAME" || fail "cannot download $BASE/$NAME (a private repository needs GH_TOKEN)"
     if ! fetch_release_file "$REPO" "$CHANNEL" "SHA256SUMS" "$WORK/SHA256SUMS"; then
-        [ "$CHANNEL" = "latest" ] && fail "SHA256SUMS of the rolling build is missing (a build is running: try again in a few minutes)"
+        # It cannot be told from here whether a build is being published or the last one stopped half way.
+        [ "$CHANNEL" = "latest" ] && fail "SHA256SUMS of the rolling build is missing: either a build is being published right now (try again in a few minutes), or its last publish failed and the next green build of the app brings them back"
         fail "cannot download $BASE/SHA256SUMS"
     fi
     FILE="$WORK/$NAME"

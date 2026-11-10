@@ -544,7 +544,8 @@ class InstallShTest(unittest.TestCase):
         (self.tmp / "fixtures" / "SHA256SUMS").unlink()
         res = self.download(self.stamped(rolling_asset="demo-hub-linux-x86_64.tar.gz"))
         self.assertNotEqual(res.returncode, 0)
-        self.assertIn("a build is running", res.stderr)
+        self.assertIn("is missing: either a build is being published right now", res.stderr)
+        self.assertIn("or its last publish failed", res.stderr)
         self.assertFalse(self.out.exists())
 
     def test_appimage_is_copied_and_made_executable(self) -> None:
@@ -867,6 +868,15 @@ printf '%s\n' "gh $*" >> "$GH_LOG"
 if [ "$1" = "api" ] && [ -n "${GH_FAIL_PATCH:-}" ]; then
   echo "refusing to allow a GitHub App to create or update workflow" >&2; exit 1
 fi
+# The first GH_FAIL_UPLOADS uploads fail with GH_FAIL_MESSAGE (default: what GitHub said on 2026-11-06).
+if [ "$1 $2" = "release upload" ] && [ -n "${GH_FAIL_UPLOADS:-}" ]; then
+  n="$(cat "$GH_LOG.fails" 2>/dev/null || echo 0)"
+  if [ "$n" -lt "$GH_FAIL_UPLOADS" ]; then
+    echo "$((n + 1))" > "$GH_LOG.fails"
+    echo "${GH_FAIL_MESSAGE:-HTTP 504: Gateway Timeout (https://uploads.github.com/repos/Owner/demo/releases/1/assets)}" >&2
+    exit 1
+  fi
+fi
 case "$1 $2" in
   "release create") : > "$GH_LOG.created" ;;
   "release view")
@@ -969,6 +979,7 @@ class PublishTest(unittest.TestCase):
             UNIX_RELEASE_ASSET="demo-hub-{version}-{triple}.tar.gz",
             UNIX_ROLLING_ASSET="demo-hub-linux-x86_64.tar.gz",
             PYTHON=sys.executable.replace("\\", "/"),
+            GH_WAIT="0",
         )
         full.update(env)
         if WINDOWS:
@@ -1000,6 +1011,53 @@ class PublishTest(unittest.TestCase):
         self.assertIn("install.sh", calls[upload])
         self.assertIn("SHA256SUMS", res.stdout + "".join(calls))
         self.assertIn("install.ps1", res.stdout)
+
+    def uploads(self) -> list[str]:
+        return [c for c in self.calls() if c.startswith("gh release upload")]
+
+    def test_a_passing_error_of_github_is_tried_again(self) -> None:
+        # Two 504s: the first upload of the files is made three times, then everything goes on as usual.
+        res = self.publish(GH_FAIL_UPLOADS="2")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        uploads = self.uploads()
+        self.assertEqual(len(uploads), 4, uploads)
+        self.assertTrue(all("demo-hub-windows-x86_64.exe" in c for c in uploads[:3]), uploads)
+        self.assertIn("SHA256SUMS", uploads[3])
+        self.assertIn("attempt 1 of 4", res.stderr)
+        self.assertNotIn("attempt", res.stdout, "the note goes to stderr, never into an output that is read")
+
+    def test_the_upload_of_the_checksums_is_tried_again_too(self) -> None:
+        # The case of 2026-11-06: the files are up, the 504 hits SHA256SUMS.
+        log = self.log.as_posix()
+        Path(log + ".fails").write_text("0")
+        gh = self.bin / "gh"
+        gh.write_text(
+            FAKE_GH.replace('"$1 $2" = "release upload" ]', '"$1 $2 $3 $4" = "release upload latest SHA256SUMS" ]'),
+            encoding="utf-8",
+            newline="\n",
+        )
+        res = self.publish(GH_FAIL_UPLOADS="3")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        sums = [c for c in self.uploads() if c.startswith("gh release upload latest SHA256SUMS")]
+        self.assertEqual(len(sums), 4, sums)
+        self.assertTrue(any("git/refs/tags/latest" in c for c in self.calls()), "and then the tag moves")
+
+    def test_a_passing_error_that_stays_fails_after_the_last_try(self) -> None:
+        res = self.publish(GH_FAIL_UPLOADS="99", GH_TRIES="3")
+        self.assertNotEqual(res.returncode, 0)
+        self.assertEqual(len(self.uploads()), 3)
+        self.assertFalse(any("git/refs/tags/latest" in c for c in self.calls()), "the tag stays where it was")
+
+    def test_an_error_that_will_not_pass_is_not_tried_again(self) -> None:
+        res = self.publish(GH_FAIL_UPLOADS="1", GH_FAIL_MESSAGE="HTTP 422: Validation Failed (already_exists)")
+        self.assertNotEqual(res.returncode, 0)
+        self.assertEqual(len(self.uploads()), 1)
+        self.assertIn("HTTP 422", res.stderr)
+
+    def test_a_release_draft_is_tried_again_as_well(self) -> None:
+        res = self.publish(TAG="v1.2.3", SHA="", VERSION="", GH_FAIL_UPLOADS="1")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(len(self.uploads()), 2)
 
     def test_the_first_rolling_build_makes_the_pre_release(self) -> None:
         res = self.publish(GH_NO_RELEASE="1")

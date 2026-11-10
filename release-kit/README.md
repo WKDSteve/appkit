@@ -35,6 +35,12 @@ the downloads go by the name of the release, not by the commit of its tag, and t
 the commit of its files. A repository with **immutable releases** turned on cannot have a rolling
 build: its files could never be replaced.
 
+An upload (and reading the asset list, and editing the page) that GitHub answers with a passing error -- an HTTP
+5xx, a timeout, a dropped connection -- is made again, up to four times with a growing wait (`GH_TRIES`, `GH_WAIT` in
+seconds; every such call is safe to repeat). Any other failure ends the run at once. If the checksums still cannot be
+put up, the rolling build is left without `SHA256SUMS` until the next green build, and the install scripts say that
+it is either being published or its last publish failed, never only that a build is running.
+
 ## `version.json`
 
 Both channels carry a small `version.json` next to the files (listed in `SHA256SUMS` like the rest, address

@@ -241,7 +241,8 @@ Parameters (all optional):
             }
             catch {
                 if ($channel -eq 'latest') {
-                    Exit-Install 'SHA256SUMS of the rolling build is missing (a build is running: try again in a few minutes)'
+                    # It cannot be told from here whether a build is being published or the last one stopped half way.
+                    Exit-Install 'SHA256SUMS of the rolling build is missing: either a build is being published right now (try again in a few minutes), or its last publish failed and the next green build of the app brings them back'
                 }
                 throw
             }

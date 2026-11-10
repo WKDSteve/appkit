@@ -31,6 +31,40 @@ NOTES_FILE="${NOTES_FILE:-}"
 TITLE="${TITLE:-}"
 VERSION="${VERSION:-}"
 PYTHON="${PYTHON:-python3}"
+# How often a call that GitHub answered with a passing error (a 5xx, a timeout) is made, and the wait before the next
+# one (it grows: GH_WAIT, 2 * GH_WAIT, ...).
+GH_TRIES="${GH_TRIES:-4}"
+GH_WAIT="${GH_WAIT:-10}"
+[[ "$GH_TRIES" =~ ^[1-9][0-9]*$ ]] || fail "GH_TRIES must be a number above 0, got '$GH_TRIES'"
+[[ "$GH_WAIT" =~ ^[0-9]+$ ]] || fail "GH_WAIT must be a number, got '$GH_WAIT'"
+
+# Run a `gh` call again when GitHub's answer says it may pass (an HTTP 5xx, a timeout, a dropped connection), up to
+# GH_TRIES times; any other failure (a 4xx, a missing file) ends it at once. Only for calls that are safe to repeat:
+# an upload with --clobber, reading the asset list, editing the page. A 504 on the upload of SHA256SUMS once left a
+# rolling build without checksums, and with the CI red no later run came to heal it.
+gh_retry() {
+    local attempt=1 rc err
+    err="$(mktemp)"
+    while :; do
+        if "$@" 2> "$err"; then
+            cat "$err" >&2
+            rm -f "$err"
+            return 0
+        else
+            rc=$?
+        fi
+        cat "$err" >&2
+        if [ "$attempt" -ge "$GH_TRIES" ] ||
+            ! grep -Eqi 'HTTP 5[0-9][0-9]|time[d ]?out|connection reset|unexpected EOF|TLS handshake' "$err"; then
+            rm -f "$err"
+            return "$rc"
+        fi
+        # stderr: a caller may be reading the call's stdout (the asset list)
+        printf '%s\n' "GitHub answered with a passing error (attempt $attempt of $GH_TRIES): trying again in $((GH_WAIT * attempt)) s" >&2
+        sleep "$((GH_WAIT * attempt))"
+        attempt=$((attempt + 1))
+    done
+}
 
 case "$TAG" in
     latest)
@@ -124,10 +158,10 @@ if [ "$TAG" = "latest" ]; then
     fi
     # No checksums for files that are about to change.
     gh release delete-asset latest SHA256SUMS --repo "$GITHUB_REPOSITORY" --yes 2>/dev/null || true
-    (cd "$stage" && gh release upload latest "${names[@]}" --repo "$GITHUB_REPOSITORY" --clobber)
+    (cd "$stage" && gh_retry gh release upload latest "${names[@]}" --repo "$GITHUB_REPOSITORY" --clobber)
     # A file of an earlier build that this one no longer has (a renamed asset) would be offered
     # without a checksum: it goes. (The list first, so a failing `gh` stops here.)
-    present="$(gh release view latest --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+    present="$(gh_retry gh release view latest --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
     while IFS= read -r old; do
         [ -n "$old" ] || continue
         [ "$old" = "SHA256SUMS" ] && continue
@@ -137,7 +171,7 @@ if [ "$TAG" = "latest" ]; then
         fi
     done <<< "$present"
     cp "$stage.sums" "$stage/SHA256SUMS"
-    (cd "$stage" && gh release upload latest SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber)
+    (cd "$stage" && gh_retry gh release upload latest SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber)
 
     # The words of the page, last: only now does it name this commit. The downloads go by the name
     # of the release, not by the commit of its tag; when the tag cannot move (a token without the
@@ -149,7 +183,7 @@ if [ "$TAG" = "latest" ]; then
         notes
         printf '\nBuilt from commit %s%s%s.\n' '`' "$SHA" '`'
     } > "$stage.notes"
-    gh release edit latest --repo "$GITHUB_REPOSITORY" --prerelease --latest=false \
+    gh_retry gh release edit latest --repo "$GITHUB_REPOSITORY" --prerelease --latest=false \
         --title "Rolling build (${SHA:0:7})" --notes-file "$stage.notes"
 else
     if draft="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null)"; then
@@ -167,7 +201,7 @@ else
             --notes-file "$stage.notes"
     fi
     cp "$stage.sums" "$stage/SHA256SUMS"
-    (cd "$stage" && gh release upload "$TAG" "${names[@]}" SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber)
+    (cd "$stage" && gh_retry gh release upload "$TAG" "${names[@]}" SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber)
 fi
 rm -f "$stage.sums" "$stage.notes"
 say "published ${#names[@]} file(s) and SHA256SUMS on $TAG"
