@@ -38,6 +38,35 @@ async fn an_installable_page_has_its_own_policy_and_nothing_more() {
     .await;
 }
 
+mod demo_installable_recording {
+    appkit_testkit::security_matrix!(appkit_testkit::subjects::DemoInstallableRecording);
+}
+
+#[tokio::test]
+async fn an_installable_page_that_records_differs_in_the_microphone_and_media_only() {
+    appkit_testkit::security::the_installable_page_has_its_own_policy_and_nothing_more(
+        &appkit_testkit::subjects::DemoInstallableRecording,
+        appkit_testkit::subjects::INSTALLABLE_PREFIX,
+        appkit_testkit::subjects::INSTALLABLE_WORKER_POLICY,
+    )
+    .await;
+    appkit_testkit::security::the_installable_page_may_record_and_nothing_else(
+        &appkit_testkit::subjects::DemoInstallableRecording,
+        appkit_testkit::subjects::INSTALLABLE_PREFIX,
+    )
+    .await;
+}
+
+#[tokio::test]
+#[should_panic(expected = "/m/: camera=(), microphone=()")]
+async fn an_installable_page_that_was_not_let_record_does_not() {
+    appkit_testkit::security::the_installable_page_may_record_and_nothing_else(
+        &appkit_testkit::subjects::DemoInstallable,
+        appkit_testkit::subjects::INSTALLABLE_PREFIX,
+    )
+    .await;
+}
+
 mod demo_devices {
     appkit_testkit::security_matrix!(appkit_testkit::subjects::DemoDevices::new());
 }

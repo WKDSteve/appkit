@@ -685,7 +685,9 @@ fn directives(csp: &str) -> std::collections::HashMap<String, String> {
 /// that page and the files below it are shells with no token needed, `GET` only; their policy is the page's plus
 /// `manifest-src 'self'`, `worker-src 'self'` and the worker policy next to Svelte's, and nothing else is wider;
 /// the policy of `/` stays without them; `{prefix}` without a slash and a path below the prefix the app does not
-/// serve are not found, and a path that climbs out of the prefix reaches no data route.
+/// serve are not found, and a path that climbs out of the prefix reaches no data route. An app that let the page
+/// record (`GuardRules::with_installable_microphone`) has exactly two more differences there and nowhere else:
+/// `media-src 'self' blob:` and `microphone=(self)` in the permissions.
 pub async fn the_installable_page_has_its_own_policy_and_nothing_more(
     s: &dyn Subject,
     prefix: &str,
@@ -697,6 +699,16 @@ pub async fn the_installable_page_has_its_own_policy_and_nothing_more(
     assert_eq!(page.status, 200, "{page:?}");
     let desk_csp = directives(desk.header("content-security-policy").unwrap());
     let page_csp = directives(page.header("content-security-policy").unwrap());
+    let records = page
+        .header("permissions-policy")
+        .is_some_and(|p| p.contains("microphone=(self)"));
+    if records {
+        assert_eq!(
+            page_csp.get("media-src").map(String::as_str),
+            Some("'self' blob:"),
+            "a page that records plays back its own recording, nothing else"
+        );
+    }
     assert_eq!(
         page_csp.get("manifest-src").map(String::as_str),
         Some("'self'")
@@ -717,22 +729,31 @@ pub async fn the_installable_page_has_its_own_policy_and_nothing_more(
     }
     assert_eq!(
         page_csp.len(),
-        desk_csp.len() + 2,
-        "only manifest-src and worker-src are added: {page_csp:?}"
+        desk_csp.len() + if records { 3 } else { 2 },
+        "only manifest-src and worker-src (and media-src on a page that records) are added: {page_csp:?}"
     );
     assert!(!desk_csp.contains_key("manifest-src") && !desk_csp.contains_key("worker-src"));
+    assert!(
+        !desk_csp.contains_key("media-src"),
+        "the desktop page plays nothing"
+    );
     assert_eq!(
         desk_csp.get("trusted-types").map(String::as_str),
         Some("svelte-trusted-html")
     );
-    for header in [
-        "x-content-type-options",
-        "referrer-policy",
-        "cache-control",
-        "permissions-policy",
-    ] {
+    for header in ["x-content-type-options", "referrer-policy", "cache-control"] {
         assert_eq!(page.header(header), desk.header(header), "{header}");
     }
+    // The permissions are the desktop page's; a page that records differs in the microphone only.
+    let desk_perms = desk.header("permissions-policy").unwrap();
+    assert!(desk_perms.contains("microphone=()"), "{desk_perms}");
+    let page_perms = page.header("permissions-policy").unwrap();
+    let want = if records {
+        desk_perms.replace("microphone=()", "microphone=(self)")
+    } else {
+        desk_perms.to_owned()
+    };
+    assert_eq!(page_perms, want, "permissions-policy");
     // A file below the prefix carries the same policy.
     let worker = get(&h, &format!("{prefix}/sw.js"), &[]).await;
     assert_eq!(worker.status, 200, "{worker:?}");
@@ -1418,6 +1439,39 @@ pub async fn the_pc_revokes_a_device_and_its_sessions_end(s: &dyn Subject) {
     );
     let r = device_login(&h, &device, &id, &h.origin()).await;
     assert_eq!(r.status, 401, "{r:?}");
+}
+
+/// An app that let its installable page record (`GuardRules::with_installable_microphone`): the page and the files
+/// below it allow the microphone to this origin and media from its own blobs; the desktop page and every other answer
+/// keep the microphone off and play nothing.
+pub async fn the_installable_page_may_record_and_nothing_else(s: &dyn Subject, prefix: &str) {
+    let h = Harness::new(s).await;
+    for path in [format!("{prefix}/"), format!("{prefix}/sw.js")] {
+        let r = get(&h, &path, &[]).await;
+        assert_eq!(r.status, 200, "{path}: {r:?}");
+        let perms = r.header("permissions-policy").unwrap();
+        assert!(perms.contains("microphone=(self)"), "{path}: {perms}");
+        assert!(perms.contains("camera=()"), "{path}: {perms}");
+        let csp = directives(r.header("content-security-policy").unwrap());
+        assert_eq!(
+            csp.get("media-src").map(String::as_str),
+            Some("'self' blob:"),
+            "{path}"
+        );
+    }
+    for path in [
+        "/".to_owned(),
+        format!("{prefix}x/"),
+        "/etc/passwd".to_owned(),
+    ] {
+        let r = get(&h, &path, &[]).await;
+        if let Some(perms) = r.header("permissions-policy") {
+            assert!(perms.contains("microphone=()"), "{path}: {perms}");
+        }
+        if let Some(csp) = r.header("content-security-policy") {
+            assert!(!directives(csp).contains_key("media-src"), "{path}: {csp}");
+        }
+    }
 }
 
 /// Another app (a share target, a link) opens the installable page: the browser sends `Sec-Fetch-Site: cross-site`

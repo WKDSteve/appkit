@@ -69,6 +69,9 @@ pub struct DemoWide;
 /// The same hub with a desktop page and an installable page under `/m` (`GuardRules::with_installable_page`).
 pub struct DemoInstallable;
 
+/// The same, whose installable page may record from the microphone (`GuardRules::with_installable_microphone`).
+pub struct DemoInstallableRecording;
+
 /// The prefix and the worker policy `DemoInstallable` names.
 pub const INSTALLABLE_PREFIX: &str = "/m";
 pub const INSTALLABLE_WORKER_POLICY: &str = "demo-worker";
@@ -240,6 +243,26 @@ impl Subject for DemoInstallable {
         start_with_pages(
             cfg,
             rules().with_installable_page(INSTALLABLE_PREFIX, INSTALLABLE_WORKER_POLICY),
+            Arc::new(TwoPages),
+        )
+    }
+
+    fn data_routes(&self) -> Vec<&'static str> {
+        vec!["items", "item", "ops"]
+    }
+}
+
+impl Subject for DemoInstallableRecording {
+    fn identity(&self) -> &'static AppIdentity {
+        &IDENTITY
+    }
+
+    fn start(&self, cfg: StartConfig) -> BoxFuture<'_, std::io::Result<RunningServer>> {
+        start_with_pages(
+            cfg,
+            rules()
+                .with_installable_page(INSTALLABLE_PREFIX, INSTALLABLE_WORKER_POLICY)
+                .with_installable_microphone(),
             Arc::new(TwoPages),
         )
     }

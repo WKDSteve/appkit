@@ -56,6 +56,8 @@ pub const CONTROL_REVOKE_PATH: &str = "/api/control/devices/revoke";
 struct Installable {
     prefix: String,
     worker_policy: String,
+    /// The page may record from the microphone (`with_installable_microphone`).
+    microphone: bool,
 }
 
 /// The first parts of a path that are the core's: an installable page cannot live there.
@@ -239,7 +241,26 @@ impl GuardRules {
         self.installable = Some(Installable {
             prefix,
             worker_policy,
+            microphone: false,
         });
+        self
+    }
+
+    /// Let the installable page record from the microphone (a voice note): on its paths only, the permissions say
+    /// `microphone=(self)` instead of `microphone=()`, and the policy adds `media-src 'self' blob:`, so the page can
+    /// play back a recording it made itself before it sends it. The browser still asks the person; every other path
+    /// keeps the microphone off.
+    ///
+    /// # Panics
+    ///
+    /// When the app has no installable page (`with_installable_page` first).
+    #[must_use]
+    pub fn with_installable_microphone(mut self) -> Self {
+        let page = self
+            .installable
+            .as_mut()
+            .expect("with_installable_microphone needs with_installable_page first");
+        page.microphone = true;
         self
     }
 
@@ -259,10 +280,10 @@ impl GuardRules {
         })
     }
 
-    /// The Trusted Types policy of the installable page, when `path` is on it.
-    fn worker_policy_for(&self, path: &str) -> Option<&str> {
+    /// The installable page, when `path` is on it.
+    fn installable_for(&self, path: &str) -> Option<&Installable> {
         if self.is_installable(path) {
-            self.installable.as_ref().map(|i| i.worker_policy.as_str())
+            self.installable.as_ref()
         } else {
             None
         }
@@ -422,16 +443,14 @@ pub async fn guard<R: Runtime>(
     next: Next,
 ) -> Response {
     let class = classify(req.uri().path(), &st.guard_rules);
-    let worker_policy = st
-        .guard_rules
-        .worker_policy_for(req.uri().path())
-        .map(str::to_owned);
+    let page = st.guard_rules.installable_for(req.uri().path()).cloned();
     let mut response = judge(&st, class, req, next).await;
     set_page_headers(
         &mut response,
         class,
         st.guard_rules.connect_src(),
-        worker_policy.as_deref(),
+        page.as_ref().map(|p| p.worker_policy.as_str()),
+        page.as_ref().is_some_and(|p| p.microphone),
     );
     response
 }
@@ -616,12 +635,13 @@ pub fn too_many() -> Response {
 /// The policy of the page: this origin only, plus the one address an app named for `connect-src`.
 #[cfg(test)]
 fn shell_policy(connect_src: Option<&str>) -> HeaderValue {
-    page_policy(connect_src, None)
+    page_policy(connect_src, None, false)
 }
 
 /// The policy of a page; with `worker_policy` the one of the installable page (`with_installable_page`): the same,
-/// plus its manifest, its service worker from this origin and the one more Trusted Types policy it names.
-fn page_policy(connect_src: Option<&str>, worker_policy: Option<&str>) -> HeaderValue {
+/// plus its manifest, its service worker from this origin and the one more Trusted Types policy it names; with
+/// `media` also `media-src 'self' blob:` (a page that records plays back what it recorded).
+fn page_policy(connect_src: Option<&str>, worker_policy: Option<&str>, media: bool) -> HeaderValue {
     let connect = match connect_src {
         Some(origin) => format!("'self' {origin}"),
         None => "'self'".to_owned(),
@@ -633,6 +653,11 @@ fn page_policy(connect_src: Option<&str>, worker_policy: Option<&str>) -> Header
         ),
         None => ("", "svelte-trusted-html".to_owned()),
     };
+    let media = if media && worker_policy.is_some() {
+        " media-src 'self' blob:;"
+    } else {
+        ""
+    };
     // Nothing is allowed that the page does not name. Scripts and styles come from this origin only (no
     // inline), and a sink that takes a string as HTML or script (`innerHTML`, `eval`) is refused unless the
     // one policy of the page made it: Svelte's own, which wraps nothing a task's text could reach (the body
@@ -640,7 +665,7 @@ fn page_policy(connect_src: Option<&str>, worker_policy: Option<&str>) -> Header
     // its session (an image route needs one, which an `<img src>` does not send); a `data:` image is not allowed.
     let policy = format!(
         "default-src 'none'; script-src 'self'; style-src 'self'; \
-         img-src 'self' blob:; connect-src {connect};{install} base-uri 'none'; \
+         img-src 'self' blob:; connect-src {connect};{install}{media} base-uri 'none'; \
          object-src 'none'; frame-ancestors 'none'; form-action 'none'; \
          require-trusted-types-for 'script'; trusted-types {trusted}"
     );
@@ -651,16 +676,19 @@ fn page_policy(connect_src: Option<&str>, worker_policy: Option<&str>) -> Header
 }
 
 pub fn set_security_headers(response: &mut Response, class: Class, connect_src: Option<&str>) {
-    set_page_headers(response, class, connect_src, None);
+    set_page_headers(response, class, connect_src, None, false);
 }
 
-/// The headers of every answer; `worker_policy` is set for a path of the installable page only.
+/// The headers of every answer; `worker_policy` is set for a path of the installable page only, and `microphone`
+/// only there, when the app let that page record (`with_installable_microphone`).
 pub fn set_page_headers(
     response: &mut Response,
     class: Class,
     connect_src: Option<&str>,
     worker_policy: Option<&str>,
+    microphone: bool,
 ) {
+    let microphone = microphone && worker_policy.is_some();
     let h = response.headers_mut();
     h.insert(
         HeaderName::from_static("x-content-type-options"),
@@ -683,7 +711,7 @@ pub fn set_page_headers(
         // nothing a task's text could reach (the body is drawn as elements).
         h.insert(
             header::CONTENT_SECURITY_POLICY,
-            page_policy(connect_src, worker_policy),
+            page_policy(connect_src, worker_policy, microphone),
         );
         h.insert(
             HeaderName::from_static("cross-origin-opener-policy"),
@@ -691,10 +719,13 @@ pub fn set_page_headers(
         );
         h.insert(
             HeaderName::from_static("permissions-policy"),
-            HeaderValue::from_static(
+            HeaderValue::from_static(if microphone {
+                "camera=(), microphone=(self), geolocation=(), payment=(), usb=(), \
+                 clipboard-read=(), clipboard-write=(self)"
+            } else {
                 "camera=(), microphone=(), geolocation=(), payment=(), usb=(), \
-                 clipboard-read=(), clipboard-write=(self)",
-            ),
+                 clipboard-read=(), clipboard-write=(self)"
+            }),
         );
     }
 }
@@ -793,8 +824,12 @@ mod tests {
         for no in ["/m", "/mx/", "/x/m/", "/", "/api/m/"] {
             assert!(!r.is_installable(no), "{no}");
         }
-        assert_eq!(r.worker_policy_for("/m/sw.js"), Some("tasks-mobile-worker"));
-        assert_eq!(r.worker_policy_for("/"), None);
+        assert_eq!(
+            r.installable_for("/m/sw.js")
+                .map(|i| i.worker_policy.as_str()),
+            Some("tasks-mobile-worker")
+        );
+        assert!(r.installable_for("/").is_none());
         // Without the option nothing is installable.
         assert!(!rules().is_installable("/m/"));
         assert!(matches!(classify("/m/", &rules()), Class::Other));
@@ -857,8 +892,8 @@ mod tests {
 
     #[test]
     fn the_installable_policy_adds_three_words_and_nothing_else() {
-        let plain = super::page_policy(None, None);
-        let page = super::page_policy(None, Some("w1"));
+        let plain = super::page_policy(None, None, false);
+        let page = super::page_policy(None, Some("w1"), false);
         assert_eq!(
             page.to_str()
                 .unwrap()
@@ -867,6 +902,50 @@ mod tests {
             plain.to_str().unwrap()
         );
         assert_eq!(plain, super::shell_policy(None));
+    }
+
+    #[test]
+    fn a_recording_installable_page_adds_media_from_blobs_and_only_there() {
+        let page = super::page_policy(None, Some("w1"), false);
+        let media = super::page_policy(None, Some("w1"), true);
+        assert_eq!(
+            media
+                .to_str()
+                .unwrap()
+                .replace(" media-src 'self' blob:;", ""),
+            page.to_str().unwrap()
+        );
+        assert!(media.to_str().unwrap().contains("media-src 'self' blob:;"));
+        // Without the installable page there is nothing to record on: the shell keeps no media.
+        assert_eq!(
+            super::page_policy(None, None, true),
+            super::page_policy(None, None, false)
+        );
+    }
+
+    fn permissions_of(worker_policy: Option<&str>, microphone: bool) -> String {
+        let mut response = axum::response::Response::new(axum::body::Body::empty());
+        super::set_page_headers(&mut response, Class::Shell, None, worker_policy, microphone);
+        response.headers()["permissions-policy"]
+            .to_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    #[test]
+    fn the_microphone_is_off_unless_the_installable_page_was_let_record() {
+        assert!(permissions_of(None, false).contains("microphone=()"));
+        assert!(permissions_of(Some("w1"), false).contains("microphone=()"));
+        assert!(permissions_of(None, true).contains("microphone=()"));
+        let on = permissions_of(Some("w1"), true);
+        assert!(on.contains("microphone=(self)"));
+        assert!(on.contains("camera=()"));
+    }
+
+    #[test]
+    #[should_panic(expected = "with_installable_page first")]
+    fn the_microphone_needs_an_installable_page() {
+        let _ = rules().with_installable_microphone();
     }
 
     fn rules() -> GuardRules {

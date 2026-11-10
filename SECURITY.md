@@ -56,6 +56,13 @@ word for word. The prefix is one plain part (`/` + lower-case letters, digits, `
 and the name a plain one (not Svelte's, `default` or `none`), checked when the hub is made; a mistake ends the
 program. `the_installable_page_has_its_own_policy_and_nothing_more` holds an app to this.
 
+Every page says `microphone=()` in its `Permissions-Policy`. An app may let its installable page, and only that page,
+record from the microphone (a voice note): `GuardRules::with_installable_microphone()` (today: tasks-desktop, for
+tasks-mobile). Below the prefix the permissions then say `microphone=(self)`, and the policy adds
+`media-src 'self' blob:`, so the page can play back the recording it made before it sends it; nothing else differs.
+The browser still asks the person, and the desktop page and every other answer keep the microphone off and play
+nothing (`the_installable_page_may_record_and_nothing_else`).
+
 The installable page is opened by other apps too: a share target, a link in a mail, a launcher. The browser then sends
 `Sec-Fetch-Site: cross-site`, which step 3 refuses everywhere else. Below the installable prefix, and only for the page
 itself (`GET`, `Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`), that is let through: the page is static and
