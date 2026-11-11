@@ -1,0 +1,28 @@
+[package]
+name = "tauri-plugin-appkit"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+publish = false
+description = "The Android side of appkit's mobile basis for a Tauri app: device keys in the Keystore (the trigger key behind the biometrics), the QR code of a pairing, the folder of a cloned vault, UnifiedPush"
+links = "tauri-plugin-appkit"
+
+# Not a member of the workspace of the kit: it builds Tauri, which no hub needs, and only an app's Android build
+# compiles its Kotlin side. An app depends on it by the tag of the kit, as on the crates.
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+
+[build-dependencies]
+tauri-plugin = { version = "2.7", features = ["build"] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2.12", default-features = false }
+
+[workspace]

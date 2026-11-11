@@ -35,6 +35,16 @@ describe('ipcFetch', () => {
     expect(b.seen[1]).toEqual({ method: 'POST', path: '/api/testing/rerun', body: '{"key":"a"}', ifNoneMatch: null });
   });
 
+  it('marks the kept copy with the time the hub sent it', async () => {
+    const f = ipcFetch(bridge({ ...OK, keptAt: 1700000000 }).fn);
+    const r = await f('/api/testing/fleet');
+    expect(r.headers.get('X-Kept-At')).toBe('1700000000');
+    const fresh = await ipcFetch(bridge({ ...OK, keptAt: null }).fn)('/api/testing/fleet');
+    expect(fresh.headers.get('X-Kept-At')).toBeNull();
+    const bad = ipcFetch(bridge({ ...OK, keptAt: -1 }).fn);
+    await expect(bad('/api/testing/fleet')).rejects.toEqual(new LinkError('failed'));
+  });
+
   it('refuses an address of elsewhere, another method or a body that is not text before anything crosses', async () => {
     const b = bridge(OK);
     const f = ipcFetch(b.fn);

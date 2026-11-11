@@ -31,6 +31,12 @@ page (Svelte)  --ipcFetch-->  shell (Rust, appkit-mobile)  --HTTPS or tunnel--> 
 - `appkit-mobile` (Rust): `way` (the ways and the pairing link), `link` (pairing, the device login, every request
   with a time limit and a byte limit; the session in memory; only routes of the app), `state` (the kept pairing,
   versioned, written atomically, removed wholly on unpairing).
+- `tauri-plugin-appkit` (`mobile-plugin/`, Rust and Kotlin, a Cargo project of its own): the Android side. The device
+  keys in the Android Keystore (a login key, and a trigger key that signs only after the biometrics or the screen lock,
+  bound by a `CryptoObject`, `AND-05`), the QR code of a pairing (ZXing: no network, no analytics, unlike ML Kit), the
+  folder of a cloned vault (Storage Access Framework, read only, bounded), and UnifiedPush (the endpoint of a distributor
+  app, a notice with the words the app gave, never the content of a message). The page reaches none of it: the shell
+  calls it from Rust.
 - `appkit-ui/mobile` (TypeScript): `ipcFetch(bridge)` makes a `fetch` out of the bridge to the shell, so the client of
   the app (`HubClient` and what extends it) works unchanged; `Way`, `WAY_ABILITIES` and `nextStep` for what the page
   shows about the connection (`MUI-05`, `MOB-09`).

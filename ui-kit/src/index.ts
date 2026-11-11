@@ -159,6 +159,7 @@ export {
 export {
   ipcFetch,
   isWay,
+  KEPT_AT,
   LinkError,
   nextStep,
   WAY_ABILITIES,

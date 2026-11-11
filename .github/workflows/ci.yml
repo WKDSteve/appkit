@@ -59,6 +59,11 @@ jobs:
             printf 'the tests left this in the temp dir:\n%s\n' "$left"
             exit 1
           fi
+      # The Android plugin of the mobile basis, a Cargo project of its own (it builds Tauri, which no hub needs): its
+      # Rust side here; its Kotlin side compiles in an app's Android build, on the private machine (MREL-06).
+      - run: cargo fmt --manifest-path mobile-plugin/Cargo.toml --check
+      - run: cargo clippy --manifest-path mobile-plugin/Cargo.toml --all-targets --locked -- -D warnings
+      - run: cargo test --manifest-path mobile-plugin/Cargo.toml --locked
 
   # Clippy and the tests on the systems of the code behind `cfg(not(windows))` and `cfg(unix)`, which the Windows runner
   # neither lints nor runs. Formatting and the other jobs do not need a second system and stay on the runner.
@@ -105,6 +110,8 @@ jobs:
       - run: cargo deny check
       # No crate version younger than a week (see tools/check-lock-age.py).
       - run: python tools/check-lock-age.py --min-days 7
+      - run: cargo deny --manifest-path mobile-plugin/Cargo.toml check
+      - run: python tools/check-lock-age.py --min-days 7 --lock mobile-plugin/Cargo.lock
 
   # The tools test themselves; no control character in a tracked file, no colour in the CSS of the kit outside its tokens.
   hygiene:

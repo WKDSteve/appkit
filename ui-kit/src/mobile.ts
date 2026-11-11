@@ -83,7 +83,15 @@ export interface BridgeResponse {
   contentType: string | null;
   etag: string | null;
   body: string;
+  /**
+   * The hub was not reached and this is the copy the shell kept (`MOB-08`): when the hub sent it, seconds since 1970.
+   * The `Response` carries it as `X-Kept-At`, so the page can say how old what it shows is.
+   */
+  keptAt?: number | null;
 }
+
+/** The header of a `Response` of `ipcFetch` that says the answer is the kept copy, and from when (seconds). */
+export const KEPT_AT = 'X-Kept-At';
 
 /** The bridge to the shell: Tauri's `invoke` of the command the app names, or a stand-in in tests. */
 export type Bridge = (request: BridgeRequest) => Promise<BridgeResponse>;
@@ -102,7 +110,8 @@ function isResponse(value: unknown): value is BridgeResponse {
     (v['status'] as number) <= 599 &&
     typeof v['body'] === 'string' &&
     (v['contentType'] === null || typeof v['contentType'] === 'string') &&
-    (v['etag'] === null || typeof v['etag'] === 'string')
+    (v['etag'] === null || typeof v['etag'] === 'string') &&
+    (v['keptAt'] === undefined || v['keptAt'] === null || (Number.isInteger(v['keptAt']) && (v['keptAt'] as number) >= 0))
   );
 }
 
@@ -136,6 +145,7 @@ export function ipcFetch(bridge: Bridge): typeof fetch {
     const out = new Headers();
     if (answer.contentType) out.set('Content-Type', answer.contentType);
     if (answer.etag) out.set('ETag', answer.etag);
+    if (typeof answer.keptAt === 'number') out.set(KEPT_AT, String(answer.keptAt));
     // A 304 has no body; the constructor refuses one.
     return new Response(answer.status === 304 ? null : answer.body, { status: answer.status, headers: out });
   };
