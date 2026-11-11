@@ -484,6 +484,14 @@ impl Push {
             .unwrap_or_default()
     }
 
+    /// Has any device subscribed to `kind`? An app asks before it does work only a notice needs.
+    #[must_use]
+    pub fn has_subscribers(&self, kind: &str) -> bool {
+        lock(&self.subs)
+            .values()
+            .any(|s| s.kinds.iter().any(|k| k == kind))
+    }
+
     /// The text of a notice: the kind, and the id of the entry only when its class is released for devices.
     #[must_use]
     pub fn payload(kind: &str, item: Option<(&str, DataClass)>) -> String {
@@ -796,6 +804,7 @@ mod tests {
         assert_eq!(plain, br#"{"id":null,"kind":"ci_red"}"#);
         assert!(!String::from_utf8_lossy(&req.body).contains("secret-repo"));
         // Another kind reaches nobody.
+        assert!(push.has_subscribers("ci_red") && !push.has_subscribers("reminder"));
         assert_eq!(push.notify("reminder", None, false).await, Sent::default());
         // The key and the subscriptions outlive a restart; a gone subscription is dropped.
         let gone = Arc::new(Capture {
