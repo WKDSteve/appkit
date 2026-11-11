@@ -80,6 +80,27 @@ Each device has a level, which the hub checks on every request (`MOB-03`):
   (`testing ci trust`), pushing, deleting for good, any command of the person's choice. Each app's tests prove that its
   released routes hold none of these.
 
+## Push
+
+The hub sends Web Push itself (`appkit-hub::push`, RFC 8030, 8291, 8292): no Firebase project, no account at any push
+provider.
+
+- The hub makes a VAPID key once and keeps it in its settings folder (`push-key.json`, never in a repository). A device
+  subscribes with its public half (`GET /api/push/key`) for kinds of events (`POST /api/push/subscribe` with the
+  endpoint, its `p256dh` key, its `auth` secret and the kinds; `POST /api/push/unsubscribe`). Only a device does; a
+  session of the PC gets `403 device_required`. Revoking a device forgets its subscription.
+- The hub posts only to an `https` endpoint on a public host name: no address, no `localhost`, no name of the local
+  network or the tailnet, no other port than 443 (it would otherwise post to whatever a device names).
+- A notice carries the kind of event and at most the id of an entry whose class is released for devices
+  (`Push::notify(kind, Some((id, class)), urgent)`): `{"kind":"ci_red","id":"lib.nvim"}` or `{"kind":"ci_red","id":null}`.
+  The phone fetches the rest over its paired way (`PWA-06`). The text is encrypted for the device (aes128gcm), but the
+  push service is somebody else's server all the same.
+- Where the endpoint comes from: a browser's `PushManager` in an installed page (Android Chrome; iOS only for a page on
+  the home screen), or, for a Tauri app on Android (whose WebView has no Web Push), a UnifiedPush distributor app on the
+  phone (for example Sunup, which uses Mozilla's push service, or ntfy). Both speak this format. Without either, there is
+  no push, and the app says so once (`MOB-09`).
+- An app turns on the sending with the feature `push-net` of `appkit-hub` and `GuardRules::with_push`.
+
 ## On the PC: the command line
 
 An app's hub offers (with `appkit-hub::phone`):

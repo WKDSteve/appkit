@@ -2,7 +2,8 @@
 # Run: cargo deny check
 
 [graph]
-all-features = false
+# All features: the HTTP client of push-net is in the tree an app with push builds.
+all-features = true
 
 [advisories]
 # Known vulnerabilities and unmaintained crates are errors.

@@ -161,6 +161,14 @@ SHA-256 of the body; the guard reads the body (within the body limit), checks it
 Missing, wrong, spent, or from a device without that key: `403 confirm_required`. A session of the PC is no device and
 is held to none of this.
 
+Web Push (`GuardRules::with_push`, `appkit-hub/src/push.rs`): the VAPID key is made once in the settings folder
+(`push-key.json`); a file there that is not a key stops the start rather than make a new one. Only a device subscribes
+(`/api/push/*`, level `read`), and only with an endpoint the hub may post to: `https`, a public host name, port 443, no
+address, no `localhost` and no name of the local network or the tailnet, at most 1 KiB, so a device cannot point the
+hub at the PC or the local network. A notice holds the kind of event and at most the id of an entry of a class released
+for devices, encrypted for the device (RFC 8291); the VAPID token names the push service's origin and no person. A
+revoked device's subscription is forgotten; one the push service calls gone (404, 410) too.
+
 The phone app's shell (`appkit-mobile`) only builds those two kinds of address (an HTTPS tailnet name, or the phone's
 own `127.0.0.1`), follows no redirect, uses no proxy of the system, reads every answer under a time and a byte limit,
 keeps the session in memory and sends only routes of its own app.

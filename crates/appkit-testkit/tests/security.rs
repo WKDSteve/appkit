@@ -144,3 +144,46 @@ async fn a_device_does_only_what_its_level_allows_and_triggers_only_confirmed() 
     )
     .await;
 }
+
+#[tokio::test]
+async fn devices_subscribe_to_push_and_nothing_else_can() {
+    let subject = appkit_testkit::subjects::DemoDevices::new();
+    let push = std::sync::Arc::clone(subject.push());
+    appkit_testkit::security::devices_subscribe_to_push_and_nothing_else_can(&subject, &|id| {
+        !push.kinds_of(id).is_empty()
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_push_names_only_a_kind_and_a_released_id() {
+    use appkit_hub::DataClass;
+    let subject = appkit_testkit::subjects::DemoDevices::new();
+    let key = p256::SecretKey::from_slice(&[5; 32]).unwrap();
+    use p256::elliptic_curve::sec1::ToSec1Point;
+    subject
+        .push()
+        .subscribe(
+            "ab".repeat(16).as_str(),
+            appkit_hub::push::Subscription {
+                endpoint: "https://push.example.org/x".to_owned(),
+                p256dh: appkit_hub::push::b64url(key.public_key().to_sec1_point(false).as_bytes()),
+                auth: appkit_hub::push::b64url(&[1; 16]),
+                kinds: vec!["ci_red".to_owned()],
+            },
+        )
+        .unwrap();
+    let sent = subject
+        .push()
+        .notify("ci_red", Some(("secret-area", DataClass::Private)), true)
+        .await;
+    assert_eq!(sent.delivered, 1);
+    let taken = subject.sent().taken();
+    assert_eq!(taken.len(), 1);
+    // Encrypted, and the private id was never in the text.
+    assert!(!String::from_utf8_lossy(&taken[0].body).contains("secret-area"));
+    assert_eq!(
+        appkit_hub::push::Push::payload("ci_red", Some(("secret-area", DataClass::Private))),
+        r#"{"id":null,"kind":"ci_red"}"#
+    );
+}

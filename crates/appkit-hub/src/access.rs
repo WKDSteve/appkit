@@ -307,6 +307,104 @@ pub async fn device_session<R: Runtime>(
     )
 }
 
+// ── push ────────────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PushSubscribeRequest {
+    pub endpoint: String,
+    pub p256dh: String,
+    pub auth: String,
+    pub kinds: Vec<String>,
+}
+
+/// The device of a request; `None` for the PC: push is for devices.
+fn device_of(caller: Option<&Caller>) -> Option<&str> {
+    match caller {
+        Some(Caller::Device(id)) => Some(id),
+        _ => None,
+    }
+}
+
+fn not_a_device() -> Response {
+    error_body(
+        StatusCode::FORBIDDEN,
+        "device_required",
+        "push is for paired devices",
+    )
+}
+
+/// The public key a device subscribes with.
+pub async fn push_key<R: Runtime>(
+    State(st): State<Arc<Core<R>>>,
+    caller: Option<axum::Extension<Caller>>,
+) -> Response {
+    let Some(push) = st.guard_rules.push() else {
+        return no_devices();
+    };
+    if device_of(caller.as_deref()).is_none() {
+        return not_a_device();
+    }
+    axum::Json(json!({ "key": push.public_key() })).into_response()
+}
+
+/// Subscribe the device of the session for kinds of events, in place of what it had.
+pub async fn push_subscribe<R: Runtime>(
+    State(st): State<Arc<Core<R>>>,
+    caller: Option<axum::Extension<Caller>>,
+    body: Bytes,
+) -> Response {
+    let Some(push) = st.guard_rules.push() else {
+        return no_devices();
+    };
+    let Some(device) = device_of(caller.as_deref()).map(str::to_owned) else {
+        return not_a_device();
+    };
+    let Ok(request) = serde_json::from_slice::<PushSubscribeRequest>(&body) else {
+        return error_body(StatusCode::BAD_REQUEST, "bad_body", "invalid request body");
+    };
+    let sub = crate::push::Subscription {
+        endpoint: request.endpoint,
+        p256dh: request.p256dh,
+        auth: request.auth,
+        kinds: request.kinds,
+    };
+    match push.subscribe(&device, sub) {
+        Ok(()) => axum::Json(json!({ "kinds": push.kinds_of(&device) })).into_response(),
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => error_body(
+            StatusCode::BAD_REQUEST,
+            "bad_subscription",
+            "the subscription is not one this hub sends to",
+        ),
+        Err(_) => error_body(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            "the subscription could not be kept",
+        ),
+    }
+}
+
+/// Unsubscribe the device of the session from everything.
+pub async fn push_unsubscribe<R: Runtime>(
+    State(st): State<Arc<Core<R>>>,
+    caller: Option<axum::Extension<Caller>>,
+) -> Response {
+    let Some(push) = st.guard_rules.push() else {
+        return no_devices();
+    };
+    let Some(device) = device_of(caller.as_deref()).map(str::to_owned) else {
+        return not_a_device();
+    };
+    match push.forget(&device) {
+        Ok(found) => axum::Json(json!({ "unsubscribed": found })).into_response(),
+        Err(_) => error_body(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            "the subscription could not be removed",
+        ),
+    }
+}
+
 /// The paired devices, for the PC (control secret).
 pub async fn control_devices<R: Runtime>(State(st): State<Arc<Core<R>>>) -> Response {
     let Some(devices) = &st.devices else {
@@ -353,6 +451,9 @@ pub async fn control_revoke<R: Runtime>(State(st): State<Arc<Core<R>>>, body: By
         Ok(found) => {
             // Closed also when the file could not be written below: a revoke that half failed still ends the sessions.
             st.sessions.close_device(&request.device);
+            if let Some(push) = st.guard_rules.push() {
+                let _ = push.forget(&request.device);
+            }
             axum::Json(json!({ "revoked": found })).into_response()
         }
         Err(_) => {

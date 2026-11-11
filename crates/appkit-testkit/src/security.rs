@@ -1769,6 +1769,116 @@ pub async fn a_device_does_only_what_its_level_allows_and_triggers_only_confirme
     assert_eq!(r.status, 200, "{r:?}");
 }
 
+/// Web Push of a hub (`GuardRules::with_push`): a device reads the key, subscribes for kinds, and unsubscribes; a
+/// session of the PC cannot (push is for devices); an endpoint on the PC, in the local network or not `https` is
+/// refused (the hub would post to it); revoking the device forgets its subscription. `subscribed` tells whether the
+/// hub keeps a subscription for a device id.
+pub async fn devices_subscribe_to_push_and_nothing_else_can(
+    s: &dyn Subject,
+    subscribed: &dyn Fn(&str) -> bool,
+) {
+    let h = Harness::new(s).await;
+    let origin = h.origin();
+    let code = mint_code(&h).await;
+    let r = device_pair(&h, &code, "Phone", &TestDevice::new(7).public()).await;
+    let id = r.json()["device"].as_str().expect("an id").to_owned();
+    let auth = bearer(r.json()["token"].as_str().expect("a token"));
+    let pc = bearer(&session(&h).await);
+    let key_path = appkit_hub::push::PUSH_KEY_PATH;
+    let r = get(&h, key_path, &[("Authorization", &auth)]).await;
+    assert_eq!(r.status, 200, "{r:?}");
+    let key = r.json()["key"].as_str().expect("the key").to_owned();
+    assert_eq!(
+        appkit_hub::push::b64url_decode(&key).map(|k| k.len()),
+        Some(65)
+    );
+    let r = get(&h, key_path, &[("Authorization", &pc)]).await;
+    assert_eq!(r.status, 403, "the PC: {r:?}");
+    // A device's own key pair as a browser makes it for push.
+    let ua = TestDevice::new(11);
+    let sub = |endpoint: &str| {
+        serde_json::json!({
+            "endpoint": endpoint,
+            "p256dh": appkit_hub::push::b64url(&crate::security::hex_bytes(&ua.public())),
+            "auth": appkit_hub::push::b64url(&[9u8; 16]),
+            "kinds": ["ci_red"],
+        })
+        .to_string()
+    };
+    let path = appkit_hub::push::PUSH_SUBSCRIBE_PATH;
+    for bad in [
+        "http://push.example.org/x",
+        "https://127.0.0.1/x",
+        "https://192.168.1.2/x",
+        "https://localhost/x",
+        "https://pc.example.ts.net/x",
+    ] {
+        let r = post(
+            &h,
+            path,
+            &[("Authorization", &auth), ("Origin", &origin)],
+            &sub(bad),
+        )
+        .await;
+        assert_eq!(r.status, 400, "{bad}: {r:?}");
+    }
+    assert!(!subscribed(&id));
+    let good = sub("https://push.example.org/wpush/v2/abc");
+    let r = post(
+        &h,
+        path,
+        &[("Authorization", &pc), ("Origin", &origin)],
+        &good,
+    )
+    .await;
+    assert_eq!(r.status, 403, "the PC: {r:?}");
+    let r = post(
+        &h,
+        path,
+        &[("Authorization", &auth), ("Origin", &origin)],
+        &good,
+    )
+    .await;
+    assert_eq!(r.status, 200, "{r:?}");
+    assert!(subscribed(&id));
+    let r = post(
+        &h,
+        appkit_hub::push::PUSH_UNSUBSCRIBE_PATH,
+        &[("Authorization", &auth), ("Origin", &origin)],
+        "{}",
+    )
+    .await;
+    assert_eq!(r.status, 200, "{r:?}");
+    assert!(!subscribed(&id));
+    // Subscribed again, then revoked on the PC: the subscription goes with the device.
+    let r = post(
+        &h,
+        path,
+        &[("Authorization", &auth), ("Origin", &origin)],
+        &good,
+    )
+    .await;
+    assert_eq!(r.status, 200, "{r:?}");
+    let control = bearer(&h.control);
+    let r = post(
+        &h,
+        appkit_hub::guard::CONTROL_REVOKE_PATH,
+        &[("Authorization", &control)],
+        &serde_json::json!({ "device": id }).to_string(),
+    )
+    .await;
+    assert_eq!(r.status, 200, "{r:?}");
+    assert!(!subscribed(&id));
+}
+
+/// Hex to bytes (a key of a test device).
+fn hex_bytes(text: &str) -> Vec<u8> {
+    (0..text.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).expect("hex"))
+        .collect()
+}
+
 /// A device and its session, paired with a fresh code.
 async fn device_session(h: &Harness) -> String {
     let code = mint_code(h).await;

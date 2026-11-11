@@ -44,6 +44,13 @@ pub fn confirm_message(
     )
 }
 
+/// The routes of the core's Web Push a phone uses (`appkit_hub::push`): the key, subscribing, unsubscribing.
+pub const PUSH_PATHS: [&str; 3] = [
+    "/api/push/key",
+    "/api/push/subscribe",
+    "/api/push/unsubscribe",
+];
+
 /// The header a trigger carries its confirmation in.
 pub const CONFIRM_HEADER: &str = "x-device-confirm";
 
@@ -183,9 +190,13 @@ impl AppRoutes {
         format!("/api/{}/", self.namespace)
     }
 
-    /// Is `path` (with an optional query) a plain route of this app? Only those are sent.
+    /// Is `path` (with an optional query) a plain route of this app, or one of the push routes of the core? Only
+    /// those are sent.
     #[must_use]
     pub fn allows(&self, path: &str) -> bool {
+        if PUSH_PATHS.contains(&path) {
+            return true;
+        }
         let (route, query) = match path.split_once('?') {
             Some((r, q)) => (r, Some(q)),
             None => (path, None),
@@ -698,6 +709,8 @@ mod tests {
     fn only_plain_routes_of_the_app_are_sent() {
         let r = AppRoutes::new("testing-desktop", "testing");
         for ok in [
+            "/api/push/key",
+            "/api/push/subscribe",
             "/api/testing/fleet",
             "/api/testing/repo?key=lib.nvim",
             "/api/testing/sheet-step/sheets?key=a%2Fb",

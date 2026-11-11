@@ -221,16 +221,64 @@ impl Subject for DemoWide {
 /// its own that is removed when the value is dropped.
 pub struct DemoDevices {
     dir: appkit_scratch::Scratch,
+    push: Arc<appkit_hub::push::Push>,
+    sent: Arc<SentPushes>,
+}
+
+/// The push requests a hub made, kept instead of sent (a stand-in for the push services).
+#[derive(Default)]
+pub struct SentPushes {
+    requests: std::sync::Mutex<Vec<appkit_hub::push::PushRequest>>,
+}
+
+impl SentPushes {
+    /// What was sent so far.
+    #[must_use]
+    pub fn taken(&self) -> Vec<appkit_hub::push::PushRequest> {
+        self.requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl appkit_hub::push::PushTransport for SentPushes {
+    fn send(&self, request: appkit_hub::push::PushRequest) -> BoxFuture<'_, Option<u16>> {
+        self.requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(request);
+        Box::pin(async { Some(201) })
+    }
 }
 
 impl DemoDevices {
-    /// A new folder for the list of devices (a scratch folder, removed when the value is dropped, also after a
-    /// failed test).
+    /// A new folder for the list of devices and the push of the hub (a scratch folder, removed when the value is
+    /// dropped, also after a failed test).
+    ///
+    /// # Panics
+    ///
+    /// When the folder cannot be written.
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            dir: appkit_scratch::Scratch::new("testkit-devices"),
-        }
+        let dir = appkit_scratch::Scratch::new("testkit-devices");
+        let sent = Arc::new(SentPushes::default());
+        let push = Arc::new(
+            appkit_hub::push::Push::open(&dir, sent.clone()).expect("the push of the demo hub"),
+        );
+        Self { dir, push, sent }
+    }
+
+    /// The push of the hub: a test tells devices with it (`Push::notify`).
+    #[must_use]
+    pub fn push(&self) -> &Arc<appkit_hub::push::Push> {
+        &self.push
+    }
+
+    /// The push requests the hub made.
+    #[must_use]
+    pub fn sent(&self) -> &SentPushes {
+        &self.sent
     }
 
     /// The file the hub keeps its devices in.
@@ -263,7 +311,8 @@ impl Subject for DemoDevices {
                 .with_device_route(IDENTITY.route("ops"), Level::Create)
                 .with_device_route(IDENTITY.route("classified"), Level::Read)
                 .with_device_route(IDENTITY.route("status"), Level::Change)
-                .with_device_route(IDENTITY.route("run"), Level::Trigger),
+                .with_device_route(IDENTITY.route("run"), Level::Trigger)
+                .with_push(Arc::clone(&self.push)),
             Arc::new(TwoPages),
         )
     }

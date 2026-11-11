@@ -10,6 +10,11 @@ description = "The local hub of an app, without the app: the guard, pairing and 
 [lints]
 workspace = true
 
+[features]
+# The way out of Web Push (src/push_net.rs): reqwest with rustls. An app that sends push turns it on; the rest of the
+# kit, and every app without push, stays without an HTTP client.
+push-net = ["dep:reqwest"]
+
 [dependencies]
 appkit-core = { path = "../appkit-core" }
 futures-core = { version = "0.3", default-features = false }
@@ -19,9 +24,15 @@ hyper-util = { version = "0.1", default-features = false, features = ["server", 
 # The stable line of notify; 9.0 is a release candidate (concept 7.1, 13.14).
 # The device keys of phones (src/devices.rs): a page signs a challenge of the hub with an ECDSA P-256 key that WebCrypto
 # keeps non-extractable; the hub only checks the signature. RustCrypto, pure Rust, no signing and no key generation.
-p256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }
+p256 = { version = "0.14", default-features = false, features = ["ecdsa", "ecdh", "std"] }
 # The hash of the body a device confirms a trigger for (src/guard.rs): the version p256 already brings.
 sha2 = "0.11"
+# Web Push (src/push.rs, RFC 8291): the key of each message from HKDF, the message sealed with AES-128-GCM. RustCrypto,
+# pure Rust, the versions of the digest p256 brings.
+hkdf = "0.13"
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
+# The HTTP client of push-net: rustls with the Mozilla roots and the ring provider, the version appkit-mobile uses.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2"], optional = true }
 # The QR code of a phone's pairing link on the terminal (src/phone.rs): the encoder only, no image or SVG.
 qrcode = { version = "0.14", default-features = false }
 notify = { version = "8.2", default-features = false, features = ["macos_fsevent"] }

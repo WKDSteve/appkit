@@ -329,6 +329,24 @@ fn device_routes<R: Runtime>(core: &Arc<Core<R>>) -> Router<Arc<Core<R>>> {
             CONTROL_LEVEL_PATH,
             post(control_level::<R>).layer(DefaultBodyLimit::max(small)),
         )
+        .merge(push_routes(core))
+}
+
+/// The routes of push, when the app has it.
+fn push_routes<R: Runtime>(core: &Arc<Core<R>>) -> Router<Arc<Core<R>>> {
+    use crate::push::{PUSH_KEY_PATH, PUSH_SUBSCRIBE_PATH, PUSH_UNSUBSCRIBE_PATH};
+    if core.guard_rules.push().is_none() {
+        return Router::new();
+    }
+    let small = core.limits.small_body_bytes;
+    Router::new()
+        .route(PUSH_KEY_PATH, get(push_key::<R>))
+        // A subscription names an endpoint of up to 1 KiB: the body limit of every route, not the small one.
+        .route(PUSH_SUBSCRIBE_PATH, post(push_subscribe::<R>))
+        .route(
+            PUSH_UNSUBSCRIBE_PATH,
+            post(push_unsubscribe::<R>).layer(DefaultBodyLimit::max(small)),
+        )
 }
 
 async fn not_found() -> Response {

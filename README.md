@@ -13,7 +13,7 @@ and the same tests. It knows no app: an app brings its names, its routes and its
 | Crate | What it is |
 |---|---|
 | `appkit-core` | Building blocks without a server: the names of an app (`AppIdentity`), the data classes and who asks (`DataClass`, `Caller`), pairing and sessions, safe process runs and reads, `hub.json`, `control.secret`. |
-| `appkit-hub` | The hub without the app: the guard (eight steps, in a fixed order), pairing, the page, `hello`, the list of vaults, the accept loop, the seam of the engine (one process per call, or a persistent host), the snapshot store, the file watcher, the full-text search, the event streams (count per session, the `text/event-stream` body), opening a file in Neovim, showing a folder and the folder dialog (`editor`), the phones of an app on the PC (`phone`: the pairing link and its QR code, the list, levels and revoking), the settings file, the search for Neovim and the engine, installing, autostart and the first-start questions, and for hubs that start other programs: `launch` (argv only, stdio null, nothing inherited) and `browser` (opens only `http://127.0.0.1:<port>/…` for the ports an app names). |
+| `appkit-hub` | The hub without the app: the guard (eight steps, in a fixed order), pairing, the page, `hello`, the list of vaults, the accept loop, the seam of the engine (one process per call, or a persistent host), the snapshot store, the file watcher, the full-text search, the event streams (count per session, the `text/event-stream` body), opening a file in Neovim, showing a folder and the folder dialog (`editor`), the phones of an app on the PC (`phone`: the pairing link and its QR code, the list, levels and revoking), Web Push to paired devices (`push`, VAPID without a push account; the sending behind the feature `push-net`), the settings file, the search for Neovim and the engine, installing, autostart and the first-start questions, and for hubs that start other programs: `launch` (argv only, stdio null, nothing inherited) and `browser` (opens only `http://127.0.0.1:<port>/…` for the ports an app names). |
 | `appkit-mobile` | The phone side of a hub, for the shell of a phone app (Tauri): the three ways to the data (Tailscale Serve, an SSH tunnel, a vault cloned on the phone), the pairing link, pairing and the device login with a key the phone keeps, the check that the hub is the one paired with, every request with a time and a byte limit and only to the app's routes, the kept pairing and the kept copy of the answers. See [docs/MOBILE.md](docs/MOBILE.md). |
 | `appkit-testkit` | The security matrix every app's hub must pass, a second minimal app (`Demo`) that proves the guard knows no app, and a fake engine to test without Neovim. |
 | `sheet-driver` | A program, not a library: drives the window of an app for a test sheet of testing.nvim the way a screen reader does (`testing-sheet-driver/1` on stdin and stdout, UI Automation on Windows). Only the process it is pointed at; a name that is not there or there twice never acts. |
@@ -138,7 +138,7 @@ two share one. Free: 17612–17614, 17619–17649.
 
 ```
 cargo fmt --all --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --locked
 cargo deny check
 cargo audit

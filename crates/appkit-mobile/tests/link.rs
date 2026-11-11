@@ -507,3 +507,15 @@ fn the_link_the_pc_shows_is_the_one_the_phone_reads() {
         HubAddress::tunnel(17618).unwrap()
     );
 }
+
+#[test]
+fn the_push_routes_of_the_phone_are_the_hubs() {
+    assert_eq!(
+        appkit_mobile::link::PUSH_PATHS,
+        [
+            appkit_hub::push::PUSH_KEY_PATH,
+            appkit_hub::push::PUSH_SUBSCRIBE_PATH,
+            appkit_hub::push::PUSH_UNSUBSCRIBE_PATH
+        ]
+    );
+}

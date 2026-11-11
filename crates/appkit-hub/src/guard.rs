@@ -46,6 +46,8 @@ pub struct GuardRules {
     device_routes: Vec<(String, Level)>,
     /// The level of a newly paired device (`with_device_default_level`).
     device_default: Level,
+    /// Web Push to devices (`with_push`).
+    push: Option<std::sync::Arc<crate::push::Push>>,
 }
 
 /// The routes of device keys (`with_devices`): pair with a code and a public key, ask a challenge, open a session.
@@ -99,7 +101,10 @@ fn plain_policy_name(name: &str) -> bool {
 }
 
 /// The routes of the core itself: an app cannot name one of them as its own.
-const CORE_PATHS: [&str; 10] = [
+const CORE_PATHS: [&str; 13] = [
+    crate::push::PUSH_KEY_PATH,
+    crate::push::PUSH_SUBSCRIBE_PATH,
+    crate::push::PUSH_UNSUBSCRIBE_PATH,
     "/api/control/pair",
     CONTROL_DEVICES_PATH,
     CONTROL_REVOKE_PATH,
@@ -202,7 +207,37 @@ impl GuardRules {
             tailnet: None,
             device_routes: Vec::new(),
             device_default: Level::Create,
+            push: None,
         }
+    }
+
+    /// Let paired devices subscribe to Web Push of this hub (`src/push.rs`): adds `/api/push/key`,
+    /// `/api/push/subscribe` and `/api/push/unsubscribe`, released for devices at the level `read` and for nobody
+    /// else (a session of the PC gets `403 device_required` there). The app keeps a clone of `push` to tell devices
+    /// what happened (`Push::notify`). A revoked device's subscription goes with it.
+    ///
+    /// # Panics
+    ///
+    /// When the app keeps no devices (`with_devices` first), or when it is called twice.
+    #[must_use]
+    pub fn with_push(mut self, push: std::sync::Arc<crate::push::Push>) -> Self {
+        assert!(self.devices.is_some(), "with_push needs with_devices first");
+        assert!(self.push.is_none(), "with_push is called once");
+        self.push = Some(push);
+        for path in [
+            crate::push::PUSH_KEY_PATH,
+            crate::push::PUSH_SUBSCRIBE_PATH,
+            crate::push::PUSH_UNSUBSCRIBE_PATH,
+        ] {
+            self.device_routes.push((path.to_owned(), Level::Read));
+        }
+        self
+    }
+
+    /// The push of the hub, if the app has one.
+    #[must_use]
+    pub fn push(&self) -> Option<&std::sync::Arc<crate::push::Push>> {
+        self.push.as_ref()
     }
 
     /// Release one route of the app for paired devices with the level it needs (`MOB-02`, `MOB-03`). A session of a

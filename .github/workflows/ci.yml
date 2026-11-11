@@ -45,7 +45,7 @@ jobs:
           persist-credentials: false
       - run: cargo --version && rustc --version
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       # No Neovim is needed: the binary fake-engine of appkit-testkit stands in for an engine.
       # The tests get a temp dir of their own, empty at the start, and nothing may be left in it afterwards: a test
       # takes its folder from appkit-scratch's `Scratch`, which removes it also when the test fails.
@@ -81,7 +81,7 @@ jobs:
       # The image's toolchain can be older than the workspace's rust-version.
       - run: rustup toolchain install stable --profile minimal --component clippy --no-self-update && rustup default stable
       - run: cargo --version && rustc --version
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: cargo test (nothing left in the temp dir)
         run: |
           t="$RUNNER_TEMP/appkit-test-temp"
