@@ -519,3 +519,67 @@ fn the_push_routes_of_the_phone_are_the_hubs() {
         ]
     );
 }
+
+/// The network, with one route that answers late.
+struct Slow {
+    net: NetTransport,
+    path: &'static str,
+}
+
+impl Transport for Slow {
+    fn send(
+        &self,
+        request: appkit_mobile::link::Request,
+        limits: Limits,
+    ) -> BoxFuture<'_, Result<appkit_mobile::link::Response, NetError>> {
+        Box::pin(async move {
+            if request.url.ends_with(self.path) {
+                tokio::time::sleep(Duration::from_secs(3)).await;
+            }
+            self.net.send(request, limits).await
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_slow_request_does_not_hold_up_another() {
+    let hub = hub().await;
+    let signer = Arc::new(SoftwareSigner::random());
+    let (paired, _) = pair(
+        net(),
+        signer.clone(),
+        None,
+        &routes(),
+        &hub.link().await,
+        "Fairphone",
+        Limits::default(),
+    )
+    .await
+    .unwrap();
+    let slow: Arc<dyn Transport> = Arc::new(Slow {
+        net: NetTransport::new().unwrap(),
+        path: "/api/demo/item",
+    });
+    let link = Arc::new(Link::new(slow, signer, routes(), paired, Limits::default()));
+    // One login first, so both requests share its session.
+    link.fetch(Method::Get, "/api/demo/items", &[], None)
+        .await
+        .unwrap();
+    let late = {
+        let link = Arc::clone(&link);
+        tokio::spawn(async move { link.fetch(Method::Get, "/api/demo/item", &[], None).await })
+    };
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let started = std::time::Instant::now();
+    let r = link
+        .fetch(Method::Get, "/api/demo/items", &[], None)
+        .await
+        .unwrap();
+    assert_eq!(r.status, 200);
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "waited for the slow one: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(late.await.unwrap().unwrap().status, 200);
+}

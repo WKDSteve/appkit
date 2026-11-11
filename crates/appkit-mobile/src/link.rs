@@ -540,23 +540,33 @@ impl Link {
         {
             return Err(LinkError::NotAllowed);
         }
-        let mut session = self.session.lock().await;
-        if session.is_none() {
-            *session = Some(self.login().await?);
-        }
-        let token = session.clone().unwrap_or_default();
+        let token = self.token(None).await?;
         let response = self
             .send_with(&token, method, path, body, if_none_match)
             .await?;
         if response.status != 401 {
             return Ok(response);
         }
-        *session = None;
-        let token = self.login().await?;
-        *session = Some(token.clone());
+        let token = self.token(Some(&token)).await?;
         Ok(self
             .send_with(&token, method, path, body, if_none_match)
             .await?)
+    }
+
+    /// The session token: the one held, or a new one from a login. With `refused`, the hub did not take that token: it
+    /// is dropped, unless another request logged in meanwhile, whose token is taken. The lock is held for the login
+    /// only, never for a request, so a slow request does not hold up the others and one login serves them all.
+    async fn token(&self, refused: Option<&str>) -> Result<String, LinkError> {
+        let mut session = self.session.lock().await;
+        if refused.is_some() && session.as_deref() == refused {
+            *session = None;
+        }
+        if let Some(token) = session.as_ref() {
+            return Ok(token.clone());
+        }
+        let token = self.login().await?;
+        *session = Some(token.clone());
+        Ok(token)
     }
 
     /// Start something on the PC (a route the app released at the level `trigger`): the confirmation key signs this
@@ -577,10 +587,7 @@ impl Link {
         let Some(confirm) = &self.confirm else {
             return Err(LinkError::Sign(SignError::Gone));
         };
-        let mut session = self.session.lock().await;
-        if session.is_none() {
-            *session = Some(self.login().await?);
-        }
+        let token = self.token(None).await?;
         let challenge = self.challenge().await?;
         let digest = crate::hex(&sha2::Sha256::digest(body));
         let message = confirm_message(
@@ -593,16 +600,13 @@ impl Link {
         );
         let signature = confirm.sign(message.as_bytes()).await?;
         let header = format!("{challenge}.{signature}");
-        let token = session.clone().unwrap_or_default();
         let response = self
             .send_full(&token, Method::Post, path, body, None, Some(&header))
             .await?;
         if response.status != 401 {
             return Ok(response);
         }
-        *session = None;
-        let token = self.login().await?;
-        *session = Some(token.clone());
+        let token = self.token(Some(&token)).await?;
         Ok(self
             .send_full(&token, Method::Post, path, body, None, Some(&header))
             .await?)
