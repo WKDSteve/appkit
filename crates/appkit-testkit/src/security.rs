@@ -1517,6 +1517,117 @@ pub async fn another_app_may_open_the_installable_page_and_nothing_else(
     );
 }
 
+/// One request through the tailnet: the `Host` is the tailnet name; a POST carries JSON.
+async fn through_tailnet(
+    h: &Harness,
+    tailnet: &str,
+    method: &str,
+    path: &str,
+    extra: &[(&str, &str)],
+    body: &str,
+) -> Reply {
+    let len = body.len().to_string();
+    let mut headers: Vec<(&str, &str)> = vec![("Host", tailnet)];
+    if method == "POST" {
+        headers.push(("Content-Type", "application/json"));
+        headers.push(("Content-Length", len.as_str()));
+    }
+    headers.extend_from_slice(extra);
+    send(h.addr(), request(method, path, &headers, body.as_bytes())).await
+}
+
+/// A request through the tailnet (`GuardRules::with_tailnet_name`): the `Host` is the tailnet name and the origin its
+/// `https` form. A device pairs and logs in there and uses its session; the control secret, a pairing code exchanged for
+/// a session and a session that is not a device's are refused; a name close to the tailnet name is no host of ours.
+/// The pairing and every challenge name the same id of the hub.
+pub async fn the_tailnet_takes_devices_only(s: &dyn Subject, tailnet: &str) {
+    let h = Harness::new(s).await;
+    let origin = format!("https://{tailnet}");
+    let with_origin = [("Origin", origin.as_str())];
+    // hello answers through the tailnet.
+    let r = through_tailnet(&h, tailnet, "GET", &h.route("hello"), &[], "").await;
+    assert_eq!(r.status, 200, "{r:?}");
+    // A name that only looks like it is not ours.
+    for bad in [
+        format!("{tailnet}:443"),
+        format!("evil.{tailnet}"),
+        tailnet.to_uppercase(),
+    ] {
+        let r = through_tailnet(&h, &bad, "GET", &h.route("hello"), &[], "").await;
+        assert_eq!(r.status, 403, "{bad}: {r:?}");
+    }
+    // The control secret is the PC's: refused through the tailnet, whatever the route.
+    let control = bearer(&h.control);
+    for path in [
+        "/api/control/pair",
+        appkit_hub::guard::CONTROL_DEVICES_PATH,
+        appkit_hub::guard::CONTROL_REVOKE_PATH,
+    ] {
+        let extra = [
+            ("Origin", origin.as_str()),
+            ("Authorization", control.as_str()),
+        ];
+        let r = through_tailnet(&h, tailnet, "POST", path, &extra, "{}").await;
+        assert_eq!(r.status, 403, "{path}: {r:?}");
+        assert!(r.body.contains("not_on_tailnet"), "{path}: {r:?}");
+    }
+    // A pairing code is not exchanged for a plain session there, and the refusal does not spend it.
+    let code = mint_code(&h).await;
+    let body = format!(r#"{{"code":"{code}"}}"#);
+    let r = through_tailnet(&h, tailnet, "POST", "/auth/exchange", &with_origin, &body).await;
+    assert_eq!(r.status, 403, "{r:?}");
+    let device = TestDevice::new(7);
+    let body =
+        serde_json::json!({ "code": code, "name": "Phone", "key": device.public() }).to_string();
+    let path = appkit_hub::guard::DEVICE_PAIR_PATH;
+    let r = through_tailnet(&h, tailnet, "POST", path, &with_origin, &body).await;
+    assert_eq!(r.status, 200, "{r:?}");
+    let id = r.json()["device"].as_str().expect("a device id").to_owned();
+    let hub = r.json()["hub"]
+        .as_str()
+        .expect("the id of the hub")
+        .to_owned();
+    assert_eq!(hub.len(), 32, "{hub}");
+    // A login signed for the tailnet origin.
+    let body = serde_json::json!({ "device": id }).to_string();
+    let path = appkit_hub::guard::DEVICE_CHALLENGE_PATH;
+    let r = through_tailnet(&h, tailnet, "POST", path, &with_origin, &body).await;
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(
+        r.json()["hub"],
+        hub.as_str(),
+        "every challenge names the hub"
+    );
+    let challenge = r.json()["challenge"]
+        .as_str()
+        .expect("a challenge")
+        .to_owned();
+    let body = serde_json::json!({
+        "device": id,
+        "challenge": challenge,
+        "signature": device.sign(&origin, &id, &challenge),
+    })
+    .to_string();
+    let path = appkit_hub::guard::DEVICE_SESSION_PATH;
+    let r = through_tailnet(&h, tailnet, "POST", path, &with_origin, &body).await;
+    assert_eq!(r.status, 200, "{r:?}");
+    let token = r.json()["token"].as_str().expect("a token").to_owned();
+    let data = h.route(s.data_routes()[0]);
+    let auth = bearer(&token);
+    let r = through_tailnet(&h, tailnet, "GET", &data, &[("Authorization", &auth)], "").await;
+    assert!(
+        r.status != 401 && r.status != 403,
+        "a device session gets through: {r:?}"
+    );
+    // A session of a pairing code (made on the PC) does not, through the tailnet; on the PC it still does.
+    let auth = bearer(&session(&h).await);
+    let r = through_tailnet(&h, tailnet, "GET", &data, &[("Authorization", &auth)], "").await;
+    assert_eq!(r.status, 403, "{r:?}");
+    assert!(r.body.contains("device_required"), "{r:?}");
+    let r = get(&h, &data, &[("Authorization", &auth)]).await;
+    assert!(r.status != 401 && r.status != 403, "{r:?}");
+}
+
 /// An app that keeps no devices has none of their routes.
 pub async fn without_devices_there_are_no_device_routes(s: &dyn Subject) {
     let h = Harness::new(s).await;

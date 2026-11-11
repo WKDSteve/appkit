@@ -4,5 +4,6 @@ mod demo;
 
 pub use self::demo::{
     Demo, DemoDevices, DemoInstallable, DemoInstallableRecording, DemoWide,
-    IDENTITY as DEMO_IDENTITY, INSTALLABLE_PREFIX, INSTALLABLE_WORKER_POLICY, WIDE_ORIGIN,
+    IDENTITY as DEMO_IDENTITY, INSTALLABLE_PREFIX, INSTALLABLE_WORKER_POLICY, TAILNET_NAME,
+    WIDE_ORIGIN,
 };

@@ -127,6 +127,28 @@ attempts. `devices.json` holds public keys, names and times, no secret; a file t
 the hub never half forgets whom it trusts. At most 16 devices. The sessions a device opens are tagged with its id, so
 that an app can later give each device its own rights.
 
+The file also holds a random id of the hub, made once (a list of an older hub gets one when it is opened, written at
+once). The pairing and every challenge name it, and a phone signs nothing for a hub that names another
+(`appkit-mobile`, `MSEC-04`): a new hub on the same name or port gets no signature, the phone pairs again.
+
+### A phone through the tailnet or a tunnel
+
+The hub binds loopback only, also for phones. A phone reaches it one of two ways, both ending on the PC
+([docs/MOBILE.md](docs/MOBILE.md)):
+
+- **Tailscale Serve** forwards `https://<pc>.<tailnet>.ts.net` to the loopback port. An app that calls
+  `GuardRules::with_tailnet_name("<pc>.<tailnet>.ts.net")` (it needs `with_devices`) takes that `Host`, exactly, and the
+  origin `https://<pc>.<tailnet>.ts.net`. A request with that host is held to what a device does: the routes of the
+  control secret and `/auth/exchange` (a session for a pairing code) are refused (`not_on_tailnet`), and a route below
+  `/api/` needs a session of a paired device (`device_required`); a session of a code, made on the PC, does not count
+  there. `tailscale funnel` (public) is never the way.
+- **An SSH tunnel** from an SSH client on the phone to the same loopback port on the PC (`-L <port>:127.0.0.1:<port>`):
+  the hub sees a loopback host, as from the PC itself; the SSH client checks the host key of the PC.
+
+The phone app's shell (`appkit-mobile`) only builds those two kinds of address (an HTTPS tailnet name, or the phone's
+own `127.0.0.1`), follows no redirect, uses no proxy of the system, reads every answer under a time and a byte limit,
+keeps the session in memory and sends only routes of its own app.
+
 ### A new tab of the page
 
 A place of the page (a view, an open item) can stand in the fragment of the address

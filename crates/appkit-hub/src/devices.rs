@@ -54,6 +54,10 @@ struct Stored {
 #[derive(Debug, Serialize, Deserialize)]
 struct File {
     schema: u32,
+    /// The id of this hub, made once with the list: a device sends nothing to a hub that names another (`MSEC-04`).
+    /// A list written before it was there gets one when it is opened.
+    #[serde(default)]
+    hub: Option<String>,
     devices: Vec<Stored>,
 }
 
@@ -92,6 +96,8 @@ struct Challenge {
 /// The devices of a hub and the challenges open for them.
 pub struct DeviceStore {
     path: PathBuf,
+    /// The id of this hub (`hub_id`).
+    hub: String,
     clock: Arc<dyn Clock>,
     devices: Mutex<Vec<Stored>>,
     challenges: Mutex<Vec<Challenge>>,
@@ -166,8 +172,13 @@ impl DeviceStore {
     /// The file is there but cannot be read, is larger than allowed, or is not a list of devices: the hub does not
     /// start rather than forget (or half read) the devices it trusts.
     pub fn open(path: &Path, clock: Arc<dyn Clock>) -> std::io::Result<Self> {
-        let devices = match std::fs::metadata(path) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        let new_id = || {
+            Secret::generate(ID_BYTES)
+                .map(|s| s.to_hex())
+                .map_err(|_| std::io::Error::other("the system has no random source"))
+        };
+        let (hub, devices, write) = match std::fs::metadata(path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (new_id()?, Vec::new(), false),
             Err(e) => return Err(e),
             Ok(meta) => {
                 if meta.len() > MAX_FILE_BYTES {
@@ -182,26 +193,45 @@ impl DeviceStore {
                 if file.schema != 1
                     || file.devices.len() > MAX_DEVICES
                     || !file.devices.iter().all(valid)
+                    || file.hub.as_deref().is_some_and(|h| !is_hex(h, ID_BYTES))
                 {
                     return Err(std::io::Error::other(
                         "the list of devices is not one this hub knows",
                     ));
                 }
-                file.devices
+                match file.hub {
+                    Some(hub) => (hub, file.devices, false),
+                    None => (new_id()?, file.devices, true),
+                }
             }
         };
-        Ok(Self {
+        let store = Self {
             path: path.to_owned(),
+            hub,
             clock,
             devices: Mutex::new(devices),
             challenges: Mutex::new(Vec::new()),
-        })
+        };
+        // A list of an older hub keeps its id from now on: written at once, or the hub does not start (a new id at
+        // every start would make every device pair again).
+        if write {
+            store.persist(&lock(&store.devices))?;
+        }
+        Ok(store)
+    }
+
+    /// The id of this hub: random, made once, kept with the list. Pairing and every challenge name it, so a device
+    /// can tell that it speaks to the hub it paired with before it signs anything.
+    #[must_use]
+    pub fn hub_id(&self) -> &str {
+        &self.hub
     }
 
     /// Write the list: to a file beside it first, then in place, so a crash leaves the old list or the new one.
     fn persist(&self, devices: &[Stored]) -> std::io::Result<()> {
         let text = serde_json::to_string_pretty(&File {
             schema: 1,
+            hub: Some(self.hub.clone()),
             devices: devices.to_vec(),
         })
         .map_err(std::io::Error::other)?;
@@ -466,6 +496,25 @@ mod tests {
     }
 
     #[test]
+    fn the_hub_keeps_one_id_across_restarts_and_an_older_list_gets_one_at_once() {
+        let (s, clock, d) = store("hubid");
+        let path = d.join("devices.json");
+        assert!(is_hex(s.hub_id(), ID_BYTES));
+        s.pair("A", &key(7).1).unwrap();
+        let again = DeviceStore::open(&path, clock.clone()).unwrap();
+        assert_eq!(again.hub_id(), s.hub_id());
+        // A list of a hub before the id: it gets one, written at once, the same at the next start.
+        std::fs::write(&path, r#"{"schema":1,"devices":[]}"#).unwrap();
+        let old = DeviceStore::open(&path, clock.clone()).unwrap();
+        assert!(is_hex(old.hub_id(), ID_BYTES));
+        assert_ne!(old.hub_id(), s.hub_id());
+        assert_eq!(
+            DeviceStore::open(&path, clock).unwrap().hub_id(),
+            old.hub_id()
+        );
+    }
+
+    #[test]
     fn pairing_refuses_bad_names_bad_keys_a_known_key_and_a_full_list() {
         let (s, _, _d) = store("pair");
         let (_, public) = key(7);
@@ -497,6 +546,7 @@ mod tests {
             "not json",
             r#"{"schema":2,"devices":[]}"#,
             r#"{"schema":1,"devices":[{"id":"x","name":"a","key":"04","paired":0,"last_used":null}]}"#,
+            r#"{"schema":1,"hub":"not hex","devices":[]}"#,
         ] {
             std::fs::write(&path, bad).unwrap();
             assert!(DeviceStore::open(&path, clock.clone()).is_err(), "{bad}");

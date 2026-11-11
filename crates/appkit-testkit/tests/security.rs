@@ -111,3 +111,12 @@ async fn without_devices_there_are_no_device_routes() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn the_tailnet_takes_devices_only() {
+    appkit_testkit::security::the_tailnet_takes_devices_only(
+        &appkit_testkit::subjects::DemoDevices::new(),
+        appkit_testkit::subjects::TAILNET_NAME,
+    )
+    .await;
+}

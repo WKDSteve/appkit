@@ -206,7 +206,10 @@ where
         None => None,
     };
     let core = Arc::new(Core {
-        policy: HostPolicy::loopback(addr.port()),
+        policy: match parts.guard_rules.tailnet_name() {
+            Some(name) => HostPolicy::loopback(addr.port()).with_remote(name),
+            None => HostPolicy::loopback(addr.port()),
+        },
         pairing: PairingStore::new(Arc::clone(&parts.clock), parts.pairing_ttl),
         sessions: SessionStore::new(limits.max_sessions),
         control: parts.control_secret,

@@ -1,0 +1,44 @@
+[package]
+name = "appkit-mobile"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "The phone side of an app's hub: the way to the hub, pairing, the device login, bounded requests, the kept state"
+
+[lints]
+workspace = true
+
+[features]
+default = ["net"]
+# The real network (reqwest with rustls): what the app ships. Without it the crate has the logic only, and a test
+# brings its own `Transport`.
+net = ["dep:reqwest"]
+# A device key in memory (`SoftwareSigner`): for tests and the desktop preview of an app, never for a phone, whose key
+# is the platform's (Android Keystore, `AND-05`).
+software-signer = []
+
+[dependencies]
+# Pure Rust ECDSA P-256 (RustCrypto): the software signer and the check of a public key's form. The same version the hub
+# verifies with.
+p256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }
+# The random bytes of a software key and of the ids of queued writes: the version the kit already has.
+getrandom = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The phone speaks to the hub over HTTPS (Tailscale Serve) or plain HTTP to the phone's own loopback (an SSH tunnel).
+# rustls with the Mozilla roots (webpki-roots): no user CAs (`AND-03`), the ring provider (no C toolchain beyond the
+# NDK's clang for the Android build).
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2"], optional = true }
+tokio = { version = "1", default-features = false, features = ["time", "sync"] }
+
+[dev-dependencies]
+appkit-core = { path = "../appkit-core" }
+appkit-hub = { path = "../appkit-hub" }
+appkit-scratch = { path = "../appkit-scratch" }
+appkit-testkit = { path = "../appkit-testkit" }
+appkit-mobile = { path = ".", features = ["software-signer"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros"] }
+# The tests call the hub's control routes as `<program> open` would.
+reqwest = { version = "0.12", default-features = false, features = ["json"] }

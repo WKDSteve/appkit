@@ -111,6 +111,9 @@ impl Pages for TwoPages {
 /// The host `DemoWide` names.
 pub const WIDE_ORIGIN: &str = "https://api.example.org";
 
+/// The name of the machine in the tailnet of `DemoDevices` (`GuardRules::with_tailnet_name`).
+pub const TAILNET_NAME: &str = "pc.example.ts.net";
+
 fn rules() -> GuardRules {
     GuardRules::new(IDENTITY.route("hello"), [IDENTITY.route("ops")])
 }
@@ -185,7 +188,8 @@ impl Subject for DemoWide {
     }
 }
 
-/// The hub with an installable page and paired devices (`GuardRules::with_devices`), its list of devices in a folder of
+/// The hub with an installable page and paired devices (`GuardRules::with_devices`), reached also through the
+/// tailnet as [`TAILNET_NAME`], its list of devices in a folder of
 /// its own that is removed when the value is dropped.
 pub struct DemoDevices {
     dir: appkit_scratch::Scratch,
@@ -224,7 +228,8 @@ impl Subject for DemoDevices {
             cfg,
             rules()
                 .with_installable_page(INSTALLABLE_PREFIX, INSTALLABLE_WORKER_POLICY)
-                .with_devices(self.file()),
+                .with_devices(self.file())
+                .with_tailnet_name(TAILNET_NAME),
             Arc::new(TwoPages),
         )
     }

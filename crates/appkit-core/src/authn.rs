@@ -182,6 +182,8 @@ pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 pub struct HostPolicy {
     hosts: Vec<String>,
     origins: Vec<String>,
+    /// The name of this machine in the tailnet (`pc.example.ts.net`), when Tailscale Serve forwards to the hub.
+    remote: Option<String>,
 }
 
 impl HostPolicy {
@@ -197,7 +199,25 @@ impl HostPolicy {
         Self {
             hosts: names.to_vec(),
             origins,
+            remote: None,
         }
+    }
+
+    /// Also answer to `name`, the name of this machine in the tailnet, as Tailscale Serve forwards it: the `Host`
+    /// `name` exactly (no port: Serve speaks on 443) and the `Origin` `https://name`. The server still binds
+    /// loopback only; a request with this host came through the tunnel, and the guard holds it to what a device may.
+    #[must_use]
+    pub fn with_remote(mut self, name: &str) -> Self {
+        self.hosts.push(name.to_owned());
+        self.origins.push(format!("https://{name}"));
+        self.remote = Some(name.to_owned());
+        self
+    }
+
+    /// Did this `Host` header come through the tailnet (the name of [`HostPolicy::with_remote`])?
+    #[must_use]
+    pub fn is_remote(&self, host: &str) -> bool {
+        self.remote.as_deref() == Some(host)
     }
 
     /// Is this `Host` header one of ours?
@@ -455,6 +475,27 @@ mod tests {
         let a = Secret::generate(TOKEN_BYTES).unwrap();
         let b = Secret::generate(TOKEN_BYTES).unwrap();
         assert!(!a.matches(&b));
+    }
+
+    #[test]
+    fn the_tailnet_name_is_one_more_exact_host_and_its_https_origin() {
+        let p = HostPolicy::loopback(17615).with_remote("pc.example.ts.net");
+        assert!(p.host_ok("pc.example.ts.net"));
+        assert!(p.origin_ok("https://pc.example.ts.net"));
+        assert!(p.is_remote("pc.example.ts.net"));
+        assert!(p.host_ok("127.0.0.1:17615") && !p.is_remote("127.0.0.1:17615"));
+        for bad in [
+            "pc.example.ts.net:443",
+            "PC.example.ts.net",
+            "pc.example.ts.net.",
+            "evil.pc.example.ts.net",
+        ] {
+            assert!(!p.host_ok(bad) && !p.is_remote(bad), "{bad:?}");
+        }
+        for bad in ["http://pc.example.ts.net", "https://pc.example.ts.net:443"] {
+            assert!(!p.origin_ok(bad), "{bad:?}");
+        }
+        assert!(!HostPolicy::loopback(17615).is_remote("pc.example.ts.net"));
     }
 
     #[test]

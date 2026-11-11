@@ -39,6 +39,8 @@ pub struct GuardRules {
     installable: Option<Installable>,
     /// Where the hub keeps its paired devices (`devices.json` in the settings); none: no device keys, only codes.
     devices: Option<std::path::PathBuf>,
+    /// The name of this machine in the tailnet (`with_tailnet_name`); none: loopback names only.
+    tailnet: Option<String>,
 }
 
 /// The routes of device keys (`with_devices`): pair with a code and a public key, ask a challenge, open a session.
@@ -187,7 +189,40 @@ impl GuardRules {
             connect_src: None,
             installable: None,
             devices: None,
+            tailnet: None,
         }
+    }
+
+    /// Let a phone reach the hub through Tailscale Serve (`tailscale serve` forwards
+    /// `https://<name>` to the loopback port of the hub; the hub still binds loopback only, `SRV-01`).
+    /// The guard then also takes the `Host` `name` and the `Origin` `https://<name>`, exactly, and holds a
+    /// request with that host to what a device may: no session of a pairing code (`/auth/exchange` is refused),
+    /// no route of the control secret, and every route below `/api/` only with a session of a paired device.
+    /// Pairing a device (`/auth/device/*`) is what this host is for. Needs `with_devices`.
+    ///
+    /// # Panics
+    ///
+    /// When `name` is not a plain host name (lower-case labels of letters, digits and `-`, at least two, the last
+    /// not all digits; no port, no scheme), or when the app keeps no devices.
+    #[must_use]
+    pub fn with_tailnet_name(mut self, name: impl Into<String>) -> Self {
+        let name = name.into();
+        assert!(
+            !name.contains(':') && plain_https_origin(&format!("https://{name}")),
+            "the tailnet name must be a plain host name like pc.example.ts.net, not {name:?}"
+        );
+        assert!(
+            self.devices.is_some(),
+            "with_tailnet_name needs with_devices first: only devices come through the tailnet"
+        );
+        self.tailnet = Some(name);
+        self
+    }
+
+    /// The name of this machine in the tailnet, if the app named one.
+    #[must_use]
+    pub fn tailnet_name(&self) -> Option<&str> {
+        self.tailnet.as_deref()
     }
 
     /// Let devices pair once with a key of their own (`src/devices.rs`) and keep them in `path` (a file in the
@@ -460,11 +495,11 @@ pub async fn judge<R: Runtime>(st: &Core<R>, class: Class, req: Request, next: N
     let headers = &parts.headers;
 
     // 1. Host
-    match single(headers, &header::HOST) {
-        Ok(Some(host)) if st.policy.host_ok(&host) => {}
+    let remote = match single(headers, &header::HOST) {
+        Ok(Some(host)) if st.policy.host_ok(&host) => st.policy.is_remote(&host),
         Ok(_) => return error_body(StatusCode::FORBIDDEN, "bad_host", "unknown host"),
         Err(()) => return error_body(StatusCode::BAD_REQUEST, "bad_header", "invalid Host header"),
-    }
+    };
 
     let mutation = parts.method != Method::GET;
 
@@ -554,6 +589,19 @@ pub async fn judge<R: Runtime>(st: &Core<R>, class: Class, req: Request, next: N
         return error_body(StatusCode::NOT_FOUND, "not_found", "no such route");
     }
 
+    // Through the tailnet only what a device does: pair, prove itself, use its session. The control secret and a
+    // session of a pairing code belong to this machine.
+    if remote
+        && (class == Class::ControlPair
+            || (class == Class::Exchange && parts.uri.path() == "/auth/exchange"))
+    {
+        return error_body(
+            StatusCode::FORBIDDEN,
+            "not_on_tailnet",
+            "this route is for the PC only",
+        );
+    }
+
     // 5. A mutation without an Origin is a program client, never a browser.
     if mutation && origin.is_none() && (fetch_site.is_some() || class == Class::Exchange) {
         return error_body(
@@ -593,9 +641,22 @@ pub async fn judge<R: Runtime>(st: &Core<R>, class: Class, req: Request, next: N
             }
         }
         Class::Api => {
-            let ok = bearer(headers).is_some_and(|t| st.sessions.check(&t));
+            let token = bearer(headers);
+            let ok = token.as_deref().is_some_and(|t| st.sessions.check(t));
             if !ok {
                 return error_body(StatusCode::UNAUTHORIZED, "unauthorized", "session required");
+            }
+            if remote
+                && token
+                    .as_deref()
+                    .and_then(|t| st.sessions.device_of(t))
+                    .is_none()
+            {
+                return error_body(
+                    StatusCode::FORBIDDEN,
+                    "device_required",
+                    "through the tailnet only a paired device has a session",
+                );
             }
         }
     }

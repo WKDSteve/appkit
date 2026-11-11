@@ -156,3 +156,26 @@ export {
   type TooltipOptions,
   type TooltipParams,
 } from './tooltip';
+export {
+  ipcFetch,
+  isWay,
+  LinkError,
+  nextStep,
+  WAY_ABILITIES,
+  type Bridge,
+  type BridgeRequest,
+  type BridgeResponse,
+  type Connection as MobileConnection,
+  type LinkFailure,
+  type Way,
+  type WayAbilities,
+} from './mobile';
+export {
+  WriteQueue,
+  type FlushReport,
+  type Pending,
+  type PendingState,
+  type QueueDeps,
+  type QueueStore,
+  type SendOutcome,
+} from './queue';

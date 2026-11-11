@@ -22,6 +22,9 @@ allow = [
     # its Linux backend inotify is ISC, a permissive license like MIT.
     "CC0-1.0",
     "ISC",
+    # webpki-roots (the Mozilla roots of appkit-mobile's TLS, a list of certificates, no code) is under the
+    # Community Data License Agreement, Permissive 2.0: use and share freely, keep the notice.
+    "CDLA-Permissive-2.0",
 ]
 
 [bans]

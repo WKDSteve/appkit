@@ -139,12 +139,13 @@ fn no_devices() -> Response {
 
 fn session_answer(
     made: Result<Secret, appkit_core::authn::RandomError>,
-    device: Option<&str>,
+    device: Option<(&str, &str)>,
 ) -> Response {
     match made {
         Ok(token) => match device {
-            Some(id) => {
-                axum::Json(json!({ "device": id, "token": token.to_hex() })).into_response()
+            Some((id, hub)) => {
+                axum::Json(json!({ "device": id, "hub": hub, "token": token.to_hex() }))
+                    .into_response()
             }
             None => axum::Json(json!({ "token": token.to_hex() })).into_response(),
         },
@@ -187,7 +188,10 @@ pub async fn device_pair<R: Runtime>(State(st): State<Arc<Core<R>>>, body: Bytes
         );
     }
     match devices.pair(&request.name, &request.key) {
-        Ok(id) => session_answer(st.sessions.create_for_device(&id), Some(&id)),
+        Ok(id) => session_answer(
+            st.sessions.create_for_device(&id),
+            Some((&id, devices.hub_id())),
+        ),
         Err(crate::devices::PairError::Full) => error_body(
             StatusCode::CONFLICT,
             "devices_full",
@@ -227,7 +231,9 @@ pub async fn device_challenge<R: Runtime>(State(st): State<Arc<Core<R>>>, body: 
         return error_body(StatusCode::BAD_REQUEST, "bad_body", "invalid request body");
     };
     match devices.challenge(&request.device) {
-        Ok(challenge) => axum::Json(json!({ "challenge": challenge })).into_response(),
+        Ok(challenge) => {
+            axum::Json(json!({ "challenge": challenge, "hub": devices.hub_id() })).into_response()
+        }
         Err(_) => error_body(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal",
@@ -280,7 +286,7 @@ pub async fn device_session<R: Runtime>(
     }
     session_answer(
         st.sessions.create_for_device(&request.device),
-        Some(&request.device),
+        Some((&request.device, devices.hub_id())),
     )
 }
 
