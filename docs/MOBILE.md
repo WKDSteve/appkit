@@ -55,6 +55,44 @@ The hub cuts, never the phone (`MOB-02`):
   form (the data classes asked, private and unclassified left out); a raw vault, or an export that does not say its
   classes were asked, is refused. Never clone a vault with private parts onto a phone.
 
+## Rights of a device
+
+Each device has a level, which the hub checks on every request (`MOB-03`):
+
+| Level | May |
+|---|---|
+| `read` | read what is released for devices |
+| `create` | also create (a new entry, an answer); the default of a new device |
+| `change` | also change (a status, a field) |
+| `trigger` | also start something on the PC, each time confirmed on the phone |
+
+- The app names the level of each route it releases: `GuardRules::with_device_route(path, Level::Read)`. A device below
+  it gets `403 level_too_low`. An app may raise the default of a new device to `change`
+  (`with_device_default_level`); `trigger` is never a default.
+- The PC sets the level of a device (`/api/control/devices/level` with the control secret, the command line below);
+  an open session follows at once.
+- A trigger carries the confirmation of that very request: a second key of the phone, kept behind its biometrics or
+  its lock (Android Keystore with user authentication, `AND-05`), signs the method, the path with its query and the
+  SHA-256 of the body with a fresh challenge of the hub (`x-device-confirm: <challenge>.<signature>`). Without it, with
+  a wrong or spent one, or from a phone paired without that key: `403 confirm_required`. The phone shows the prompt
+  before it signs; cancelling sends nothing (`appkit-mobile`: `Link::trigger`).
+- Never from a phone, at any level, because no app releases a route for it: trusting a commit of somebody else
+  (`testing ci trust`), pushing, deleting for good, any command of the person's choice. Each app's tests prove that its
+  released routes hold none of these.
+
+## On the PC: the command line
+
+An app's hub offers (with `appkit-hub::phone`):
+
+```
+<program> phone pair [--tailnet <pc>.<tailnet>.ts.net]   a one-time pairing link and its QR code (60 s)
+<program> phone list                                     the paired devices: id, name, level, confirmation key
+<program> phone level <id> read|create|change|trigger    set the level of a device
+<program> phone revoke <id>                              forget a device; its sessions end at once
+```
+
+Without `--tailnet` the link names the loopback port, for a phone behind an SSH tunnel.
+
 ## Pairing
 
 The PC shows a pairing link, as a QR code or as text:
@@ -65,9 +103,9 @@ http://127.0.0.1:<port>/#appkit-pair=1&app=<namespace>&code=<32 hex digits>
 ```
 
 The code is good once, for 60 s, and stands in the fragment (no server sees it). The phone checks that the hub there is
-of its app (`hello`), sends its public key with the code, and keeps the device id and the id of the hub. The key is the
-platform's (Android Keystore) and never leaves the phone. Every start of the app signs a challenge of the hub; a hub
-that names another id gets no signature.
+of its app (`hello`), sends its public key (and the public key that confirms triggers) with the code, and keeps the
+device id and the id of the hub. The keys are the platform's (Android Keystore) and never leave the phone. Every start
+of the app signs a challenge of the hub; a hub that names another id gets no signature.
 
 ## Losing a phone
 

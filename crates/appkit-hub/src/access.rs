@@ -113,6 +113,10 @@ pub struct DevicePairRequest {
     pub name: String,
     /// The public key, SEC1 uncompressed P-256, lower-case hex.
     pub key: String,
+    /// The key that confirms a trigger, kept by the device behind its biometrics or lock; as `key`. Optional: a
+    /// device without it never triggers.
+    #[serde(default)]
+    pub confirm_key: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -131,6 +135,12 @@ pub struct DeviceSessionRequest {
 #[derive(Deserialize)]
 pub struct DeviceRevokeRequest {
     pub device: String,
+}
+
+#[derive(Deserialize)]
+pub struct DeviceLevelRequest {
+    pub device: String,
+    pub level: String,
 }
 
 fn no_devices() -> Response {
@@ -173,7 +183,9 @@ pub async fn device_pair<R: Runtime>(State(st): State<Arc<Core<R>>>, body: Bytes
         return error_body(StatusCode::BAD_REQUEST, "bad_body", "invalid request body");
     };
     // The key and the name are checked before the code is spent: a mistake of the page does not cost the code.
-    if crate::devices::check_pairing(&request.name, &request.key).is_err() {
+    if crate::devices::check_pairing(&request.name, &request.key, request.confirm_key.as_deref())
+        .is_err()
+    {
         return error_body(
             StatusCode::BAD_REQUEST,
             "bad_device",
@@ -187,7 +199,12 @@ pub async fn device_pair<R: Runtime>(State(st): State<Arc<Core<R>>>, body: Bytes
             "the code is not valid",
         );
     }
-    match devices.pair(&request.name, &request.key) {
+    match devices.pair(
+        &request.name,
+        &request.key,
+        request.confirm_key.as_deref(),
+        st.guard_rules.device_default_level(),
+    ) {
         Ok(id) => session_answer(
             st.sessions.create_for_device(&id),
             Some((&id, devices.hub_id())),
@@ -296,6 +313,32 @@ pub async fn control_devices<R: Runtime>(State(st): State<Arc<Core<R>>>) -> Resp
         return no_devices();
     };
     axum::Json(json!({ "devices": devices.list() })).into_response()
+}
+
+/// Set the level of a device, for the PC (control secret). Its open sessions keep going at the new level: the guard
+/// asks the level on every request.
+pub async fn control_level<R: Runtime>(State(st): State<Arc<Core<R>>>, body: Bytes) -> Response {
+    let Some(devices) = &st.devices else {
+        return no_devices();
+    };
+    let Ok(request) = serde_json::from_slice::<DeviceLevelRequest>(&body) else {
+        return error_body(StatusCode::BAD_REQUEST, "bad_body", "invalid request body");
+    };
+    let Some(level) = crate::devices::Level::parse(&request.level) else {
+        return error_body(
+            StatusCode::BAD_REQUEST,
+            "bad_level",
+            "read, create, change or trigger",
+        );
+    };
+    match devices.set_level(&request.device, level) {
+        Ok(found) => axum::Json(json!({ "set": found })).into_response(),
+        Err(_) => error_body(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            "the list of devices could not be written; the level is as it was",
+        ),
+    }
 }
 
 /// Revoke a device, for the PC (control secret): it is forgotten and its sessions are closed.

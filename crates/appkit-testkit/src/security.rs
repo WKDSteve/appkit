@@ -1256,8 +1256,13 @@ impl TestDevice {
     }
 
     fn sign(&self, origin: &str, device: &str, challenge: &str) -> String {
+        self.sign_text(&appkit_hub::devices::login_message(
+            origin, device, challenge,
+        ))
+    }
+
+    fn sign_text(&self, message: &str) -> String {
         use p256::ecdsa::signature::Signer;
-        let message = appkit_hub::devices::login_message(origin, device, challenge);
         let sig: p256::ecdsa::Signature = self.key.sign(message.as_bytes());
         hex(&sig.to_bytes())
     }
@@ -1515,6 +1520,253 @@ pub async fn another_app_may_open_the_installable_page_and_nothing_else(
         r.status, 403,
         "a route of data, even as a navigation: {r:?}"
     );
+}
+
+/// The SHA-256 of a body, as hex.
+fn sha256_hex(body: &str) -> String {
+    use sha2::Digest;
+    hex(&sha2::Sha256::digest(body.as_bytes()))
+}
+
+/// A challenge of the hub for `id`.
+async fn challenge_for(h: &Harness, id: &str) -> String {
+    let origin = h.origin();
+    let r = post(
+        h,
+        appkit_hub::guard::DEVICE_CHALLENGE_PATH,
+        &[("Origin", &origin)],
+        &serde_json::json!({ "device": id }).to_string(),
+    )
+    .await;
+    assert_eq!(r.status, 200, "{r:?}");
+    r.json()["challenge"]
+        .as_str()
+        .expect("a challenge")
+        .to_owned()
+}
+
+/// The PC sets the level of a device with the control secret.
+async fn set_level(h: &Harness, id: &str, level: &str) -> Reply {
+    let control = bearer(&h.control);
+    post(
+        h,
+        appkit_hub::guard::CONTROL_LEVEL_PATH,
+        &[("Authorization", &control)],
+        &serde_json::json!({ "device": id, "level": level }).to_string(),
+    )
+    .await
+}
+
+/// The levels of a device, enforced by the hub per request (`GuardRules::with_device_route`, `MOB-03`): a new device
+/// reads and creates (`read_route`, `create_route`), but cannot change (`change_route`) or trigger (`trigger_route`);
+/// the PC raises it (never a session, never through the tailnet), an open session follows at once, and lowering works
+/// the same way. A trigger also needs the device's confirmation of that very request: none, a wrong one, one for
+/// another body or path, a spent one, or a device paired without a confirmation key are all refused; a good one passes
+/// the body to the route unchanged. A session of the PC is not held to levels.
+pub async fn a_device_does_only_what_its_level_allows_and_triggers_only_confirmed(
+    s: &dyn Subject,
+    read_route: &str,
+    create_route: &str,
+    change_route: &str,
+    trigger_route: &str,
+) {
+    let h = Harness::new(s).await;
+    let origin = h.origin();
+    let login = TestDevice::new(7);
+    let confirm = TestDevice::new(8);
+    let code = mint_code(&h).await;
+    let body = serde_json::json!({
+        "code": code, "name": "Phone", "key": login.public(), "confirm_key": confirm.public(),
+    })
+    .to_string();
+    let r = post(
+        &h,
+        appkit_hub::guard::DEVICE_PAIR_PATH,
+        &[("Origin", &origin)],
+        &body,
+    )
+    .await;
+    assert_eq!(r.status, 200, "{r:?}");
+    let id = r.json()["device"].as_str().expect("an id").to_owned();
+    let auth = bearer(r.json()["token"].as_str().expect("a token"));
+    let send = |path: String, extra: Vec<(&'static str, String)>, body: &'static str| {
+        let auth = auth.clone();
+        let origin = origin.clone();
+        let h = &h;
+        async move {
+            let mut headers: Vec<(&str, &str)> = vec![
+                ("Authorization", auth.as_str()),
+                ("Origin", origin.as_str()),
+            ];
+            for (k, v) in &extra {
+                headers.push((k, v.as_str()));
+            }
+            post(h, &path, &headers, body).await
+        }
+    };
+    let status = |r: &Reply| {
+        (
+            r.status,
+            r.json()["error"]["code"].as_str().map(str::to_owned),
+        )
+    };
+    // A new device: read and create.
+    let r = get(&h, &h.route(read_route), &[("Authorization", &auth)]).await;
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(send(h.route(create_route), vec![], "{}").await.status, 200);
+    for route in [change_route, trigger_route] {
+        let r = send(h.route(route), vec![], "{}").await;
+        assert_eq!(
+            status(&r),
+            (403, Some("level_too_low".to_owned())),
+            "{route}"
+        );
+    }
+    // Only the PC sets a level: not a session, not the device itself.
+    let r = post(
+        &h,
+        appkit_hub::guard::CONTROL_LEVEL_PATH,
+        &[("Authorization", &auth)],
+        &serde_json::json!({ "device": id, "level": "trigger" }).to_string(),
+    )
+    .await;
+    assert_eq!(r.status, 401, "{r:?}");
+    assert_eq!(set_level(&h, &id, "everything").await.status, 400);
+    assert_eq!(set_level(&h, &id, "change").await.status, 200);
+    assert_eq!(send(h.route(change_route), vec![], "{}").await.status, 200);
+    let r = send(h.route(trigger_route), vec![], "{}").await;
+    assert_eq!(status(&r), (403, Some("level_too_low".to_owned())));
+    // Trigger: only with the confirmation of this very request.
+    assert_eq!(set_level(&h, &id, "trigger").await.status, 200);
+    let path = h.route(trigger_route);
+    let body = r#"{"key":"lib.nvim"}"#;
+    let confirm_header = |challenge: &str, signer: &TestDevice, method: &str, p: &str, b: &str| {
+        let message = appkit_hub::devices::confirm_message(
+            &origin,
+            &id,
+            challenge,
+            method,
+            p,
+            &sha256_hex(b),
+        );
+        format!("{challenge}.{}", signer.sign_text(&message))
+    };
+    let r = send(path.clone(), vec![], body).await;
+    assert_eq!(
+        status(&r),
+        (403, Some("confirm_required".to_owned())),
+        "none"
+    );
+    // Each wrong one with a fresh challenge of its own: the login key instead of the confirmation key, another body,
+    // another path, a challenge the hub never gave, no signature at all.
+    let other = h.route(create_route);
+    let cases: [(&TestDevice, &str, &str, bool); 4] = [
+        (&login, path.as_str(), body, false),
+        (&confirm, path.as_str(), "{}", false),
+        (&confirm, other.as_str(), body, false),
+        (&confirm, path.as_str(), body, true),
+    ];
+    for (signer, p, b, made_up) in cases {
+        let c = if made_up {
+            "00".repeat(32)
+        } else {
+            challenge_for(&h, &id).await
+        };
+        let header = confirm_header(&c, signer, "POST", p, b);
+        let r = send(
+            path.clone(),
+            vec![("x-device-confirm", header.clone())],
+            body,
+        )
+        .await;
+        assert_eq!(
+            status(&r),
+            (403, Some("confirm_required".to_owned())),
+            "{p} {b} {made_up}"
+        );
+    }
+    let r = send(
+        path.clone(),
+        vec![("x-device-confirm", "garbage".to_owned())],
+        body,
+    )
+    .await;
+    assert_eq!(status(&r), (403, Some("confirm_required".to_owned())));
+    let c = challenge_for(&h, &id).await;
+    let good = confirm_header(&c, &confirm, "POST", &path, body);
+    let r = send(path.clone(), vec![("x-device-confirm", good.clone())], body).await;
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(r.body, body, "the route got the body as it was confirmed");
+    // Spent.
+    let r = send(path.clone(), vec![("x-device-confirm", good)], body).await;
+    assert_eq!(
+        status(&r),
+        (403, Some("confirm_required".to_owned())),
+        "replay"
+    );
+    // Lowered again: the open session follows at once.
+    assert_eq!(set_level(&h, &id, "read").await.status, 200);
+    let r = send(h.route(create_route), vec![], "{}").await;
+    assert_eq!(status(&r), (403, Some("level_too_low".to_owned())));
+    // A device paired without a confirmation key never triggers, whatever its level.
+    let plain = TestDevice::new(9);
+    let code = mint_code(&h).await;
+    let r = device_pair(&h, &code, "Old phone", &plain.public()).await;
+    let plain_id = r.json()["device"].as_str().expect("an id").to_owned();
+    let plain_auth = bearer(r.json()["token"].as_str().expect("a token"));
+    assert_eq!(set_level(&h, &plain_id, "trigger").await.status, 200);
+    let c = challenge_for(&h, &plain_id).await;
+    let message = appkit_hub::devices::confirm_message(
+        &origin,
+        &plain_id,
+        &c,
+        "POST",
+        &path,
+        &sha256_hex(body),
+    );
+    let header = format!("{c}.{}", plain.sign_text(&message));
+    let r = post(
+        &h,
+        &path,
+        &[
+            ("Authorization", plain_auth.as_str()),
+            ("Origin", origin.as_str()),
+            ("x-device-confirm", header.as_str()),
+        ],
+        body,
+    )
+    .await;
+    assert_eq!(status(&r), (403, Some("confirm_required".to_owned())));
+    // The list says the levels and whether a device can confirm, and no key.
+    let control = bearer(&h.control);
+    let r = post(
+        &h,
+        appkit_hub::guard::CONTROL_DEVICES_PATH,
+        &[("Authorization", &control)],
+        "{}",
+    )
+    .await;
+    let list = r.json();
+    let entry = |want: &str| {
+        list["devices"]
+            .as_array()
+            .and_then(|a| a.iter().find(|d| d["id"] == want).cloned())
+            .expect("listed")
+    };
+    assert_eq!(entry(&id)["level"], "read");
+    assert_eq!(entry(&id)["confirm"], true);
+    assert_eq!(entry(&plain_id)["confirm"], false);
+    assert!(!r.body.contains(&confirm.public()), "{}", r.body);
+    // The PC's own session is not a device: no level, no confirmation.
+    let pc = bearer(&session(&h).await);
+    let r = post(
+        &h,
+        &path,
+        &[("Authorization", pc.as_str()), ("Origin", origin.as_str())],
+        body,
+    )
+    .await;
+    assert_eq!(r.status, 200, "{r:?}");
 }
 
 /// A device and its session, paired with a fresh code.

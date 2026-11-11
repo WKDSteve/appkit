@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use appkit_core::identity::AppIdentity;
 use appkit_hub::{
-    serve, BoxFuture, Caller, Core, DataClass, GuardRules, HubStatus, Page, Pages, RunningServer,
-    Runtime, ServeParts,
+    serve, BoxFuture, Caller, Core, DataClass, GuardRules, HubStatus, Level, Page, Pages,
+    RunningServer, Runtime, ServeParts,
 };
 use axum::routing::{get, post};
 use axum::{Extension, Router};
@@ -80,6 +80,12 @@ fn routes(_core: &Arc<Core<DemoRuntime>>) -> Router<Arc<Core<DemoRuntime>>> {
             }),
         )
         .route(&IDENTITY.route("pc-only"), get(|| async { "{}" }))
+        .route(&IDENTITY.route("status"), post(|| async { "{}" }))
+        // A trigger answers with the body it was given, so a test sees what reached the route.
+        .route(
+            &IDENTITY.route("run"),
+            post(|body: String| async move { body }),
+        )
 }
 
 /// The hub of the second app, with no engine and no page.
@@ -252,10 +258,12 @@ impl Subject for DemoDevices {
                 .with_installable_page(INSTALLABLE_PREFIX, INSTALLABLE_WORKER_POLICY)
                 .with_devices(self.file())
                 .with_tailnet_name(TAILNET_NAME)
-                .with_device_route(IDENTITY.route("items"))
-                .with_device_route(IDENTITY.route("item"))
-                .with_device_route(IDENTITY.route("ops"))
-                .with_device_route(IDENTITY.route("classified")),
+                .with_device_route(IDENTITY.route("items"), Level::Read)
+                .with_device_route(IDENTITY.route("item"), Level::Read)
+                .with_device_route(IDENTITY.route("ops"), Level::Create)
+                .with_device_route(IDENTITY.route("classified"), Level::Read)
+                .with_device_route(IDENTITY.route("status"), Level::Change)
+                .with_device_route(IDENTITY.route("run"), Level::Trigger),
             Arc::new(TwoPages),
         )
     }

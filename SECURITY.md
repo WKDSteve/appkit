@@ -151,6 +151,16 @@ Every route below `/api/` can read who asks (`Caller`, set by the guard) and giv
 `public` and `internal` (`appkit-core/src/classes.rs`): no class, or one not known, is `unclassified` and stays on the
 PC like `private`.
 
+Each device has a level (`read`, `create`, `change`, `trigger`; a new one gets `create`, or the app's default, never
+`trigger`). Each released route names the level it needs, and the guard compares it on every request with the level
+the device has now, so a level the PC lowers (`/api/control/devices/level`, control secret) holds for an open session
+at once (`403 level_too_low`). A route of the level `trigger` also needs, per request, a signature of the device's
+second key (paired as `confirm_key`, kept by the phone behind its biometrics or lock) over
+`appkit-device-confirm/1`, the origin, the device, a fresh challenge, the method with the path and query, and the
+SHA-256 of the body; the guard reads the body (within the body limit), checks it, and hands the same bytes to the route.
+Missing, wrong, spent, or from a device without that key: `403 confirm_required`. A session of the PC is no device and
+is held to none of this.
+
 The phone app's shell (`appkit-mobile`) only builds those two kinds of address (an HTTPS tailnet name, or the phone's
 own `127.0.0.1`), follows no redirect, uses no proxy of the system, reads every answer under a time and a byte limit,
 keeps the session in memory and sends only routes of its own app.

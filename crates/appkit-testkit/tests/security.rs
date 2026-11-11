@@ -132,3 +132,15 @@ async fn a_device_reaches_only_released_routes_and_no_private_data() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn a_device_does_only_what_its_level_allows_and_triggers_only_confirmed() {
+    appkit_testkit::security::a_device_does_only_what_its_level_allows_and_triggers_only_confirmed(
+        &appkit_testkit::subjects::DemoDevices::new(),
+        "items",
+        "ops",
+        "status",
+        "run",
+    )
+    .await;
+}

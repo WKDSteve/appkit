@@ -29,6 +29,24 @@ pub fn login_message(origin: &str, device: &str, challenge: &str) -> String {
     format!("appkit-device-login/1\n{origin}\n{device}\n{challenge}")
 }
 
+/// What the confirmation key signs to trigger one request: the same text as `appkit_hub::devices::confirm_message`.
+#[must_use]
+pub fn confirm_message(
+    origin: &str,
+    device: &str,
+    challenge: &str,
+    method: &str,
+    path_and_query: &str,
+    body_sha256: &str,
+) -> String {
+    format!(
+        "appkit-device-confirm/1\n{origin}\n{device}\n{challenge}\n{method} {path_and_query}\n{body_sha256}"
+    )
+}
+
+/// The header a trigger carries its confirmation in.
+pub const CONFIRM_HEADER: &str = "x-device-confirm";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Method {
     Get,
@@ -297,6 +315,7 @@ async fn post_json(
 pub async fn pair(
     transport: Arc<dyn Transport>,
     signer: Arc<dyn Signer>,
+    confirm: Option<Arc<dyn Signer>>,
     routes: &AppRoutes,
     link: &PairLink,
     name: &str,
@@ -323,11 +342,15 @@ pub async fn pair(
         return Err(LinkError::OtherApp);
     }
     let key = signer.public_key().await?;
+    let mut body = json!({ "code": link.code, "name": name, "key": key });
+    if let Some(confirm) = &confirm {
+        body["confirm_key"] = Value::String(confirm.public_key().await?);
+    }
     let answer = post_json(
         transport.as_ref(),
         &link.address,
         DEVICE_PAIR_PATH,
-        &json!({ "code": link.code, "name": name, "key": key }),
+        &body,
         limits,
     )
     .await?;
@@ -343,7 +366,8 @@ pub async fn pair(
         name: name.to_owned(),
     };
     let token = token_field(&doc)?;
-    let link = Link::new(transport, signer, routes.clone(), paired.clone(), limits);
+    let link =
+        Link::new(transport, signer, routes.clone(), paired.clone(), limits).with_confirm(confirm);
     *link.session.lock().await = Some(token);
     Ok((paired, link))
 }
@@ -352,6 +376,8 @@ pub async fn pair(
 pub struct Link {
     transport: Arc<dyn Transport>,
     signer: Arc<dyn Signer>,
+    /// The key that confirms a trigger (behind the phone's biometrics or lock); none: this phone never triggers.
+    confirm: Option<Arc<dyn Signer>>,
     routes: AppRoutes,
     paired: Paired,
     limits: Limits,
@@ -372,6 +398,7 @@ impl Link {
         Self {
             transport,
             signer,
+            confirm: None,
             routes,
             paired,
             limits,
@@ -379,17 +406,23 @@ impl Link {
         }
     }
 
+    /// The key that confirms a trigger, the one whose public half was sent at pairing.
+    #[must_use]
+    pub fn with_confirm(mut self, confirm: Option<Arc<dyn Signer>>) -> Self {
+        self.confirm = confirm;
+        self
+    }
+
     #[must_use]
     pub fn paired(&self) -> &Paired {
         &self.paired
     }
 
-    /// Open a session: ask a challenge, check that the hub names the id it named at pairing, sign, and get a token.
-    async fn login(&self) -> Result<String, LinkError> {
-        let address = &self.paired.address;
+    /// A challenge of the hub, once it named the id it named at pairing: before anything is signed (`MSEC-04`).
+    async fn challenge(&self) -> Result<String, LinkError> {
         let asked = post_json(
             self.transport.as_ref(),
-            address,
+            &self.paired.address,
             DEVICE_CHALLENGE_PATH,
             &json!({ "device": self.paired.device }),
             self.limits,
@@ -399,11 +432,16 @@ impl Link {
             return Err(refusal(&asked));
         }
         let doc = object(&asked)?;
-        // Before anything is signed: is this the hub of the pairing?
         if doc["hub"].as_str() != Some(self.paired.hub.as_str()) {
             return Err(LinkError::OtherHub);
         }
-        let challenge = hex_field(&doc, "challenge", 32)?;
+        hex_field(&doc, "challenge", 32)
+    }
+
+    /// Open a session: ask a challenge, check that the hub names the id it named at pairing, sign, and get a token.
+    async fn login(&self) -> Result<String, LinkError> {
+        let address = &self.paired.address;
+        let challenge = self.challenge().await?;
         let message = login_message(address.origin(), &self.paired.device, &challenge);
         let signature = self.signer.sign(message.as_bytes()).await?;
         let answer = post_json(
@@ -429,11 +467,27 @@ impl Link {
         body: &[u8],
         if_none_match: Option<&str>,
     ) -> Result<Response, NetError> {
+        self.send_full(token, method, path, body, if_none_match, None)
+            .await
+    }
+
+    async fn send_full(
+        &self,
+        token: &str,
+        method: Method,
+        path: &str,
+        body: &[u8],
+        if_none_match: Option<&str>,
+        confirm: Option<&str>,
+    ) -> Result<Response, NetError> {
         let address = &self.paired.address;
         let mut headers = vec![
             ("Origin", address.origin().to_owned()),
             ("Authorization", format!("Bearer {token}")),
         ];
+        if let Some(value) = confirm {
+            headers.push((CONFIRM_HEADER, value.to_owned()));
+        }
         if method == Method::Post {
             headers.push(("Content-Type", "application/json".to_owned()));
         }
@@ -491,6 +545,55 @@ impl Link {
         *session = Some(token.clone());
         Ok(self
             .send_with(&token, method, path, body, if_none_match)
+            .await?)
+    }
+
+    /// Start something on the PC (a route the app released at the level `trigger`): the confirmation key signs this
+    /// very request (method, path and body) with a fresh challenge, which on a phone asks for the biometrics or the
+    /// lock first (`MOB-03`, `AND-05`). Sent once: a lost answer is reported, never repeated (`MOB-07`). When the
+    /// session was gone the same confirmation is sent again after a new login: the guard refused before it looked at
+    /// the confirmation, so nothing ran.
+    ///
+    /// # Errors
+    ///
+    /// [`LinkError::Sign`] with [`SignError::Cancelled`] when the person did not confirm, [`SignError::Gone`] when this
+    /// phone has no confirmation key; else as [`Link::fetch`].
+    pub async fn trigger(&self, path: &str, body: &[u8]) -> Result<Response, LinkError> {
+        use sha2::Digest;
+        if !self.routes.allows(path) {
+            return Err(LinkError::NotAllowed);
+        }
+        let Some(confirm) = &self.confirm else {
+            return Err(LinkError::Sign(SignError::Gone));
+        };
+        let mut session = self.session.lock().await;
+        if session.is_none() {
+            *session = Some(self.login().await?);
+        }
+        let challenge = self.challenge().await?;
+        let digest = crate::hex(&sha2::Sha256::digest(body));
+        let message = confirm_message(
+            self.paired.address.origin(),
+            &self.paired.device,
+            &challenge,
+            "POST",
+            path,
+            &digest,
+        );
+        let signature = confirm.sign(message.as_bytes()).await?;
+        let header = format!("{challenge}.{signature}");
+        let token = session.clone().unwrap_or_default();
+        let response = self
+            .send_full(&token, Method::Post, path, body, None, Some(&header))
+            .await?;
+        if response.status != 401 {
+            return Ok(response);
+        }
+        *session = None;
+        let token = self.login().await?;
+        *session = Some(token.clone());
+        Ok(self
+            .send_full(&token, Method::Post, path, body, None, Some(&header))
             .await?)
     }
 

@@ -120,6 +120,7 @@ async fn a_phone_pairs_reads_logs_in_again_and_is_refused_once_revoked() {
     let (paired, link) = pair(
         net(),
         signer.clone(),
+        None,
         &routes(),
         &hub.link().await,
         "Fairphone",
@@ -170,6 +171,7 @@ async fn nothing_is_signed_for_a_hub_that_names_another_id() {
     let (mut paired, _) = pair(
         net(),
         counting.clone(),
+        None,
         &routes(),
         &hub.link().await,
         "Fairphone",
@@ -196,6 +198,7 @@ async fn pairing_checks_the_app_and_a_code_is_good_once() {
         pair(
             net(),
             Arc::new(SoftwareSigner::random()),
+            None,
             &other,
             &link,
             "x",
@@ -210,6 +213,7 @@ async fn pairing_checks_the_app_and_a_code_is_good_once() {
         pair(
             net(),
             Arc::new(SoftwareSigner::random()),
+            None,
             &routes(),
             &link,
             "x",
@@ -223,6 +227,7 @@ async fn pairing_checks_the_app_and_a_code_is_good_once() {
     pair(
         net(),
         Arc::new(SoftwareSigner::random()),
+        None,
         &routes(),
         &link,
         "x",
@@ -233,6 +238,7 @@ async fn pairing_checks_the_app_and_a_code_is_good_once() {
     let spent = pair(
         net(),
         Arc::new(SoftwareSigner::random()),
+        None,
         &routes(),
         &link,
         "y",
@@ -257,6 +263,7 @@ async fn an_answer_over_the_limit_or_late_is_not_taken() {
     let r = pair(
         net(),
         Arc::new(SoftwareSigner::random()),
+        None,
         &routes(),
         &hub.link().await,
         "x",
@@ -285,6 +292,7 @@ async fn an_answer_over_the_limit_or_late_is_not_taken() {
     let r = pair(
         net(),
         Arc::new(SoftwareSigner::random()),
+        None,
         &routes(),
         &link,
         "x",
@@ -305,6 +313,7 @@ async fn an_answer_over_the_limit_or_late_is_not_taken() {
     let r = pair(
         net(),
         Arc::new(SoftwareSigner::random()),
+        None,
         &routes(),
         &link,
         "x",
@@ -327,6 +336,7 @@ async fn after_a_session_the_kept_copy_holds_no_private_data_and_serves_when_the
     let (paired, link) = pair(
         net(),
         signer.clone(),
+        None,
         &routes(),
         &hub.link().await,
         "Fairphone",
@@ -359,4 +369,141 @@ async fn after_a_session_the_kept_copy_holds_no_private_data_and_serves_when_the
     assert!(r.kept);
     assert_eq!(r.fetched_at, 100);
     assert!(r.body.contains("own-area"));
+}
+
+#[test]
+fn the_signed_texts_are_the_hubs_byte_for_byte() {
+    assert_eq!(
+        appkit_mobile::link::login_message("o", "d", "c"),
+        appkit_hub::devices::login_message("o", "d", "c")
+    );
+    assert_eq!(
+        appkit_mobile::link::confirm_message("o", "d", "c", "POST", "/api/x?y=1", "ab"),
+        appkit_hub::devices::confirm_message("o", "d", "c", "POST", "/api/x?y=1", "ab")
+    );
+}
+
+/// What the person does at the prompt: confirm, or cancel.
+struct Prompt {
+    key: SoftwareSigner,
+    yes: bool,
+    asked: AtomicUsize,
+}
+
+impl Signer for Prompt {
+    fn public_key(&self) -> BoxFuture<'_, Result<String, SignError>> {
+        self.key.public_key()
+    }
+    fn sign<'a>(&'a self, message: &'a [u8]) -> BoxFuture<'a, Result<String, SignError>> {
+        self.asked.fetch_add(1, Ordering::SeqCst);
+        if self.yes {
+            self.key.sign(message)
+        } else {
+            Box::pin(async { Err(SignError::Cancelled) })
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_trigger_runs_only_at_its_level_and_with_the_persons_confirmation() {
+    let hub = hub().await;
+    let prompt = Arc::new(Prompt {
+        key: SoftwareSigner::random(),
+        yes: true,
+        asked: AtomicUsize::new(0),
+    });
+    let login: Arc<SoftwareSigner> = Arc::new(SoftwareSigner::random());
+    let (paired, link) = pair(
+        net(),
+        login.clone(),
+        Some(prompt.clone()),
+        &routes(),
+        &hub.link().await,
+        "Fairphone",
+        Limits::default(),
+    )
+    .await
+    .unwrap();
+    // A new device may not trigger: the hub says so, after the person confirmed on the phone.
+    let r = link
+        .trigger("/api/demo/run", br#"{"key":"a"}"#)
+        .await
+        .unwrap();
+    assert_eq!(r.status, 403);
+    assert!(String::from_utf8_lossy(&r.body).contains("level_too_low"));
+    // The PC raises the level.
+    let r = reqwest::Client::new()
+        .post(format!("{}/api/control/devices/level", hub.base()))
+        .bearer_auth(&hub.control)
+        .header("Content-Type", "application/json")
+        .body(serde_json::json!({ "device": paired.device, "level": "trigger" }).to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let r = link
+        .trigger("/api/demo/run", br#"{"key":"a"}"#)
+        .await
+        .unwrap();
+    assert_eq!(
+        (r.status, r.body.as_slice()),
+        (200, br#"{"key":"a"}"#.as_slice())
+    );
+    assert_eq!(prompt.asked.load(Ordering::SeqCst), 2);
+    // A plain request to a trigger route carries no confirmation: refused.
+    let r = link
+        .fetch(Method::Post, "/api/demo/run", b"{}", None)
+        .await
+        .unwrap();
+    assert_eq!(r.status, 403);
+    // The person cancels at the prompt: nothing is sent, the hub has nothing to refuse.
+    let cancel = Arc::new(Prompt {
+        key: SoftwareSigner::random(),
+        yes: false,
+        asked: AtomicUsize::new(0),
+    });
+    let no = Link::new(
+        net(),
+        login.clone(),
+        routes(),
+        paired.clone(),
+        Limits::default(),
+    )
+    .with_confirm(Some(cancel.clone()));
+    assert_eq!(
+        no.trigger("/api/demo/run", b"{}").await.err(),
+        Some(LinkError::Sign(SignError::Cancelled))
+    );
+    assert_eq!(cancel.asked.load(Ordering::SeqCst), 1);
+    let without = Link::new(net(), login, routes(), paired, Limits::default());
+    assert_eq!(
+        without.trigger("/api/demo/run", b"{}").await.err(),
+        Some(LinkError::Sign(SignError::Gone)),
+        "a phone without a confirmation key never triggers"
+    );
+}
+
+#[test]
+fn the_link_the_pc_shows_is_the_one_the_phone_reads() {
+    use appkit_hub::phone::{pair_link, PhoneWay};
+    let code = "0123456789abcdef0123456789abcdef";
+    let tailnet = pair_link(
+        &PhoneWay::Tailnet("pc.example.ts.net".to_owned()),
+        17618,
+        "testing",
+        code,
+    );
+    let read = appkit_mobile::way::parse_pair_link(&tailnet).expect("read back");
+    assert_eq!(
+        read.address,
+        HubAddress::tailnet("pc.example.ts.net").unwrap()
+    );
+    assert_eq!((read.app.as_str(), read.code.as_str()), ("testing", code));
+    let tunnel = pair_link(&PhoneWay::Tunnel, 17618, "testing", code);
+    assert_eq!(
+        appkit_mobile::way::parse_pair_link(&tunnel)
+            .unwrap()
+            .address,
+        HubAddress::tunnel(17618).unwrap()
+    );
 }

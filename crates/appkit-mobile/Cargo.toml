@@ -25,6 +25,8 @@ software-signer = []
 p256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }
 # The random bytes of a software key and of the ids of queued writes: the version the kit already has.
 getrandom = "0.4"
+# The hash of the body a trigger is confirmed for: the version the hub checks with.
+sha2 = "0.11"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The phone speaks to the hub over HTTPS (Tailscale Serve) or plain HTTP to the phone's own loopback (an SSH tunnel).

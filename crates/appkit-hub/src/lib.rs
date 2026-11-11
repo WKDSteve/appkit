@@ -65,6 +65,7 @@ pub mod instance;
 pub mod launch;
 pub mod limits;
 pub mod loginitems;
+pub mod phone;
 pub mod search;
 pub mod setup;
 pub mod shell_link;
@@ -73,6 +74,7 @@ pub mod streams;
 pub mod usage;
 pub mod vaults;
 
+pub use self::devices::Level;
 pub use self::guard::{bearer, error_body, single, too_many, GuardRules};
 pub use self::http::{etag_matches, json_response, no_query, not_modified, parse_query};
 pub use self::hub::{serve, BuildRuntime, Core, Page, Pages, RunningServer, Runtime, ServeParts};

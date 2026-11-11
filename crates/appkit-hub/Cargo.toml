@@ -20,6 +20,10 @@ hyper-util = { version = "0.1", default-features = false, features = ["server", 
 # The device keys of phones (src/devices.rs): a page signs a challenge of the hub with an ECDSA P-256 key that WebCrypto
 # keeps non-extractable; the hub only checks the signature. RustCrypto, pure Rust, no signing and no key generation.
 p256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }
+# The hash of the body a device confirms a trigger for (src/guard.rs): the version p256 already brings.
+sha2 = "0.11"
+# The QR code of a phone's pairing link on the terminal (src/phone.rs): the encoder only, no image or SVG.
+qrcode = { version = "0.14", default-features = false }
 notify = { version = "8.2", default-features = false, features = ["macos_fsevent"] }
 serde ={ version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }

@@ -297,8 +297,8 @@ fn router<R: Runtime>(core: &Arc<Core<R>>, app: Router<Arc<Core<R>>>) -> Router 
 /// The routes of device keys, when the app keeps devices.
 fn device_routes<R: Runtime>(core: &Arc<Core<R>>) -> Router<Arc<Core<R>>> {
     use crate::guard::{
-        CONTROL_DEVICES_PATH, CONTROL_REVOKE_PATH, DEVICE_CHALLENGE_PATH, DEVICE_PAIR_PATH,
-        DEVICE_SESSION_PATH,
+        CONTROL_DEVICES_PATH, CONTROL_LEVEL_PATH, CONTROL_REVOKE_PATH, DEVICE_CHALLENGE_PATH,
+        DEVICE_PAIR_PATH, DEVICE_SESSION_PATH,
     };
     if core.devices.is_none() {
         return Router::new();
@@ -324,6 +324,10 @@ fn device_routes<R: Runtime>(core: &Arc<Core<R>>) -> Router<Arc<Core<R>>> {
         .route(
             CONTROL_REVOKE_PATH,
             post(control_revoke::<R>).layer(DefaultBodyLimit::max(small)),
+        )
+        .route(
+            CONTROL_LEVEL_PATH,
+            post(control_level::<R>).layer(DefaultBodyLimit::max(small)),
         )
 }
 

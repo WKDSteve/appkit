@@ -41,8 +41,11 @@ pub struct GuardRules {
     devices: Option<std::path::PathBuf>,
     /// The name of this machine in the tailnet (`with_tailnet_name`); none: loopback names only.
     tailnet: Option<String>,
-    /// The routes a paired device may reach (`with_device_route`); every other route below `/api/` refuses a device.
-    device_routes: Vec<String>,
+    /// The routes a paired device may reach (`with_device_route`), each with the level it needs; every other route
+    /// below `/api/` refuses a device.
+    device_routes: Vec<(String, Level)>,
+    /// The level of a newly paired device (`with_device_default_level`).
+    device_default: Level,
 }
 
 /// The routes of device keys (`with_devices`): pair with a code and a public key, ask a challenge, open a session.
@@ -52,6 +55,10 @@ pub const DEVICE_SESSION_PATH: &str = "/auth/device/session";
 /// The routes of the PC for its devices, with the control secret: the list, and revoking one.
 pub const CONTROL_DEVICES_PATH: &str = "/api/control/devices";
 pub const CONTROL_REVOKE_PATH: &str = "/api/control/devices/revoke";
+/// The route of the PC that sets the level of a device, with the control secret.
+pub const CONTROL_LEVEL_PATH: &str = "/api/control/devices/level";
+/// The header of a trigger: `<challenge>.<signature>` of the device's confirmation key over `confirm_message`.
+pub const CONFIRM_HEADER: &str = "x-device-confirm";
 
 /// A page below `prefix` (`/m`) that a browser can install: it is a shell like `/`, and its policy also lets the
 /// page name its manifest and its service worker, and make one more Trusted Types policy (`worker_policy`), the one
@@ -92,10 +99,11 @@ fn plain_policy_name(name: &str) -> bool {
 }
 
 /// The routes of the core itself: an app cannot name one of them as its own.
-const CORE_PATHS: [&str; 9] = [
+const CORE_PATHS: [&str; 10] = [
     "/api/control/pair",
     CONTROL_DEVICES_PATH,
     CONTROL_REVOKE_PATH,
+    CONTROL_LEVEL_PATH,
     "/api/vaults",
     "/api/vaults/add",
     "/api/vaults/remove",
@@ -193,19 +201,23 @@ impl GuardRules {
             devices: None,
             tailnet: None,
             device_routes: Vec::new(),
+            device_default: Level::Create,
         }
     }
 
-    /// Release one route of the app for paired devices (`MOB-02`: a phone is its own channel). A session of a device
-    /// reaches only the routes released this way; every other route below `/api/` (the core's `/api/vaults*` among
-    /// them) answers it `403 not_for_devices`, whatever the method, before the route runs. Without a call, a device
-    /// reaches nothing: fail closed. The route still cuts its answer by class for a device (`Caller`).
+    /// Release one route of the app for paired devices with the level it needs (`MOB-02`, `MOB-03`). A session of a
+    /// device reaches only the routes released this way; every other route below `/api/` (the core's `/api/vaults*`
+    /// among them) answers it `403 not_for_devices`, whatever the method, before the route runs. Without a call, a
+    /// device reaches nothing: fail closed. A device below the level gets `403 level_too_low`. A route of
+    /// [`Level::Trigger`] also needs, for each request, the confirmation of the device (`x-device-confirm`, see
+    /// `devices::confirm_message`); without it, or with a wrong or spent one, `403 confirm_required`. The route still
+    /// cuts its answer by class for a device (`Caller`).
     ///
     /// # Panics
     ///
-    /// When `path` is not a plain route below `/api/`, or is `hello` or a route of the core.
+    /// When `path` is not a plain route below `/api/`, or is `hello` or a route of the core, or is released twice.
     #[must_use]
-    pub fn with_device_route(mut self, path: impl Into<String>) -> Self {
+    pub fn with_device_route(mut self, path: impl Into<String>, level: Level) -> Self {
         let path = path.into();
         assert!(
             plain_api_path(&path),
@@ -215,14 +227,42 @@ impl GuardRules {
             path != self.hello_path && !CORE_PATHS.contains(&path.as_str()),
             "a device route must be a route of the app, not {path:?}"
         );
-        self.device_routes.push(path);
+        assert!(
+            self.device_level(&path).is_none(),
+            "a device route is released once: {path:?}"
+        );
+        self.device_routes.push((path, level));
         self
     }
 
-    /// Is `path` a route a device may reach?
+    /// The level a device needs for `path`; `None`: the route is not released for devices.
     #[must_use]
-    pub fn is_device_route(&self, path: &str) -> bool {
-        self.device_routes.iter().any(|p| p == path)
+    pub fn device_level(&self, path: &str) -> Option<Level> {
+        self.device_routes
+            .iter()
+            .find(|(p, _)| p == path)
+            .map(|(_, l)| *l)
+    }
+
+    /// The level a newly paired device gets (the kit's default is [`Level::Create`]).
+    ///
+    /// # Panics
+    ///
+    /// For [`Level::Trigger`]: triggering is granted on the PC, one device at a time, never by default.
+    #[must_use]
+    pub fn with_device_default_level(mut self, level: Level) -> Self {
+        assert!(
+            level < Level::Trigger,
+            "trigger is never the default level of a device"
+        );
+        self.device_default = level;
+        self
+    }
+
+    /// The level a newly paired device gets.
+    #[must_use]
+    pub fn device_default_level(&self) -> Level {
+        self.device_default
     }
 
     /// Let a phone reach the hub through Tailscale Serve (`tailscale serve` forwards
@@ -432,7 +472,9 @@ pub fn classify(path: &str, rules: &GuardRules) -> Class {
         {
             Class::Exchange
         }
-        "/api/control/pair" | CONTROL_DEVICES_PATH | CONTROL_REVOKE_PATH => Class::ControlPair,
+        "/api/control/pair" | CONTROL_DEVICES_PATH | CONTROL_REVOKE_PATH | CONTROL_LEVEL_PATH => {
+            Class::ControlPair
+        }
         p if p.starts_with("/api/") => Class::Api,
         _ => Class::Other,
     }
@@ -659,6 +701,7 @@ pub async fn judge<R: Runtime>(st: &Core<R>, class: Class, req: Request, next: N
 
     // 7. The credential the route needs, and who it is (a route below `/api/` reads the `Caller`).
     let mut caller = None;
+    let mut confirm_for = None;
     match class {
         Class::Shell | Class::Hello | Class::Exchange | Class::Other => {}
         Class::ControlPair => {
@@ -687,13 +730,34 @@ pub async fn judge<R: Runtime>(st: &Core<R>, class: Class, req: Request, next: N
                     "through the tailnet only a paired device has a session",
                 );
             }
-            // A device reaches only what the app released for devices: fail closed (`MOB-02`).
-            if device.is_some() && !st.guard_rules.is_device_route(parts.uri.path()) {
-                return error_body(
-                    StatusCode::FORBIDDEN,
-                    "not_for_devices",
-                    "this route is not released for devices",
-                );
+            if let Some(id) = device.as_deref() {
+                // A device reaches only what the app released for devices: fail closed (`MOB-02`).
+                let Some(needed) = st.guard_rules.device_level(parts.uri.path()) else {
+                    return error_body(
+                        StatusCode::FORBIDDEN,
+                        "not_for_devices",
+                        "this route is not released for devices",
+                    );
+                };
+                // At the level the device has now (the PC may have lowered it since the session began) (`MOB-03`).
+                let has = st.devices.as_ref().and_then(|d| d.level_of(id));
+                let Some(has) = has else {
+                    return error_body(
+                        StatusCode::UNAUTHORIZED,
+                        "unauthorized",
+                        "session required",
+                    );
+                };
+                if has < needed {
+                    return error_body(
+                        StatusCode::FORBIDDEN,
+                        "level_too_low",
+                        "this device may not do this; the PC can raise its level",
+                    );
+                }
+                if needed == Level::Trigger {
+                    confirm_for = Some(id.to_owned());
+                }
             }
             caller = Some(match device {
                 Some(id) => Caller::Device(id),
@@ -712,6 +776,24 @@ pub async fn judge<R: Runtime>(st: &Core<R>, class: Class, req: Request, next: N
         );
     }
 
+    // 9. A trigger of a device carries the confirmation of this very request, made on the device (`MOB-03`).
+    let body = match confirm_for {
+        Some(device) => match confirmed(st, &parts, &device, body).await {
+            Ok(body) => body,
+            Err(Unconfirmed::TooLarge) => {
+                return error_body(StatusCode::PAYLOAD_TOO_LARGE, "too_large", "body too large");
+            }
+            Err(Unconfirmed::No) => {
+                return error_body(
+                    StatusCode::FORBIDDEN,
+                    "confirm_required",
+                    "confirm this on the device",
+                );
+            }
+        },
+        None => body,
+    };
+
     let mut parts = parts;
     if let Some(caller) = caller {
         parts.extensions.insert(caller);
@@ -727,6 +809,66 @@ pub async fn judge<R: Runtime>(st: &Core<R>, class: Class, req: Request, next: N
             "timeout",
             "the request took too long",
         ),
+    }
+}
+
+/// Why a trigger is not let through.
+enum Unconfirmed {
+    /// No confirmation, or one that does not hold for this request.
+    No,
+    /// The body is over the limit.
+    TooLarge,
+}
+
+/// Read the body of a trigger (bounded like any body) and check the confirmation header against it; the body is given
+/// back for the route.
+async fn confirmed<R: Runtime>(
+    st: &Core<R>,
+    parts: &axum::http::request::Parts,
+    device: &str,
+    body: Body,
+) -> Result<Body, Unconfirmed> {
+    use sha2::Digest;
+    let refuse = || Unconfirmed::No;
+    let header = HeaderName::from_static(CONFIRM_HEADER);
+    let Ok(Some(value)) = single(&parts.headers, &header) else {
+        return Err(refuse());
+    };
+    let Some((challenge, signature)) = value.split_once('.') else {
+        return Err(refuse());
+    };
+    let Ok(bytes) = axum::body::to_bytes(body, st.limits.max_body_bytes).await else {
+        return Err(Unconfirmed::TooLarge);
+    };
+    let origin = parts
+        .headers
+        .get(header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    let path = parts
+        .uri
+        .path_and_query()
+        .map_or_else(|| parts.uri.path().to_owned(), |p| p.as_str().to_owned());
+    let digest: String = sha2::Sha256::digest(&bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let ok = st.devices.as_ref().is_some_and(|d| {
+        d.confirm(device, challenge, signature, |c| {
+            crate::devices::confirm_message(
+                origin,
+                device,
+                c,
+                parts.method.as_str(),
+                &path,
+                &digest,
+            )
+        })
+    });
+    if ok {
+        Ok(Body::from(bytes))
+    } else {
+        Err(refuse())
     }
 }
 

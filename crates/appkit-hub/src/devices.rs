@@ -9,6 +9,13 @@
 //! gone from the list, and its open sessions are closed.
 //!
 //! Nothing secret is in the file: public keys, names the person gave and times. A key never leaves the device.
+//!
+//! Each device has a level (`MOB-03`): read, create, change, trigger. A new device gets the app's default (`create`
+//! unless the app says otherwise; never `trigger`); the PC raises or lowers it. A route the app released for devices
+//! names the level it needs, and the guard checks it per request. `trigger` (something with an effect beyond the vault:
+//! a run on the PC) also needs a confirmation on the device for each request: a second key, which the phone keeps bound
+//! to its biometrics or its lock (`AND-05`), signs the request itself (its method, path and body) with a fresh
+//! challenge. A device paired without that key cannot trigger, whatever its level.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -39,6 +46,67 @@ pub fn login_message(origin: &str, device: &str, challenge: &str) -> String {
     format!("appkit-device-login/1\n{origin}\n{device}\n{challenge}")
 }
 
+/// What the confirmation key of a device signs to trigger one request: a fixed word, the origin, the device, a fresh
+/// challenge, the method with the path and query, and the SHA-256 of the body (hex). A confirmation is good for exactly
+/// this request, once.
+#[must_use]
+pub fn confirm_message(
+    origin: &str,
+    device: &str,
+    challenge: &str,
+    method: &str,
+    path_and_query: &str,
+    body_sha256: &str,
+) -> String {
+    format!(
+        "appkit-device-confirm/1\n{origin}\n{device}\n{challenge}\n{method} {path_and_query}\n{body_sha256}"
+    )
+}
+
+/// What a device may do, from the least to the most (`MOB-03`). The guard compares the level of the device with the
+/// level a route needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Level {
+    /// Read what is released for devices.
+    Read,
+    /// Also create (a new entry, an answer to a question).
+    Create,
+    /// Also change (a status, a field).
+    Change,
+    /// Also start something on the PC, each time with a confirmation on the device.
+    Trigger,
+}
+
+impl Level {
+    /// The level a word names (`read`, `create`, `change`, `trigger`).
+    #[must_use]
+    pub fn parse(word: &str) -> Option<Self> {
+        match word {
+            "read" => Some(Self::Read),
+            "create" => Some(Self::Create),
+            "change" => Some(Self::Change),
+            "trigger" => Some(Self::Trigger),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Create => "create",
+            Self::Change => "change",
+            Self::Trigger => "trigger",
+        }
+    }
+}
+
+/// The level of a device the file names none for (paired before there were levels): the kit's default.
+fn default_level() -> Level {
+    Level::Create
+}
+
 /// One device as the file keeps it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct Stored {
@@ -49,6 +117,11 @@ struct Stored {
     /// Seconds since 1970.
     paired: u64,
     last_used: Option<u64>,
+    #[serde(default = "default_level")]
+    level: Level,
+    /// The public key that confirms a trigger (bound to the device's biometrics or lock), as `key`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    confirm_key: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -68,6 +141,9 @@ pub struct DeviceInfo {
     pub name: String,
     pub paired: u64,
     pub last_used: Option<u64>,
+    pub level: Level,
+    /// Whether the device has a key to confirm a trigger.
+    pub confirm: bool,
 }
 
 /// Why a pairing was refused.
@@ -152,6 +228,10 @@ fn valid(stored: &Stored) -> bool {
     is_hex(&stored.id, ID_BYTES)
         && clean_name(&stored.name).as_deref() == Some(stored.name.as_str())
         && parse_key(&stored.key).is_some()
+        && stored
+            .confirm_key
+            .as_deref()
+            .is_none_or(|k| parse_key(k).is_some() && k != stored.key)
 }
 
 /// Would this name and key be taken for a pairing? Checked before the one-time code is spent.
@@ -159,9 +239,13 @@ fn valid(stored: &Stored) -> bool {
 /// # Errors
 ///
 /// [`PairError::BadName`] or [`PairError::BadKey`].
-pub fn check_pairing(name: &str, key: &str) -> Result<(), PairError> {
+pub fn check_pairing(name: &str, key: &str, confirm_key: Option<&str>) -> Result<(), PairError> {
     clean_name(name).ok_or(PairError::BadName)?;
-    parse_key(key).map(|_| ()).ok_or(PairError::BadKey)
+    parse_key(key).ok_or(PairError::BadKey)?;
+    match confirm_key {
+        Some(k) if parse_key(k).is_none() || k == key => Err(PairError::BadKey),
+        _ => Ok(()),
+    }
 }
 
 impl DeviceStore {
@@ -248,16 +332,25 @@ impl DeviceStore {
     /// # Errors
     ///
     /// [`PairError`]: what was wrong; nothing is kept then.
-    pub fn pair(&self, name: &str, key: &str) -> Result<String, PairError> {
+    pub fn pair(
+        &self,
+        name: &str,
+        key: &str,
+        confirm_key: Option<&str>,
+        level: Level,
+    ) -> Result<String, PairError> {
+        check_pairing(name, key, confirm_key)?;
         let name = clean_name(name).ok_or(PairError::BadName)?;
-        if parse_key(key).is_none() {
-            return Err(PairError::BadKey);
-        }
         let id = Secret::generate(ID_BYTES)
             .map_err(|_| PairError::Random)?
             .to_hex();
         let mut devices = lock(&self.devices);
-        if devices.iter().any(|d| d.key == key) {
+        let known = |k: &str| {
+            devices
+                .iter()
+                .any(|d| d.key == k || d.confirm_key.as_deref() == Some(k))
+        };
+        if known(key) || confirm_key.is_some_and(known) {
             return Err(PairError::Known);
         }
         if devices.len() >= MAX_DEVICES {
@@ -270,6 +363,9 @@ impl DeviceStore {
             key: key.to_owned(),
             paired: unix_now(),
             last_used: None,
+            // Trigger is never a default: the PC grants it to one device at a time.
+            level: level.min(Level::Change),
+            confirm_key: confirm_key.map(str::to_owned),
         });
         self.persist(&next).map_err(|_| PairError::Io)?;
         *devices = next;
@@ -301,22 +397,7 @@ impl DeviceStore {
     /// Does `signature` (P1363, r and s, 64 bytes as hex, as WebCrypto makes it) sign the login message of this
     /// origin, device and challenge with the device's key? The challenge is spent either way.
     pub fn login(&self, device: &str, challenge: &str, signature: &str, origin: &str) -> bool {
-        if !is_hex(challenge, CHALLENGE_BYTES) || !is_hex(signature, 64) {
-            return false;
-        }
-        let now = self.clock.now();
-        let fresh = {
-            let mut open = lock(&self.challenges);
-            let at = open.iter().position(|c| c.value == challenge);
-            match at {
-                Some(i) => {
-                    let c = open.remove(i);
-                    c.device == device && c.until > now
-                }
-                None => false,
-            }
-        };
-        if !fresh {
+        if !is_hex(signature, 64) || !self.spend(device, challenge) {
             return false;
         }
         let mut devices = lock(&self.devices);
@@ -345,6 +426,78 @@ impl DeviceStore {
         true
     }
 
+    /// Spend a challenge: true when it was open, for this device, and is not too old. Gone either way.
+    fn spend(&self, device: &str, challenge: &str) -> bool {
+        if !is_hex(challenge, CHALLENGE_BYTES) {
+            return false;
+        }
+        let now = self.clock.now();
+        let mut open = lock(&self.challenges);
+        match open.iter().position(|c| c.value == challenge) {
+            Some(i) => {
+                let c = open.remove(i);
+                c.device == device && c.until > now
+            }
+            None => false,
+        }
+    }
+
+    /// The level of a device; `None` when it is not paired (any more).
+    #[must_use]
+    pub fn level_of(&self, device: &str) -> Option<Level> {
+        lock(&self.devices)
+            .iter()
+            .find(|d| d.id == device)
+            .map(|d| d.level)
+    }
+
+    /// Set the level of a device (the PC does). `Ok(false)`: no such device.
+    ///
+    /// # Errors
+    ///
+    /// The list could not be written; the level is as it was then.
+    pub fn set_level(&self, device: &str, level: Level) -> std::io::Result<bool> {
+        let mut devices = lock(&self.devices);
+        let Some(at) = devices.iter().position(|d| d.id == device) else {
+            return Ok(false);
+        };
+        let mut next = devices.clone();
+        next[at].level = level;
+        self.persist(&next)?;
+        *devices = next;
+        Ok(true)
+    }
+
+    /// Does `signature` (P1363 hex) of the device's confirmation key sign [`confirm_message`] of this request with
+    /// an open challenge of the device? The challenge is spent either way. A device without a confirmation key never
+    /// confirms.
+    #[must_use]
+    pub fn confirm(
+        &self,
+        device: &str,
+        challenge: &str,
+        signature: &str,
+        message_of: impl FnOnce(&str) -> String,
+    ) -> bool {
+        if !is_hex(signature, 64) || !self.spend(device, challenge) {
+            return false;
+        }
+        let devices = lock(&self.devices);
+        let Some(key) = devices
+            .iter()
+            .find(|d| d.id == device)
+            .and_then(|d| d.confirm_key.as_deref())
+            .and_then(parse_key)
+        else {
+            return false;
+        };
+        let Some(sig) = decode_hex(signature).and_then(|b| Signature::from_slice(&b).ok()) else {
+            return false;
+        };
+        key.verify(message_of(challenge).as_bytes(), &sig.normalize_s())
+            .is_ok()
+    }
+
     /// The paired devices, without their keys.
     #[must_use]
     pub fn list(&self) -> Vec<DeviceInfo> {
@@ -355,6 +508,8 @@ impl DeviceStore {
                 name: d.name.clone(),
                 paired: d.paired,
                 last_used: d.last_used,
+                level: d.level,
+                confirm: d.confirm_key.is_some(),
             })
             .collect()
     }
@@ -413,7 +568,7 @@ mod tests {
     fn a_paired_device_opens_a_session_with_a_signed_challenge_once() {
         let (s, _, _d) = store("login");
         let (signing, public) = key(7);
-        let id = s.pair("Fairphone", &public).unwrap();
+        let id = s.pair("Fairphone", &public, None, Level::Create).unwrap();
         let c = s.challenge(&id).unwrap();
         assert!(s.login(&id, &c, &sign(&signing, ORIGIN, &id, &c), ORIGIN));
         // The challenge is spent.
@@ -426,8 +581,8 @@ mod tests {
         let (s, clock, _d) = store("refuse");
         let (signing, public) = key(7);
         let (other, other_public) = key(9);
-        let id = s.pair("A", &public).unwrap();
-        let id2 = s.pair("B", &other_public).unwrap();
+        let id = s.pair("A", &public, None, Level::Create).unwrap();
+        let id2 = s.pair("B", &other_public, None, Level::Create).unwrap();
         // Another key.
         let c = s.challenge(&id).unwrap();
         assert!(!s.login(&id, &c, &sign(&other, ORIGIN, &id, &c), ORIGIN));
@@ -463,7 +618,7 @@ mod tests {
     fn a_high_s_signature_counts_as_the_same_signature() {
         let (s, _, _d) = store("highs");
         let (signing, public) = key(7);
-        let id = s.pair("A", &public).unwrap();
+        let id = s.pair("A", &public, None, Level::Create).unwrap();
         let c = s.challenge(&id).unwrap();
         let sig: Signature = signing.sign(login_message(ORIGIN, &id, &c).as_bytes());
         // The other S of the same signature: n - s.
@@ -476,7 +631,7 @@ mod tests {
     fn the_list_outlives_a_restart_and_a_revoked_device_is_gone() {
         let (s, clock, d) = store("restart");
         let (signing, public) = key(7);
-        let id = s.pair("Fairphone", &public).unwrap();
+        let id = s.pair("Fairphone", &public, None, Level::Create).unwrap();
         let again = DeviceStore::open(&d.join("devices.json"), clock.clone()).unwrap();
         assert_eq!(again.list().len(), 1);
         let c = again.challenge(&id).unwrap();
@@ -500,7 +655,7 @@ mod tests {
         let (s, clock, d) = store("hubid");
         let path = d.join("devices.json");
         assert!(is_hex(s.hub_id(), ID_BYTES));
-        s.pair("A", &key(7).1).unwrap();
+        s.pair("A", &key(7).1, None, Level::Create).unwrap();
         let again = DeviceStore::open(&path, clock.clone()).unwrap();
         assert_eq!(again.hub_id(), s.hub_id());
         // A list of a hub before the id: it gets one, written at once, the same at the next start.
@@ -519,7 +674,11 @@ mod tests {
         let (s, _, _d) = store("pair");
         let (_, public) = key(7);
         for bad in ["", "   ", "a\nb", "x\u{202E}y", &"n".repeat(MAX_NAME + 1)] {
-            assert_eq!(s.pair(bad, &public), Err(PairError::BadName), "{bad:?}");
+            assert_eq!(
+                s.pair(bad, &public, None, Level::Create),
+                Err(PairError::BadName),
+                "{bad:?}"
+            );
         }
         for bad in [
             "",
@@ -528,14 +687,24 @@ mod tests {
             &public.to_uppercase(),
             &public[..128],
         ] {
-            assert_eq!(s.pair("A", bad), Err(PairError::BadKey), "{bad:?}");
+            assert_eq!(
+                s.pair("A", bad, None, Level::Create),
+                Err(PairError::BadKey),
+                "{bad:?}"
+            );
         }
-        s.pair("A", &public).unwrap();
-        assert_eq!(s.pair("B", &public), Err(PairError::Known));
+        s.pair("A", &public, None, Level::Create).unwrap();
+        assert_eq!(
+            s.pair("B", &public, None, Level::Create),
+            Err(PairError::Known)
+        );
         for seed in 10..(10 + MAX_DEVICES as u8 - 1) {
-            s.pair("x", &key(seed).1).unwrap();
+            s.pair("x", &key(seed).1, None, Level::Create).unwrap();
         }
-        assert_eq!(s.pair("y", &key(99).1), Err(PairError::Full));
+        assert_eq!(
+            s.pair("y", &key(99).1, None, Level::Create),
+            Err(PairError::Full)
+        );
     }
 
     #[test]

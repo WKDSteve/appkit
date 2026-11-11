@@ -31,6 +31,8 @@ axum = { version = "0.8", default-features = false, features = ["http1", "tokio"
 serde_json = "1"
 # Signs the challenges of the device tests the way a page does with WebCrypto (ECDSA P-256).
 p256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }
+# The hash of a body a test device confirms a trigger for: the version of the hub.
+sha2 = "0.11"
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "time", "net", "io-util"] }
 
 # Only the launch probe and its tests look at handles and consoles (src/bin/launch-probe.rs).
