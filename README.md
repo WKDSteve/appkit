@@ -140,7 +140,7 @@ two share one. Free: 17612–17614, 17619–17649.
 ```
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-cargo test --workspace --locked
+cargo test --workspace --all-features --locked
 cargo deny check
 cargo audit
 python3 tools/check-lock-age.py --min-days 7

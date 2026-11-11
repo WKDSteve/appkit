@@ -53,7 +53,7 @@ jobs:
         run: |
           t="$RUNNER_TEMP/appkit-test-temp"
           rm -rf "$t" && mkdir -p "$t"
-          TEMP="$t" TMP="$t" TMPDIR="$t" cargo test --workspace --locked
+          TEMP="$t" TMP="$t" TMPDIR="$t" cargo test --workspace --all-features --locked
           left="$(ls -A "$t")"
           if [ -n "$left" ]; then
             printf 'the tests left this in the temp dir:\n%s\n' "$left"
@@ -91,7 +91,7 @@ jobs:
         run: |
           t="$RUNNER_TEMP/appkit-test-temp"
           rm -rf "$t" && mkdir -p "$t"
-          TEMP="$t" TMP="$t" TMPDIR="$t" cargo test --workspace --locked
+          TEMP="$t" TMP="$t" TMPDIR="$t" cargo test --workspace --all-features --locked
           left="$(ls -A "$t")"
           if [ -n "$left" ]; then
             printf 'the tests left this in the temp dir:\n%s\n' "$left"
