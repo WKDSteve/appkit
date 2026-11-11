@@ -474,4 +474,46 @@ describe('StreamSession, shared by the windows of a session', () => {
     made.session.stop();
     await reading;
   });
+
+  it('a window that takes over answers down until its own stream opens', async () => {
+    const share = browser();
+    const { hub, fetchFn } = hubOfStreams();
+    // After the first stream, the hub takes the next request and never answers it.
+    let streams = 0;
+    const slow = ((url: string, init?: RequestInit) =>
+      streams++ === 0 ? fetchFn(url, init) : new Promise<Response>(() => {})) as typeof fetch;
+    const first = aWindow(share, slow);
+    await vi.waitFor(() => expect(first.session.open).toBe(true));
+    const second = aWindow(share, slow);
+    await vi.waitFor(() => expect(second.session.open).toBe(true));
+
+    first.session.stop();
+    await first.reading;
+    await vi.waitFor(() => expect(streams).toBe(2));
+    const answers: string[] = [];
+    const probe = share.open((news) => void answers.push(news.kind));
+    probe.post({ kind: 'ask' });
+    await vi.waitFor(() => expect(answers).toEqual(['down']));
+    expect(second.session.open).toBe(false);
+    probe.close();
+    second.session.stop();
+    expect(hub.open).toBe(0);
+  });
+});
+
+describe('StreamSession.stop', () => {
+  it('ends the wait before the next try at once', async () => {
+    const { session, d, sleeps } = deps([() => new Response('', { status: 503 })], {
+      // A wait that only a stop can end.
+      sleep: (ms) => {
+        sleeps.push(ms);
+        return new Promise<void>(() => {});
+      },
+    });
+    const reading = session.follow(d);
+    await vi.waitFor(() => expect(sleeps).toEqual([1000]));
+    session.stop();
+    const late = new Promise((resolve) => setTimeout(() => resolve('still waiting'), 200));
+    await expect(Promise.race([reading.then(() => 'ended'), late])).resolves.toBe('ended');
+  });
 });

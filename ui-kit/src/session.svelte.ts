@@ -179,10 +179,14 @@ export class StreamSession {
     this.stopped = false;
   }
 
-  /** The page stops: the stream that is open is cut, and the loop ends. */
+  /**
+   * The page stops: the stream that is open is cut, a wait for the next try ends, and the loop ends (and with it the
+   * lock this window held, so the next window takes over at once rather than after the wait).
+   */
   stop(): void {
     this.stopped = true;
     this.abort?.abort();
+    this.endWait?.();
     this.leave?.();
   }
 
@@ -268,6 +272,8 @@ export class StreamSession {
       await share.locks.request(share.name, { signal: leaving.signal }, async () => {
         holding = true;
         this.leave = null;
+        // What this window heard as a listener is not its own stream: until that opens, it answers `down`.
+        this.open = false;
         this.publish = (news) => channel.post(news);
         await this.hold(share.name);
       });
