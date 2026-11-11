@@ -6,10 +6,11 @@ use std::sync::Arc;
 
 use appkit_core::identity::AppIdentity;
 use appkit_hub::{
-    serve, BoxFuture, Core, GuardRules, HubStatus, Page, Pages, RunningServer, Runtime, ServeParts,
+    serve, BoxFuture, Caller, Core, DataClass, GuardRules, HubStatus, Page, Pages, RunningServer,
+    Runtime, ServeParts,
 };
 use axum::routing::{get, post};
-use axum::Router;
+use axum::{Extension, Router};
 
 use crate::subject::{StartConfig, Subject};
 
@@ -52,12 +53,33 @@ impl Pages for NoPages {
     }
 }
 
-/// The routes of the app: two reads and one write, under `/api/demo/`.
+/// The areas of `classified`: one of each kind a class can be.
+pub const CLASSIFIED: [(&str, Option<&str>); 4] = [
+    ("open-area", Some("public")),
+    ("own-area", Some("internal")),
+    ("secret-area", Some("private")),
+    ("nobody-said-area", None),
+];
+
+/// The routes of the app: two reads and one write, under `/api/demo/`; `classified`, a list of areas cut by the class
+/// of each for the caller (what an app does for a device); `pc-only`, a read no device is given.
 fn routes(_core: &Arc<Core<DemoRuntime>>) -> Router<Arc<Core<DemoRuntime>>> {
     Router::new()
         .route(&IDENTITY.route("items"), get(|| async { "[]" }))
         .route(&IDENTITY.route("item"), get(|| async { "{}" }))
         .route(&IDENTITY.route("ops"), post(|| async { "{}" }))
+        .route(
+            &IDENTITY.route("classified"),
+            get(|Extension(caller): Extension<Caller>| async move {
+                let shown: Vec<&str> = CLASSIFIED
+                    .iter()
+                    .filter(|(_, class)| caller.may_see(DataClass::parse(*class)))
+                    .map(|(name, _)| *name)
+                    .collect();
+                axum::Json(shown)
+            }),
+        )
+        .route(&IDENTITY.route("pc-only"), get(|| async { "{}" }))
 }
 
 /// The hub of the second app, with no engine and no page.
@@ -229,7 +251,11 @@ impl Subject for DemoDevices {
             rules()
                 .with_installable_page(INSTALLABLE_PREFIX, INSTALLABLE_WORKER_POLICY)
                 .with_devices(self.file())
-                .with_tailnet_name(TAILNET_NAME),
+                .with_tailnet_name(TAILNET_NAME)
+                .with_device_route(IDENTITY.route("items"))
+                .with_device_route(IDENTITY.route("item"))
+                .with_device_route(IDENTITY.route("ops"))
+                .with_device_route(IDENTITY.route("classified")),
             Arc::new(TwoPages),
         )
     }

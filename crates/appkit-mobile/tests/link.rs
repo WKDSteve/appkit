@@ -316,3 +316,47 @@ async fn an_answer_over_the_limit_or_late_is_not_taken() {
         "nobody listens"
     );
 }
+
+#[tokio::test]
+async fn after_a_session_the_kept_copy_holds_no_private_data_and_serves_when_the_hub_is_gone() {
+    use appkit_mobile::cache::{Cache, CacheLimits};
+    let hub = hub().await;
+    let dir = appkit_scratch::Scratch::new("mobile-cache-session");
+    let cache = Cache::open(dir.join("cache.json"), CacheLimits::default(), 100);
+    let signer = Arc::new(SoftwareSigner::random());
+    let (paired, link) = pair(
+        net(),
+        signer.clone(),
+        &routes(),
+        &hub.link().await,
+        "Fairphone",
+        Limits::default(),
+    )
+    .await
+    .unwrap();
+    let r = link
+        .read("/api/demo/classified", &cache, 100)
+        .await
+        .unwrap();
+    assert!(!r.kept);
+    assert!(r.body.contains("open-area") && r.body.contains("own-area"));
+    // A route the app keeps for the PC is refused and not kept.
+    let r = link.read("/api/demo/pc-only", &cache, 101).await.unwrap();
+    assert_eq!(r.status, 403);
+    let kept = std::fs::read_to_string(dir.join("cache.json")).unwrap();
+    for (name, class) in appkit_testkit::subjects::CLASSIFIED {
+        let released = matches!(class, Some("public" | "internal"));
+        assert_eq!(kept.contains(name), released, "{name}: {kept}");
+    }
+    assert!(!kept.contains("pc-only"), "{kept}");
+    // The hub is gone: the kept copy is given, marked as kept, with its time.
+    hub.server.shutdown().await;
+    let gone = Link::new(net(), signer, routes(), paired, Limits::default());
+    let r = gone
+        .read("/api/demo/classified", &cache, 200)
+        .await
+        .unwrap();
+    assert!(r.kept);
+    assert_eq!(r.fetched_at, 100);
+    assert!(r.body.contains("own-area"));
+}

@@ -120,3 +120,15 @@ async fn the_tailnet_takes_devices_only() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn a_device_reaches_only_released_routes_and_no_private_data() {
+    appkit_testkit::security::a_device_reaches_only_released_routes_and_no_private_data(
+        &appkit_testkit::subjects::DemoDevices::new(),
+        &["items", "item", "classified"],
+        "pc-only",
+        "classified",
+        &appkit_testkit::subjects::CLASSIFIED,
+    )
+    .await;
+}

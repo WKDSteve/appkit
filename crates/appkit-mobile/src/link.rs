@@ -498,6 +498,93 @@ impl Link {
     pub async fn drop_session(&self) {
         *self.session.lock().await = None;
     }
+
+    /// A read of a route with the kept copy (`MOB-08`): asks the hub with the tag of the copy; a new answer replaces
+    /// it, "not modified" keeps it (as fresh); when the hub cannot be reached the copy is given, marked as kept, with
+    /// its time. A refusal of the hub is given as it is and not kept. When the hub does not take the device any more
+    /// the copy is forgotten (`MSEC-12`).
+    ///
+    /// # Errors
+    ///
+    /// As [`Link::fetch`], when there is no copy to fall back on; [`LinkError::BadReply`] for an answer that is not
+    /// text.
+    pub async fn read(
+        &self,
+        route: &str,
+        cache: &crate::cache::Cache,
+        now: u64,
+    ) -> Result<Read, LinkError> {
+        let kept = cache.get(route);
+        let tag = kept.as_ref().and_then(|k| k.etag.clone());
+        match self.fetch(Method::Get, route, &[], tag.as_deref()).await {
+            Ok(r) if r.status == 304 && kept.is_some() => {
+                let kept = kept.unwrap_or_else(|| unreachable!());
+                let _ = cache.put(
+                    route,
+                    crate::cache::Entry {
+                        fetched_at: now,
+                        ..kept.clone()
+                    },
+                );
+                Ok(Read {
+                    status: 200,
+                    body: kept.body,
+                    etag: kept.etag,
+                    fetched_at: now,
+                    kept: false,
+                })
+            }
+            Ok(r) => {
+                let body = String::from_utf8(r.body).map_err(|_| LinkError::BadReply)?;
+                if r.status == 200 {
+                    let _ = cache.put(
+                        route,
+                        crate::cache::Entry {
+                            etag: r.etag.clone(),
+                            fetched_at: now,
+                            body: body.clone(),
+                        },
+                    );
+                }
+                Ok(Read {
+                    status: r.status,
+                    body,
+                    etag: r.etag,
+                    fetched_at: now,
+                    kept: false,
+                })
+            }
+            Err(LinkError::Net(NetError::Unreachable(_) | NetError::AnswerLost))
+                if kept.is_some() =>
+            {
+                let kept = kept.unwrap_or_else(|| unreachable!());
+                Ok(Read {
+                    status: 200,
+                    body: kept.body,
+                    etag: kept.etag,
+                    fetched_at: kept.fetched_at,
+                    kept: true,
+                })
+            }
+            Err(LinkError::Unpaired) => {
+                let _ = cache.forget();
+                Err(LinkError::Unpaired)
+            }
+            Err(e) => Err(e),
+        }
+    }
+}
+
+/// What [`Link::read`] gives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Read {
+    pub status: u16,
+    pub body: String,
+    pub etag: Option<String>,
+    /// When the hub sent it, seconds since 1970.
+    pub fetched_at: u64,
+    /// The hub was not reached: this is the kept copy (the page says so, with its age).
+    pub kept: bool,
 }
 
 #[cfg(test)]

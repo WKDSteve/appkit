@@ -41,6 +41,8 @@ pub struct GuardRules {
     devices: Option<std::path::PathBuf>,
     /// The name of this machine in the tailnet (`with_tailnet_name`); none: loopback names only.
     tailnet: Option<String>,
+    /// The routes a paired device may reach (`with_device_route`); every other route below `/api/` refuses a device.
+    device_routes: Vec<String>,
 }
 
 /// The routes of device keys (`with_devices`): pair with a code and a public key, ask a challenge, open a session.
@@ -190,7 +192,37 @@ impl GuardRules {
             installable: None,
             devices: None,
             tailnet: None,
+            device_routes: Vec::new(),
         }
+    }
+
+    /// Release one route of the app for paired devices (`MOB-02`: a phone is its own channel). A session of a device
+    /// reaches only the routes released this way; every other route below `/api/` (the core's `/api/vaults*` among
+    /// them) answers it `403 not_for_devices`, whatever the method, before the route runs. Without a call, a device
+    /// reaches nothing: fail closed. The route still cuts its answer by class for a device (`Caller`).
+    ///
+    /// # Panics
+    ///
+    /// When `path` is not a plain route below `/api/`, or is `hello` or a route of the core.
+    #[must_use]
+    pub fn with_device_route(mut self, path: impl Into<String>) -> Self {
+        let path = path.into();
+        assert!(
+            plain_api_path(&path),
+            "a device route must be a plain route below /api/, not {path:?}"
+        );
+        assert!(
+            path != self.hello_path && !CORE_PATHS.contains(&path.as_str()),
+            "a device route must be a route of the app, not {path:?}"
+        );
+        self.device_routes.push(path);
+        self
+    }
+
+    /// Is `path` a route a device may reach?
+    #[must_use]
+    pub fn is_device_route(&self, path: &str) -> bool {
+        self.device_routes.iter().any(|p| p == path)
     }
 
     /// Let a phone reach the hub through Tailscale Serve (`tailscale serve` forwards
@@ -625,7 +657,8 @@ pub async fn judge<R: Runtime>(st: &Core<R>, class: Class, req: Request, next: N
         }
     }
 
-    // 7. The credential the route needs
+    // 7. The credential the route needs, and who it is (a route below `/api/` reads the `Caller`).
+    let mut caller = None;
     match class {
         Class::Shell | Class::Hello | Class::Exchange | Class::Other => {}
         Class::ControlPair => {
@@ -646,18 +679,26 @@ pub async fn judge<R: Runtime>(st: &Core<R>, class: Class, req: Request, next: N
             if !ok {
                 return error_body(StatusCode::UNAUTHORIZED, "unauthorized", "session required");
             }
-            if remote
-                && token
-                    .as_deref()
-                    .and_then(|t| st.sessions.device_of(t))
-                    .is_none()
-            {
+            let device = token.as_deref().and_then(|t| st.sessions.device_of(t));
+            if remote && device.is_none() {
                 return error_body(
                     StatusCode::FORBIDDEN,
                     "device_required",
                     "through the tailnet only a paired device has a session",
                 );
             }
+            // A device reaches only what the app released for devices: fail closed (`MOB-02`).
+            if device.is_some() && !st.guard_rules.is_device_route(parts.uri.path()) {
+                return error_body(
+                    StatusCode::FORBIDDEN,
+                    "not_for_devices",
+                    "this route is not released for devices",
+                );
+            }
+            caller = Some(match device {
+                Some(id) => Caller::Device(id),
+                None => Caller::Pc,
+            });
         }
     }
 
@@ -671,6 +712,10 @@ pub async fn judge<R: Runtime>(st: &Core<R>, class: Class, req: Request, next: N
         );
     }
 
+    let mut parts = parts;
+    if let Some(caller) = caller {
+        parts.extensions.insert(caller);
+    }
     let req = Request::from_parts(parts, body);
     if upload {
         return next.run(req).await;

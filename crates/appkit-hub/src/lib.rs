@@ -80,6 +80,7 @@ pub use self::limits::{HubStatus, Limits};
 pub use self::vaults::{
     vault_request, vault_text, vaults_unavailable, BoxFuture, VaultAdmin, VaultInfo, VaultList,
 };
+pub use appkit_core::classes::{Caller, DataClass};
 
 use self::access::*;
 use self::guard::*;

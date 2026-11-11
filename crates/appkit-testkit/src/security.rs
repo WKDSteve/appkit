@@ -1517,6 +1517,80 @@ pub async fn another_app_may_open_the_installable_page_and_nothing_else(
     );
 }
 
+/// A device and its session, paired with a fresh code.
+async fn device_session(h: &Harness) -> String {
+    let code = mint_code(h).await;
+    let r = device_pair(h, &code, "Phone", &TestDevice::new(7).public()).await;
+    assert_eq!(r.status, 200, "{r:?}");
+    r.json()["token"].as_str().expect("a token").to_owned()
+}
+
+/// Data classes fail closed for a device (`GuardRules::with_device_route`, `Caller`, `MOB-02`): a device reaches only
+/// the routes released for it (`released`), with any method; every other route below `/api/` (the core's choice of
+/// vault, a route the app keeps for the PC: `pc_only`) answers `not_for_devices` before it runs, also when the request
+/// looks like a write. A released route that holds areas (`classified`, its areas in `areas`: a name and the class the
+/// setting names) gives a device only the `public` and `internal` ones, never a private or an unclassified name, not
+/// even as a part of the answer; the PC gets them all.
+pub async fn a_device_reaches_only_released_routes_and_no_private_data(
+    s: &dyn Subject,
+    released: &[&str],
+    pc_only: &str,
+    classified: &str,
+    areas: &[(&str, Option<&str>)],
+) {
+    let h = Harness::new(s).await;
+    let auth = bearer(&device_session(&h).await);
+    let origin = h.origin();
+    for name in released {
+        let r = get(&h, &h.route(name), &[("Authorization", &auth)]).await;
+        assert!(
+            r.status != 401 && r.status != 403,
+            "{name} is released: {r:?}"
+        );
+    }
+    let refused = [
+        ("GET", h.route(pc_only)),
+        ("POST", h.route(pc_only)),
+        ("GET", "/api/vaults".to_owned()),
+        ("POST", "/api/vaults/select".to_owned()),
+        ("POST", "/api/vaults/add".to_owned()),
+        ("GET", h.route("no-such-route")),
+    ];
+    for (method, path) in refused {
+        let extra = [
+            ("Authorization", auth.as_str()),
+            ("Origin", origin.as_str()),
+        ];
+        let r = if method == "GET" {
+            get(&h, &path, &extra).await
+        } else {
+            post(&h, &path, &extra, r#"{"name":"main"}"#).await
+        };
+        assert_eq!(r.status, 403, "{method} {path}: {r:?}");
+        assert!(r.body.contains("not_for_devices"), "{method} {path}: {r:?}");
+    }
+    let r = get(&h, &h.route(classified), &[("Authorization", &auth)]).await;
+    assert_eq!(r.status, 200, "{r:?}");
+    for (name, class) in areas {
+        let released_class = matches!(class, Some("public" | "internal"));
+        assert_eq!(
+            r.body.contains(name),
+            released_class,
+            "{name} ({class:?}) in the answer to a device: {}",
+            r.body
+        );
+    }
+    // The PC is given all of them.
+    let pc = bearer(&session(&h).await);
+    let r = get(&h, &h.route(classified), &[("Authorization", &pc)]).await;
+    assert_eq!(r.status, 200, "{r:?}");
+    for (name, _) in areas {
+        assert!(r.body.contains(name), "{name}: {}", r.body);
+    }
+    let r = get(&h, &h.route(pc_only), &[("Authorization", &pc)]).await;
+    assert_eq!(r.status, 200, "{r:?}");
+}
+
 /// One request through the tailnet: the `Host` is the tailnet name; a POST carries JSON.
 async fn through_tailnet(
     h: &Harness,

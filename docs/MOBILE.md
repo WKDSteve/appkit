@@ -38,6 +38,23 @@ page (Svelte)  --ipcFetch-->  shell (Rust, appkit-mobile)  --HTTPS or tunnel--> 
   current version beside the item and is never sent again; a write whose answer was lost is never sent again by itself
   (`MOB-07`).
 
+## Data classes, fail closed
+
+The hub cuts, never the phone (`MOB-02`):
+
+- A route reaches a device only when the app released it: `GuardRules::with_device_route(path)`. Every other route
+  below `/api/` answers a device `403 not_for_devices` before it runs, the core's choice of vault among them. An app
+  that releases nothing gives a device nothing.
+- A released route reads who asks (`Caller::Pc` or `Caller::Device(id)`, set by the guard) and gives a device only data
+  of the classes `public` and `internal` (`DataClass`, `Caller::may_see`). An area without a class, or with one the
+  code does not know, is `unclassified` and stays on the PC like `private`. What is made of several things has the
+  highest class of them (`classes::highest`).
+- The phone keeps only what the hub sent it (`appkit-mobile::cache`), so its copy holds no private data either; a
+  device the hub does not take any more forgets its copy.
+- A vault cloned on the phone has no hub in front of it. The phone reads only an export the engine wrote in its export
+  form (the data classes asked, private and unclassified left out); a raw vault, or an export that does not say its
+  classes were asked, is refused. Never clone a vault with private parts onto a phone.
+
 ## Pairing
 
 The PC shows a pairing link, as a QR code or as text:

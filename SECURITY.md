@@ -145,6 +145,12 @@ The hub binds loopback only, also for phones. A phone reaches it one of two ways
 - **An SSH tunnel** from an SSH client on the phone to the same loopback port on the PC (`-L <port>:127.0.0.1:<port>`):
   the hub sees a loopback host, as from the PC itself; the SSH client checks the host key of the PC.
 
+A device reaches only the routes the app released for it (`GuardRules::with_device_route`); every other route below
+`/api/` answers it `403 not_for_devices` before it runs, whatever the method, the core's `/api/vaults*` among them.
+Every route below `/api/` can read who asks (`Caller`, set by the guard) and gives a device only data of the classes
+`public` and `internal` (`appkit-core/src/classes.rs`): no class, or one not known, is `unclassified` and stays on the
+PC like `private`.
+
 The phone app's shell (`appkit-mobile`) only builds those two kinds of address (an HTTPS tailnet name, or the phone's
 own `127.0.0.1`), follows no redirect, uses no proxy of the system, reads every answer under a time and a byte limit,
 keeps the session in memory and sends only routes of its own app.

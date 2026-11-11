@@ -9,12 +9,15 @@
 //!   Android Keystore in an app, a key in memory in tests), the check that the hub is the one paired with
 //!   (`MSEC-04`), and every request with a time limit and a byte limit (`MSEC-08`); the session token stays in memory
 //!   (`MSEC-01`);
+//! * [`cache`]: the kept copy of what the hub answered, for the start and for a phone without a way to the hub
+//!   (`MOB-08`); it holds only what the hub sent this device;
 //! * [`state`]: what the phone keeps about its pairing, versioned and written atomically (`MSEC-13`), and wholly
 //!   removed on unpairing (`MSEC-12`).
 //!
 //! The hub decides what a phone may see and do (`MOB-02`, `MOB-03`); nothing here filters or grants. What the page
 //! shows comes through [`link::Link::fetch`], which only reaches the routes of the app it was made for.
 
+pub mod cache;
 pub mod link;
 pub mod state;
 pub mod way;
