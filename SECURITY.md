@@ -253,6 +253,9 @@ switch that turns the host off.
   and no crate of an app (the kit must never depend on one); `cargo audit` and `cargo deny check` run
   in CI.
 * A version that is younger than seven days is not taken (`tools/check-lock-age.py`, also run in CI).
+  A `429` or `503` of crates.io is waited out (its `Retry-After`, at most 120 s, else 10 to 60 s, about four
+  minutes in all) and asked again; only then exit 2 (not checked). Publication dates never change and are kept in
+  `--cache`, else `$LOCK_AGE_CACHE`, else `~/.cache/lock-age/crates-io.json`, so the jobs on one runner ask once.
 * `unsafe` is denied in the whole workspace. One module allows it: `appkit-hub/src/handles.rs`
   (Windows only, `windows-sys`, the version tokio already brings) clears the inherit flag of the
   standard handles before a hub is started, so the hub does not hold a pipe of its caller. The
