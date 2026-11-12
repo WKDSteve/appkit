@@ -45,9 +45,12 @@ pub struct Uia {
 }
 
 struct Search {
-    pid: u32,
+    /// The process, or `None` for a window of any process.
+    pid: Option<u32>,
     title: Option<String>,
-    found: Option<isize>,
+    found: Vec<isize>,
+    /// Stop at the first hit (the app's window) or collect them all (another program's).
+    first: bool,
 }
 
 extern "system" fn look_at(hwnd: HWND, data: LPARAM) -> BOOL {
@@ -59,7 +62,7 @@ extern "system" fn look_at(hwnd: HWND, data: LPARAM) -> BOOL {
     unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
     // SAFETY: the same handle; both calls only read.
     let visible = unsafe { IsWindowVisible(hwnd) }.as_bool();
-    if pid != search.pid || !visible {
+    if search.pid.is_some_and(|p| p != pid) || !visible {
         return true.into();
     }
     let mut buffer = [0u16; 512];
@@ -70,20 +73,25 @@ extern "system" fn look_at(hwnd: HWND, data: LPARAM) -> BOOL {
     if text == NOT_THE_WINDOW || !wanted {
         return true.into();
     }
-    search.found = Some(hwnd.0 as isize);
-    false.into()
+    search.found.push(hwnd.0 as isize);
+    (!search.first).into()
 }
 
-fn find_window(pid: u32, title: Option<&str>) -> Option<isize> {
+fn windows(pid: Option<u32>, title: Option<&str>, first: bool) -> Vec<isize> {
     let mut search = Search {
         pid,
         title: title.map(str::to_owned),
-        found: None,
+        found: Vec::new(),
+        first,
     };
     // SAFETY: the callback above uses the pointer only while EnumWindows runs, and `search` lives
     // past it. EnumWindows reports an error when the callback stops it, which is the hit.
     let _ = unsafe { EnumWindows(Some(look_at), LPARAM(&raw mut search as isize)) };
     search.found
+}
+
+fn find_window(pid: u32, title: Option<&str>) -> Option<isize> {
+    windows(Some(pid), title, true).first().copied()
 }
 
 fn text(e: &windows::core::Error) -> String {
@@ -107,8 +115,17 @@ impl Uia {
 
     /// The elements called `name` below the window.
     fn elements(&mut self, name: &str) -> Result<Vec<IUIAutomationElement>, String> {
-        let automation = self.automation()?;
         let root = self.root.clone().ok_or("the window is not open")?;
+        self.elements_in(&root, name)
+    }
+
+    /// The elements called `name` below `root`.
+    fn elements_in(
+        &mut self,
+        root: &IUIAutomationElement,
+        name: &str,
+    ) -> Result<Vec<IUIAutomationElement>, String> {
+        let automation = self.automation()?;
         let wanted = VARIANT::from(BSTR::from(name));
         // SAFETY: counted references and a variant that outlive each call.
         unsafe {
@@ -133,6 +150,30 @@ impl Uia {
             1 => Ok(found.remove(0)),
             n => Err(format!("{n} elements are called {name:?}")),
         }
+    }
+}
+
+/// What a sheet sees of the one element in `found`: `None` without one, an error with several.
+fn seen(mut found: Vec<IUIAutomationElement>, name: &str) -> Result<Option<Seen>, String> {
+    match found.len() {
+        0 => return Ok(None),
+        1 => {}
+        n => return Err(format!("{n} elements are called {name:?}")),
+    }
+    let element = found.remove(0);
+    // SAFETY: counted references; a pattern the element does not offer is an error, which here
+    // means it has no such state.
+    unsafe {
+        let state = element
+            .GetCurrentPatternAs::<IUIAutomationTogglePattern>(UIA_TogglePatternId)
+            .ok()
+            .and_then(|p| p.CurrentToggleState().ok())
+            .map(|s| s == ToggleState_On);
+        let value = element
+            .GetCurrentPatternAs::<IUIAutomationRangeValuePattern>(UIA_RangeValuePatternId)
+            .ok()
+            .and_then(|p| p.CurrentValue().ok());
+        Ok(Some(Seen { state, value }))
     }
 }
 
@@ -183,27 +224,29 @@ impl Desktop for Uia {
     }
 
     fn find(&mut self, name: &str) -> Result<Option<Seen>, String> {
-        let mut found = self.elements(name)?;
-        match found.len() {
-            0 => return Ok(None),
-            1 => {}
-            n => return Err(format!("{n} elements are called {name:?}")),
-        }
-        let element = found.remove(0);
-        // SAFETY: counted references; a pattern the element does not offer is an error, which here
-        // means it has no such state.
-        unsafe {
-            let state = element
-                .GetCurrentPatternAs::<IUIAutomationTogglePattern>(UIA_TogglePatternId)
-                .ok()
-                .and_then(|p| p.CurrentToggleState().ok())
-                .map(|s| s == ToggleState_On);
-            let value = element
-                .GetCurrentPatternAs::<IUIAutomationRangeValuePattern>(UIA_RangeValuePatternId)
-                .ok()
-                .and_then(|p| p.CurrentValue().ok());
-            Ok(Some(Seen { state, value }))
-        }
+        let found = self.elements(name)?;
+        seen(found, name)
+    }
+
+    fn look(&mut self, window: &str, name: &str) -> Result<Option<Option<Seen>>, String> {
+        let automation = self.automation()?;
+        let hits = windows(None, Some(window), false);
+        let hwnd = match hits.as_slice() {
+            [] => return Ok(None),
+            [one] => *one,
+            many => {
+                return Err(format!(
+                    "{} windows have {window:?} in their title",
+                    many.len()
+                ))
+            }
+        };
+        // SAFETY: a window the system just listed; reading its tree neither sizes nor focuses it.
+        // It may close between the two calls, which is an error of this look, not of the run.
+        let root = unsafe { automation.ElementFromHandle(HWND(hwnd as *mut _)) }
+            .map_err(|e| format!("the window {window:?} has no automation tree: {}", text(&e)))?;
+        let found = self.elements_in(&root, name)?;
+        seen(found, name).map(Some)
     }
 
     fn toggle(&mut self, name: &str) -> Result<(), String> {

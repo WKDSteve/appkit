@@ -18,6 +18,9 @@ pub struct Want {
     /// `on` or `off`.
     pub state: Option<bool>,
     pub value: Option<f64>,
+    /// A part of the title of another program's window to look in instead of the app's: the
+    /// driver only reads there, it never acts in a window it did not open.
+    pub window: Option<String>,
 }
 
 /// An element as a sheet sees it.
@@ -41,6 +44,11 @@ pub trait Desktop {
     /// The one element called `name`: `Ok(None)` when there is none now, an error when there are
     /// several (a guess would act on the wrong control).
     fn find(&mut self, name: &str) -> Result<Option<Seen>, String>;
+    /// The one element called `name` in the one visible window of any process whose title
+    /// contains `window`, read only (no size, no focus): `Ok(None)` when there is no such window
+    /// now, `Ok(Some(None))` when it has no such element, an error when several windows or
+    /// elements fit.
+    fn look(&mut self, window: &str, name: &str) -> Result<Option<Option<Seen>>, String>;
     fn toggle(&mut self, name: &str) -> Result<(), String>;
     fn click(&mut self, name: &str) -> Result<(), String>;
     fn set(&mut self, name: &str, value: f64) -> Result<(), String>;
@@ -58,6 +66,9 @@ impl Desktop for NoDesktop {
         Err(UNSUPPORTED.to_owned())
     }
     fn find(&mut self, _: &str) -> Result<Option<Seen>, String> {
+        Err(UNSUPPORTED.to_owned())
+    }
+    fn look(&mut self, _: &str, _: &str) -> Result<Option<Option<Seen>>, String> {
         Err(UNSUPPORTED.to_owned())
     }
     fn toggle(&mut self, _: &str) -> Result<(), String> {
@@ -95,10 +106,16 @@ fn want(value: &Value) -> Result<Want, String> {
         Some("off") => Some(false),
         Some(other) => return Err(format!("state is on or off, not {other}")),
     };
+    let window = match value.get("window") {
+        None => None,
+        Some(Value::String(w)) if !w.is_empty() => Some(w.clone()),
+        Some(_) => return Err("window is a part of a title, a non-empty string".to_owned()),
+    };
     Ok(Want {
         name: name.to_owned(),
         state,
         value: value.get("value").and_then(Value::as_f64),
+        window,
     })
 }
 
@@ -125,8 +142,14 @@ fn holds(want: &Want, seen: Option<&Seen>) -> Result<(), String> {
 fn await_want(desktop: &mut dyn Desktop, want: &Want, ms: u64) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_millis(ms);
     loop {
-        let seen = desktop.find(&want.name)?;
-        let result = holds(want, seen.as_ref());
+        let result = match &want.window {
+            None => holds(want, desktop.find(&want.name)?.as_ref()),
+            Some(window) => match desktop.look(window, &want.name)? {
+                None => Err(format!("no window has {window:?} in its title")),
+                Some(seen) => holds(want, seen.as_ref())
+                    .map_err(|why| format!("in the window {window:?}: {why}")),
+            },
+        };
         if result.is_ok() || Instant::now() >= deadline {
             return result.map_err(|why| format!("after {ms} ms: {why}"));
         }
@@ -287,6 +310,9 @@ mod tests {
         lag: u32,
         pending: Option<String>,
         shots: Vec<String>,
+        /// Windows of other programs by title, after `appears` looks.
+        others: HashMap<String, HashMap<String, Seen>>,
+        appears: u32,
     }
 
     impl Desktop for Fake {
@@ -315,6 +341,22 @@ mod tests {
                 self.elements.get_mut(&pending).expect("known").state = Some(true);
             }
             Ok(self.elements.get(name).cloned())
+        }
+        fn look(&mut self, window: &str, name: &str) -> Result<Option<Option<Seen>>, String> {
+            if self.appears > 0 {
+                self.appears -= 1;
+                return Ok(None);
+            }
+            let fits: Vec<_> = self
+                .others
+                .iter()
+                .filter(|(t, _)| t.contains(window))
+                .collect();
+            match fits.len() {
+                0 => Ok(None),
+                1 => Ok(Some(fits[0].1.get(name).cloned())),
+                n => Err(format!("{n} windows have {window:?} in their title")),
+            }
         }
         fn toggle(&mut self, name: &str) -> Result<(), String> {
             self.pending = Some(name.to_owned());
@@ -488,6 +530,62 @@ mod tests {
         assert_eq!(f.shots.len(), 1);
         let a = run(&mut f, &json!({ "shot": "../x" }));
         assert_eq!(a["ok"], false);
+    }
+
+    #[test]
+    fn a_wait_looks_into_the_window_of_another_program() {
+        let mut f = fake();
+        let mut explorer = HashMap::new();
+        explorer.insert("report.txt".to_owned(), Seen::default());
+        f.others
+            .insert("Downloads - File Explorer".to_owned(), explorer);
+        f.appears = 3;
+        let a = run(
+            &mut f,
+            &json!({ "wait": { "name": "report.txt", "window": "Downloads" }, "timeout": 2000 }),
+        );
+        assert_eq!(a["ok"], true, "{a}");
+        // the app's own window does not answer for it, nor the other window for the app
+        let a = run(
+            &mut f,
+            &json!({ "expect": { "name": "mute", "window": "Downloads" } }),
+        );
+        assert!(
+            a["reason"]
+                .as_str()
+                .unwrap()
+                .contains("in the window \"Downloads\""),
+            "{a}"
+        );
+        let a = run(&mut f, &json!({ "expect": { "name": "report.txt" } }));
+        assert_eq!(a["ok"], false, "{a}");
+    }
+
+    #[test]
+    fn another_window_that_is_not_there_or_twice_there_is_a_reason() {
+        let mut f = fake();
+        let a = run(
+            &mut f,
+            &json!({ "wait": { "name": "x", "window": "Outlook" }, "timeout": 50 }),
+        );
+        assert!(
+            a["reason"]
+                .as_str()
+                .unwrap()
+                .contains("no window has \"Outlook\" in its title"),
+            "{a}"
+        );
+        f.others
+            .insert("Inbox - Outlook".to_owned(), HashMap::new());
+        f.others
+            .insert("Calendar - Outlook".to_owned(), HashMap::new());
+        let a = run(
+            &mut f,
+            &json!({ "wait": { "name": "x", "window": "Outlook" } }),
+        );
+        assert!(a["reason"].as_str().unwrap().contains("2 windows"), "{a}");
+        let a = run(&mut f, &json!({ "wait": { "name": "x", "window": "" } }));
+        assert!(a["reason"].as_str().unwrap().contains("non-empty"), "{a}");
     }
 
     #[test]
