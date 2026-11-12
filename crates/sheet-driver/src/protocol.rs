@@ -44,8 +44,8 @@ pub trait Desktop {
     /// The one element called `name`: `Ok(None)` when there is none now, an error when there are
     /// several (a guess would act on the wrong control).
     fn find(&mut self, name: &str) -> Result<Option<Seen>, String>;
-    /// The one element called `name` in the one visible window of any process whose title
-    /// contains `window`, read only (no size, no focus): `Ok(None)` when there is no such window
+    /// The one element called `name` in the one visible window of another process (not the app's)
+    /// whose title contains `window`, read only (no size, no focus): `Ok(None)` when there is no such window
     /// now, `Ok(Some(None))` when it has no such element, an error when several windows or
     /// elements fit.
     fn look(&mut self, window: &str, name: &str) -> Result<Option<Option<Seen>>, String>;
@@ -144,9 +144,12 @@ fn await_want(desktop: &mut dyn Desktop, want: &Want, ms: u64) -> Result<(), Str
     loop {
         let result = match &want.window {
             None => holds(want, desktop.find(&want.name)?.as_ref()),
-            Some(window) => match desktop.look(window, &want.name)? {
-                None => Err(format!("no window has {window:?} in its title")),
-                Some(seen) => holds(want, seen.as_ref())
+            // Another program's windows come and go while it works: two of them for a moment, or one
+            // that closes between the listing and the read, is "not yet", said only at the deadline.
+            Some(window) => match desktop.look(window, &want.name) {
+                Err(why) => Err(why),
+                Ok(None) => Err(format!("no window has {window:?} in its title")),
+                Ok(Some(seen)) => holds(want, seen.as_ref())
                     .map_err(|why| format!("in the window {window:?}: {why}")),
             },
         };
@@ -313,6 +316,8 @@ mod tests {
         /// Windows of other programs by title, after `appears` looks.
         others: HashMap<String, HashMap<String, Seen>>,
         appears: u32,
+        /// Looks that see two fitting windows before the second closes.
+        ambiguous: u32,
     }
 
     impl Desktop for Fake {
@@ -346,6 +351,10 @@ mod tests {
             if self.appears > 0 {
                 self.appears -= 1;
                 return Ok(None);
+            }
+            if self.ambiguous > 0 {
+                self.ambiguous -= 1;
+                return Err(format!("2 windows have {window:?} in their title"));
             }
             let fits: Vec<_> = self
                 .others
@@ -559,6 +568,20 @@ mod tests {
         );
         let a = run(&mut f, &json!({ "expect": { "name": "report.txt" } }));
         assert_eq!(a["ok"], false, "{a}");
+    }
+
+    #[test]
+    fn a_window_that_is_twice_there_for_a_moment_does_not_end_a_wait() {
+        let mut f = fake();
+        let mut dialog = HashMap::new();
+        dialog.insert("OK".to_owned(), Seen::default());
+        f.others.insert("Save - Notepad".to_owned(), dialog);
+        f.ambiguous = 3;
+        let a = run(
+            &mut f,
+            &json!({ "wait": { "name": "OK", "window": "Notepad" }, "timeout": 2000 }),
+        );
+        assert_eq!(a["ok"], true, "{a}");
     }
 
     #[test]

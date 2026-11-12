@@ -42,6 +42,8 @@ pub struct Uia {
     automation: Option<IUIAutomation>,
     hwnd: Option<isize>,
     root: Option<IUIAutomationElement>,
+    /// The app's process: its own windows are never "another program's".
+    pid: Option<u32>,
 }
 
 struct Search {
@@ -51,6 +53,8 @@ struct Search {
     found: Vec<isize>,
     /// Stop at the first hit (the app's window) or collect them all (another program's).
     first: bool,
+    /// A process whose windows do not count (the app's, when looking at another program's).
+    skip: Option<u32>,
 }
 
 extern "system" fn look_at(hwnd: HWND, data: LPARAM) -> BOOL {
@@ -62,7 +66,7 @@ extern "system" fn look_at(hwnd: HWND, data: LPARAM) -> BOOL {
     unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
     // SAFETY: the same handle; both calls only read.
     let visible = unsafe { IsWindowVisible(hwnd) }.as_bool();
-    if search.pid.is_some_and(|p| p != pid) || !visible {
+    if search.pid.is_some_and(|p| p != pid) || search.skip == Some(pid) || !visible {
         return true.into();
     }
     let mut buffer = [0u16; 512];
@@ -77,12 +81,13 @@ extern "system" fn look_at(hwnd: HWND, data: LPARAM) -> BOOL {
     (!search.first).into()
 }
 
-fn windows(pid: Option<u32>, title: Option<&str>, first: bool) -> Vec<isize> {
+fn windows(pid: Option<u32>, title: Option<&str>, first: bool, skip: Option<u32>) -> Vec<isize> {
     let mut search = Search {
         pid,
         title: title.map(str::to_owned),
         found: Vec::new(),
         first,
+        skip,
     };
     // SAFETY: the callback above uses the pointer only while EnumWindows runs, and `search` lives
     // past it. EnumWindows reports an error when the callback stops it, which is the hit.
@@ -91,7 +96,7 @@ fn windows(pid: Option<u32>, title: Option<&str>, first: bool) -> Vec<isize> {
 }
 
 fn find_window(pid: u32, title: Option<&str>) -> Option<isize> {
-    windows(Some(pid), title, true).first().copied()
+    windows(Some(pid), title, true, None).first().copied()
 }
 
 fn text(e: &windows::core::Error) -> String {
@@ -219,6 +224,7 @@ impl Desktop for Uia {
         let root = unsafe { automation.ElementFromHandle(handle) }
             .map_err(|e| format!("the window has no automation tree: {}", text(&e)))?;
         self.hwnd = Some(hwnd);
+        self.pid = Some(pid);
         self.root = Some(root);
         Ok(())
     }
@@ -230,7 +236,7 @@ impl Desktop for Uia {
 
     fn look(&mut self, window: &str, name: &str) -> Result<Option<Option<Seen>>, String> {
         let automation = self.automation()?;
-        let hits = windows(None, Some(window), false);
+        let hits = windows(None, Some(window), false, self.pid);
         let hwnd = match hits.as_slice() {
             [] => return Ok(None),
             [one] => *one,
