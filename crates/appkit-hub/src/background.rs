@@ -7,7 +7,7 @@
 //! port says the instance of `hub.json`: a stale file never makes `stop` kill
 //! a process that merely got the same number.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::future::Future;
 use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
@@ -861,7 +861,51 @@ async fn install_steps_beside(
             &LinkPlace::ALL,
         )?);
     }
+    out.push_str(&how_to_start(
+        app,
+        &target,
+        env.get("PATH").map(OsString::as_os_str),
+    ));
     Ok(())
+}
+
+/// The last lines of `install`: the whole call that starts the installed program, and whether its folder is on
+/// `PATH`. Install does not put it there: a program of the user is not added to the path of every shell behind
+/// their back. Windows compares the folders without case and without a trailing separator.
+#[must_use]
+pub fn how_to_start(app: &Background<'_>, target: &Path, path_var: Option<&OsStr>) -> String {
+    let dir = target.parent().unwrap_or(target);
+    let same = |p: &Path| {
+        if cfg!(windows) {
+            p.to_string_lossy()
+                .trim_end_matches(['\\', '/'])
+                .eq_ignore_ascii_case(dir.to_string_lossy().trim_end_matches(['\\', '/']))
+        } else {
+            p == dir
+        }
+    };
+    let on_path = path_var.is_some_and(|v| std::env::split_paths(v).any(|p| same(&p)));
+    let binary = app.identity().binary;
+    let mut out = format!("start it: \"{}\" start --open\n", target.display());
+    if on_path {
+        out.push_str(&format!(
+            "its folder is on PATH: `{binary} start --open` works in any shell\n"
+        ));
+    } else {
+        let menu = if cfg!(windows) {
+            format!(
+                " (the Start menu entry {} starts it too)",
+                app.identity().title
+            )
+        } else {
+            String::new()
+        };
+        out.push_str(&format!(
+            "its folder is not on PATH; add {} to call `{binary}` by name{menu}\n",
+            dir.display()
+        ));
+    }
+    out
 }
 
 /// The links `install` makes on Windows: with `shortcut` on the desktop and in the Start menu (a link that
@@ -2334,5 +2378,47 @@ ERROR: Access is denied.
             Err("no reg.exe".to_owned()),
         );
         assert_eq!(err.unwrap_err(), "no reg.exe");
+    }
+
+    /// `install` ends with the call that starts the program, and says whether its folder is on PATH (by the
+    /// name of the program, and on Windows the entry of the Start menu).
+    #[test]
+    fn install_names_the_whole_call_and_the_path() {
+        // Whole paths of no folder that exists: only compared, nothing is made.
+        let root = PathBuf::from(if cfg!(windows) {
+            "C:/rules-hub-test"
+        } else {
+            "/rules-hub-test"
+        });
+        let dir = root.join("bin");
+        let target = dir.join(IDENTITY.program_file());
+        let elsewhere = std::env::join_paths([root.join("elsewhere")]).unwrap();
+        let off = how_to_start(&APP, &target, Some(&elsewhere));
+        assert!(
+            off.starts_with(&format!(
+                "start it: \"{}\" start --open\n",
+                target.display()
+            )),
+            "{off}"
+        );
+        assert!(off.contains("not on PATH"), "{off}");
+        assert!(off.contains("to call `rules-hub` by name"), "{off}");
+        assert!(off.contains(&dir.display().to_string()), "{off}");
+        assert_eq!(
+            off.contains("the Start menu entry Rules starts it too"),
+            cfg!(windows),
+            "{off}"
+        );
+        let none = how_to_start(&APP, &target, None);
+        assert!(none.contains("not on PATH"), "{none}");
+        let with = std::env::join_paths([root.join("elsewhere"), dir.clone()]).unwrap();
+        let on = how_to_start(&APP, &target, Some(&with));
+        assert!(on.contains("is on PATH: `rules-hub start --open`"), "{on}");
+        assert!(!on.contains("not on PATH"), "{on}");
+        if cfg!(windows) {
+            // Windows does not tell the case of a folder apart, nor a trailing separator.
+            let upper = OsString::from(format!("{}\\", dir.display().to_string().to_uppercase()));
+            assert!(how_to_start(&APP, &target, Some(&upper)).contains("is on PATH"));
+        }
     }
 }
