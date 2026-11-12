@@ -845,28 +845,63 @@ async fn install_steps_beside(
         // It was registered for another copy: point it here.
         out.push_str(&autostart_for(app, Autostart::On, &target)?);
     }
-    if opts.shortcut {
-        let places = &LinkPlace::ALL;
+    if cfg!(windows) {
+        let reg = system_program("reg.exe").map(RegExe);
+        let reg = reg
+            .as_ref()
+            .map(|r| r as &dyn Registry)
+            .map_err(Clone::clone);
+        out.push_str(&install_links(app, &target, opts, &env, reg)?);
+    } else if opts.shortcut {
         out.push_str(&shortcut(
             app,
             &target,
             opts.link_name,
             opts.link_start,
-            places,
+            &LinkPlace::ALL,
         )?);
-    } else if cfg!(windows) && env.get(&no_login_sync(app)).is_none() {
-        // The Start menu is where the program is found: it is not left to a flag. A link that cannot be
-        // made is said, and the install (which is done) still succeeds.
-        let places = [LinkPlace::StartMenu];
-        match shortcut(app, &target, opts.link_name, opts.link_start, &places) {
-            Ok(text) => out.push_str(&text),
-            Err(e) => out.push_str(&format!(
-                "no link in the Start menu: {e}
-"
-            )),
-        }
     }
     Ok(())
+}
+
+/// The links `install` makes on Windows: with `shortcut` on the desktop and in the Start menu (a link that
+/// cannot be made is an error); without it only in the Start menu, where the program is found, which is not
+/// left to a flag (a link that cannot be made is said, and the install, which is done, still succeeds);
+/// nothing automatic when the tests of the program ask for no changes to the machine (`NO_LOGIN_SYNC`).
+/// `reg` is the registry, or why it cannot be asked.
+fn install_links(
+    app: &Background<'_>,
+    target: &Path,
+    opts: InstallOptions,
+    env: &Env,
+    reg: Result<&dyn Registry, String>,
+) -> Result<String, String> {
+    if opts.shortcut {
+        return shortcut_in(
+            app,
+            target,
+            opts.link_name,
+            opts.link_start,
+            &LinkPlace::ALL,
+            env,
+            reg?,
+        );
+    }
+    if env.get(&no_login_sync(app)).is_some() {
+        return Ok(String::new());
+    }
+    let made = reg.and_then(|reg| {
+        shortcut_in(
+            app,
+            target,
+            opts.link_name,
+            opts.link_start,
+            &[LinkPlace::StartMenu],
+            env,
+            reg,
+        )
+    });
+    Ok(made.unwrap_or_else(|e| format!("no link in the Start menu: {e}\n")))
 }
 
 /// Run `<program> start` and return what it printed. Its complaint (on
@@ -1198,11 +1233,23 @@ fn shortcut(
             loginitems::Platform::current().ok_or("a launcher is not built for this system")?;
         return loginitems::launcher(&app.login, platform, exe, &Env::from_process());
     }
-    let env = Env::from_process();
     let reg = RegExe(system_program("reg.exe")?);
+    shortcut_in(app, exe, name, start, places, &Env::from_process(), &reg)
+}
+
+/// [`shortcut`] on Windows, with the environment and the registry it reads the folders from.
+fn shortcut_in(
+    app: &Background<'_>,
+    exe: &Path,
+    name: LinkName,
+    start: LinkStart,
+    places: &[LinkPlace],
+    env: &Env,
+    reg: &dyn Registry,
+) -> Result<String, String> {
     let mut out = String::new();
     for &place in places {
-        let dir = shell_folder(&env, &reg, &place)?;
+        let dir = shell_folder(env, reg, &place)?;
         let link_name = match name {
             LinkName::Title => app.identity().title,
             LinkName::App => app.identity().app,
@@ -2194,5 +2241,98 @@ ERROR: Access is denied.
         );
         let off = run_key(Autostart::Status, Path::new(EXE), &FakeRegistry::new(None)).unwrap();
         assert_eq!(off, "off\n");
+    }
+
+    /// `reg query` names the desktop and the Start menu (`Programs`) as these folders.
+    #[cfg(windows)]
+    struct FolderRegistry {
+        desktop: String,
+        programs: String,
+    }
+
+    #[cfg(windows)]
+    impl Registry for FolderRegistry {
+        fn run(&self, args: &[OsString]) -> Result<RegOutput, String> {
+            let name = args
+                .last()
+                .and_then(|a| a.to_str())
+                .unwrap_or_default()
+                .to_owned();
+            let data = if name == "Desktop" {
+                &self.desktop
+            } else {
+                &self.programs
+            };
+            Ok(RegOutput {
+                success: true,
+                stdout: format!(
+                    "\r\n{SHELL_FOLDERS_KEY}\r\n    {name}    REG_EXPAND_SZ    {data}\r\n\r\n"
+                ),
+                stderr: String::new(),
+            })
+        }
+    }
+
+    /// `install` on Windows: the Start menu always, the desktop only with `--shortcut`, nothing automatic
+    /// with `NO_LOGIN_SYNC`; a link of the Start menu that cannot be made does not fail the install, one
+    /// asked for with `--shortcut` does.
+    #[cfg(windows)]
+    #[test]
+    fn install_links_the_start_menu_always_and_the_desktop_only_when_asked() {
+        let root = Scratch::new("hub-install-links");
+        let desktop = root.join("Desktop");
+        let programs = root.join("Programs");
+        let reg = FolderRegistry {
+            desktop: desktop.to_string_lossy().into_owned(),
+            programs: programs.to_string_lossy().into_owned(),
+        };
+        let exe = Path::new(r"C:\Apps\rules-hub.exe");
+        let link = |dir: &Path| dir.join(desktop_link_name(IDENTITY.title));
+        let plain = InstallOptions::default();
+        let asked = InstallOptions {
+            shortcut: true,
+            ..InstallOptions::default()
+        };
+
+        let said = install_links(&APP, exe, plain, &Env::default(), Ok(&reg)).unwrap();
+        assert!(said.contains("in the Start menu"), "{said}");
+        assert!(link(&programs).is_file());
+        assert!(
+            !link(&desktop).exists(),
+            "no desktop link without --shortcut"
+        );
+
+        std::fs::remove_file(link(&programs)).unwrap();
+        let said = install_links(&APP, exe, asked, &Env::default(), Ok(&reg)).unwrap();
+        assert!(said.contains("on the desktop"), "{said}");
+        assert!(link(&programs).is_file() && link(&desktop).is_file());
+
+        std::fs::remove_file(link(&programs)).unwrap();
+        std::fs::remove_file(link(&desktop)).unwrap();
+        let quiet = Env::from_pairs([("RULES_DESKTOP_NO_LOGIN_SYNC", "1")]);
+        let said = install_links(&APP, exe, plain, &quiet, Ok(&reg)).unwrap();
+        assert_eq!(said, "");
+        assert!(!link(&programs).exists() && !link(&desktop).exists());
+
+        // A Start menu that cannot be found is said, the install goes on; with --shortcut it is an error.
+        let broken = OnlyRegistry("Programs", r"%NOPE%\Programs");
+        let said = install_links(&APP, exe, plain, &Env::default(), Ok(&broken)).unwrap();
+        assert!(said.starts_with("no link in the Start menu: "), "{said}");
+        let said = install_links(
+            &APP,
+            exe,
+            plain,
+            &Env::default(),
+            Err("no reg.exe".to_owned()),
+        );
+        assert_eq!(said.unwrap(), "no link in the Start menu: no reg.exe\n");
+        let err = install_links(
+            &APP,
+            exe,
+            asked,
+            &Env::default(),
+            Err("no reg.exe".to_owned()),
+        );
+        assert_eq!(err.unwrap_err(), "no reg.exe");
     }
 }
