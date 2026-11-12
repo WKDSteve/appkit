@@ -96,6 +96,32 @@ def bump_package_json(text: str, tag: str, _sha: str) -> tuple[str, int]:
     return UI.subn(lambda m: f"{m.group(1)}{tag}{m.group(2)}", text)
 
 
+# Cargo projects of their own inside an app (their own Cargo.toml and Cargo.lock), moved with the app: testing-desktop's
+# `mobile/` pins appkit-mobile and tauri-plugin-appkit. A missing one is no problem.
+NESTED = ("mobile",)
+
+
+def nested_pinned(app: Path) -> list[str]:
+    """The nested projects of `app` whose Cargo.toml pins appkit."""
+    found = []
+    for sub in NESTED:
+        manifest = app / sub / "Cargo.toml"
+        if manifest.is_file() and "github.com/WKDSteve/appkit" in read_exact(manifest):
+            found.append(sub)
+    return found
+
+
+def appkit_packages(lock_text: str) -> list[str]:
+    """The names of the packages a Cargo.lock takes from appkit's repository, in the order of the lock."""
+    names: list[str] = []
+    for block in lock_text.split("[[package]]"):
+        name = next((line.split("=", 1)[1].strip().strip('"') for line in block.splitlines()
+                     if line.startswith("name = ")), None)
+        if name and "github.com/WKDSteve/appkit" in block and name not in names:
+            names.append(name)
+    return names
+
+
 def read_exact(path: Path) -> str:
     """The text with its line endings as they are: read_text would turn CRLF into LF, and writing it back
     would change every line of the file."""
@@ -128,6 +154,8 @@ def plan(app: Path, mode: str, tag: str, sha: str) -> tuple[dict[Path, str], lis
     apply(app / "tools" / "release-kit.pin", bump_pin, required=(mode == "kit"))
     if mode in ("full", "cargo"):
         apply(app / "Cargo.toml", bump_cargo, required=True)
+        for sub in NESTED:
+            apply(app / sub / "Cargo.toml", bump_cargo, required=False)
     if mode == "full":
         apply(app / "ui" / "package.json", bump_package_json, required=True)
     return changes, problems
@@ -186,6 +214,14 @@ def refresh_locks(app: Path, page: bool = True, lockfile_only: bool = False) -> 
     only (never into the user's ~/.npmrc). `lockfile_only`: pnpm writes the lock and installs nothing (a fresh
     worktree has no node_modules)."""
     run(["cargo", "update", "-p", "appkit-hub"], app)
+    for sub in nested_pinned(app):
+        lock = app / sub / "Cargo.lock"
+        names = appkit_packages(read_exact(lock)) if lock.is_file() else []
+        if names:
+            update = ["cargo", "update", "--manifest-path", str(Path(sub) / "Cargo.toml")]
+            for name in names:
+                update += ["-p", name]
+            run(update, app)
     if not page:
         return
     token = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True).stdout.strip()
@@ -268,9 +304,20 @@ def lock_targets(app: Path, mode: str, changes: dict[Path, str]) -> list[Path]:
     targets = list(changes)
     if mode in ("full", "cargo"):
         targets.append(app / "Cargo.lock")
+        for sub in NESTED:
+            if app / sub / "Cargo.toml" in changes:
+                targets.append(app / sub / "Cargo.lock")
     if mode == "full":
         targets.append(app / "ui" / "pnpm-lock.yaml")
     return targets
+
+
+def check_nested_pins(app: Path, changes: dict[Path, str]) -> None:
+    """The app's own pin check against the lock of each nested project the bump moved."""
+    for sub in NESTED:
+        if app / sub / "Cargo.toml" in changes and (app / sub / "Cargo.lock").is_file():
+            run([sys.executable, str(Path("tools") / "check-appkit-pin.py"), "--lock",
+                 str(Path(sub) / "Cargo.lock")], app)
 
 
 def bump_in_worktree(name: str, app: Path, mode: str, tag: str, sha: str, args: argparse.Namespace) -> bool:
@@ -306,6 +353,8 @@ def bump_in_worktree(name: str, app: Path, mode: str, tag: str, sha: str, args: 
                 refresh_locks(tree, page=(mode == "full"), lockfile_only=True)
             check = "check-appkit-pin.py" if crates else "check-release-kit-pin.py"
             run([sys.executable, str(Path("tools") / check)], tree)
+            if crates and not args.no_lock:
+                check_nested_pins(tree, changes)
             if crates and not args.no_lock:
                 settle_lock_age(tree, getattr(args, "min_days", 7), getattr(args, "hold_back", False),
                                 Path(getattr(args, "appkit_lock", APPKIT / "Cargo.lock")))
@@ -377,6 +426,7 @@ def bump_app(name: str, repos: Path, tag: str, sha: str, args: argparse.Namespac
         check = "check-appkit-pin.py" if crates else "check-release-kit-pin.py"
         run([sys.executable, str(Path("tools") / check)], app)
         if crates and not args.no_lock:
+            check_nested_pins(app, changes)
             settle_lock_age(app, getattr(args, "min_days", 7), getattr(args, "hold_back", False),
                             Path(getattr(args, "appkit_lock", APPKIT / "Cargo.lock")))
     except RuntimeError as err:

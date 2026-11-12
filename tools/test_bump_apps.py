@@ -39,6 +39,28 @@ PACKAGE = (
 )
 
 
+MOBILE_CARGO = (
+    '[dependencies]\n'
+    'appkit-mobile = { git = "https://github.com/WKDSteve/appkit", tag = "v0.23.1" }\n'
+    'tauri-plugin-appkit = { git = "https://github.com/WKDSteve/appkit", tag = "v0.23.1" }\n'
+)
+MOBILE_LOCK = (
+    'version = 4\n\n[[package]]\nname = "appkit-mobile"\nversion = "0.0.0"\n'
+    'source = "git+https://github.com/WKDSteve/appkit?tag=v0.23.1#' + OLD_SHA + '"\n\n'
+    '[[package]]\nname = "serde"\nversion = "1.0.0"\n'
+    'source = "registry+https://github.com/rust-lang/crates.io-index"\n\n'
+    '[[package]]\nname = "tauri-plugin-appkit"\nversion = "0.0.0"\n'
+    'source = "git+https://github.com/WKDSteve/appkit?tag=v0.23.1#' + OLD_SHA + '"\n'
+)
+
+
+def add_mobile(app: Path) -> None:
+    """A Cargo project of its own in `mobile/`, as testing-desktop has, pinning two crates of appkit."""
+    (app / "mobile").mkdir()
+    (app / "mobile" / "Cargo.toml").write_text(MOBILE_CARGO, encoding="utf-8", newline="")
+    (app / "mobile" / "Cargo.lock").write_text(MOBILE_LOCK, encoding="utf-8", newline="")
+
+
 def make_app(root: Path, name: str, full: bool) -> Path:
     app = root / name
     (app / ".github" / "workflows").mkdir(parents=True)
@@ -408,6 +430,68 @@ def give_check(app: Path, *answers: str) -> None:
     """Put the stand-in check into the app, answering one run after the other."""
     (app / "tools" / "check-lock-age.py").write_text(FAKE_CHECK, encoding="utf-8")
     (app / "tools" / "answers.txt").write_text("\n---\n".join(answers), encoding="utf-8")
+
+
+
+class NestedTest(unittest.TestCase):
+    """A Cargo project of its own inside an app (testing-desktop's `mobile/`) moves with the app: its Cargo.toml, only
+    the appkit crates of its lock, the app's pin check against that lock, and the lock in the commit."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.args = type("Args", (), {"dry_run": False, "commit": True, "no_lock": False})()
+
+    def git(self, app: Path, *args: str) -> str:
+        res = subprocess.run(["git", "-C", str(app), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                             check=True, capture_output=True, text=True)
+        return res.stdout
+
+    def test_the_plan_moves_the_nested_cargo_toml_and_a_missing_one_is_no_problem(self) -> None:
+        app = make_app(self.tmp, "testing-desktop", full=True)
+        add_mobile(app)
+        changes, problems = bump.plan(app, "full", "v0.23.2", NEW_SHA)
+        self.assertEqual(problems, [])
+        self.assertIn(app / "mobile" / "Cargo.toml", changes)
+        self.assertIn('tag = "v0.23.2"', changes[app / "mobile" / "Cargo.toml"])
+        other = make_app(self.tmp, "tasks-desktop", full=True)
+        self.assertEqual(bump.plan(other, "full", "v0.23.2", NEW_SHA)[1], [])
+
+    def test_the_appkit_crates_of_a_lock_are_named(self) -> None:
+        self.assertEqual(bump.appkit_packages(MOBILE_LOCK), ["appkit-mobile", "tauri-plugin-appkit"])
+
+    def test_the_refresh_updates_only_the_appkit_crates_of_the_nested_lock(self) -> None:
+        app = make_app(self.tmp, "testing-desktop", full=True)
+        add_mobile(app)
+        with mock.patch.object(bump, "run") as run:
+            bump.refresh_locks(app, page=False)
+        calls = [c.args[0] for c in run.call_args_list]
+        self.assertEqual(calls, [
+            ["cargo", "update", "-p", "appkit-hub"],
+            ["cargo", "update", "--manifest-path", str(Path("mobile") / "Cargo.toml"),
+             "-p", "appkit-mobile", "-p", "tauri-plugin-appkit"],
+        ])
+
+    def test_the_bump_checks_and_commits_the_nested_lock(self) -> None:
+        app = make_app(self.tmp, "testing-desktop", full=True)
+        add_mobile(app)
+        (app / "Cargo.lock").write_text("version = 4\n", encoding="utf-8", newline="")
+        self.git(app, "init", "-q")
+        self.git(app, "add", ".")
+        self.git(app, "commit", "-q", "-m", "start")
+
+        def refresh(target: Path, page: bool = True) -> None:
+            lock = target / "mobile" / "Cargo.lock"
+            lock.write_text(bump.read_exact(lock).replace("v0.23.1", "v0.23.2"), encoding="utf-8", newline="")
+
+        with mock.patch.object(bump, "run") as run, mock.patch.object(bump, "refresh_locks", side_effect=refresh), \
+                mock.patch.object(bump, "settle_lock_age"):
+            self.assertTrue(bump.bump_app("testing-desktop", self.tmp, "v0.23.2", NEW_SHA, self.args))
+        checks = [c.args[0][1:] for c in run.call_args_list]
+        self.assertIn([str(Path("tools") / "check-appkit-pin.py"), "--lock", str(Path("mobile") / "Cargo.lock")],
+                      checks)
+        self.assertEqual(self.git(app, "status", "--porcelain").strip(), "", "the nested lock is in the commit")
+        self.assertIn("v0.23.2", (app / "mobile" / "Cargo.lock").read_text(encoding="utf-8"))
 
 
 class LockAgeTest(unittest.TestCase):
