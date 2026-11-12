@@ -293,6 +293,97 @@ class BumpAppTest(unittest.TestCase):
             self.assertTrue(bump.bump_app("ai-desktop", self.tmp, "v0.23.2", NEW_SHA, self.args))
 
 
+class WorktreeTest(unittest.TestCase):
+    """--worktree: the bump is made from HEAD in a throw-away worktree; another session's uncommitted work neither
+    skips the app nor reaches the commit or the lock refresh."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.args = type("Args", (), {"dry_run": False, "commit": True, "no_lock": False, "worktree": True})()
+
+    def git(self, app: Path, *args: str) -> str:
+        res = subprocess.run(["git", "-C", str(app), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                             check=True, capture_output=True, text=True)
+        return res.stdout
+
+    def repo(self, name: str, full: bool) -> Path:
+        app = make_app(self.tmp, name, full)
+        if full:
+            (app / "Cargo.lock").write_text("version = 4\n", encoding="utf-8", newline="")
+            (app / "crates" / "hub").mkdir(parents=True)
+            (app / "crates" / "hub" / "Cargo.toml").write_text("[package]\nname = \"hub\"\n", encoding="utf-8")
+        self.git(app, "init", "-q")
+        self.git(app, "config", "user.name", "t")
+        self.git(app, "config", "user.email", "t@t")
+        self.git(app, "add", ".")
+        self.git(app, "commit", "-q", "-m", "start")
+        return app
+
+    def worktrees(self, app: Path) -> int:
+        return sum(1 for line in self.git(app, "worktree", "list", "--porcelain").splitlines() if line.startswith("worktree "))
+
+    def test_foreign_work_elsewhere_stays_out_of_the_lock_refresh_and_the_commit(self) -> None:
+        app = self.repo("tasks-desktop", full=True)
+        member = app / "crates" / "hub" / "Cargo.toml"
+        member.write_text("[package]\nname = \"hub\"\n[dependencies]\nnew-dep = \"1\"\n", encoding="utf-8")
+        (app / "notes.txt").write_text("someone else's\n", encoding="utf-8")
+        seen = {}
+
+        def refresh(target: Path, page: bool = True, lockfile_only: bool = False) -> None:
+            seen["target"], seen["lockfile_only"] = target, lockfile_only
+            seen["member"] = (target / "crates" / "hub" / "Cargo.toml").read_text(encoding="utf-8")
+            (target / "Cargo.lock").write_text("version = 4\n# refreshed\n", encoding="utf-8")
+
+        with mock.patch.object(bump, "run"), mock.patch.object(bump, "refresh_locks", side_effect=refresh):
+            self.assertTrue(bump.bump_app("tasks-desktop", self.tmp, "v0.23.2", NEW_SHA, self.args))
+        self.assertNotEqual(Path(seen["target"]).resolve(), app.resolve(), "the refresh ran in a worktree")
+        self.assertTrue(seen["lockfile_only"], "pnpm writes the lock only there")
+        self.assertNotIn("new-dep", seen["member"], "the refresh saw HEAD's manifests, not the uncommitted one")
+        self.assertEqual(len(self.git(app, "log", "--oneline").splitlines()), 2, "the bump is the clone's HEAD now")
+        shown = self.git(app, "show", "--name-only", "--format=", "HEAD").split()
+        self.assertIn("Cargo.toml", shown)
+        self.assertIn("Cargo.lock", shown)
+        self.assertNotIn("crates/hub/Cargo.toml", shown)
+        self.assertIn('tag = "v0.23.2"', (app / "Cargo.toml").read_text(), "the fast-forward updated the tree")
+        self.assertIn("new-dep", member.read_text(), "the foreign change is still there")
+        status = self.git(app, "status", "--porcelain")
+        self.assertIn("crates/hub/Cargo.toml", status)
+        self.assertIn("notes.txt", status)
+        self.assertEqual(self.worktrees(app), 1, "the worktree is gone")
+
+    def test_foreign_work_in_a_bumped_file_leaves_the_commit_on_a_branch(self) -> None:
+        app = self.repo("ai-desktop", full=False)
+        mine = app / ".github" / "workflows" / "rolling.yml"
+        mine.write_text(WORKFLOW + "# someone else's work\n", encoding="utf-8", newline="")
+        with mock.patch.object(bump, "run"):
+            self.assertFalse(bump.bump_app("ai-desktop", self.tmp, "v0.23.2", NEW_SHA, self.args))
+        self.assertEqual(len(self.git(app, "log", "--oneline").splitlines()), 1, "the branch did not move")
+        self.assertEqual(mine.read_text(), WORKFLOW + "# someone else's work\n", "the foreign change is untouched")
+        kept = self.git(app, "show", "bump/appkit-v0.23.2:tools/release-kit.pin")
+        self.assertIn(NEW_SHA, kept, "the bump waits on its branch")
+        self.assertEqual(self.worktrees(app), 1)
+
+    def test_a_dry_run_in_a_worktree_changes_nothing(self) -> None:
+        app = self.repo("ai-desktop", full=False)
+        self.args.dry_run = True
+        with mock.patch.object(bump, "run") as run:
+            self.assertTrue(bump.bump_app("ai-desktop", self.tmp, "v0.23.2", NEW_SHA, self.args))
+        run.assert_not_called()
+        self.assertEqual(len(self.git(app, "log", "--oneline").splitlines()), 1)
+        self.assertEqual(self.git(app, "branch", "--list", "bump/*").strip(), "")
+        self.assertEqual(self.worktrees(app), 1)
+
+    def test_a_failing_pin_check_commits_nothing_anywhere(self) -> None:
+        app = self.repo("ai-desktop", full=False)
+        with mock.patch.object(bump, "run", side_effect=RuntimeError("pins differ")):
+            self.assertFalse(bump.bump_app("ai-desktop", self.tmp, "v0.23.2", NEW_SHA, self.args))
+        self.assertEqual(len(self.git(app, "log", "--oneline").splitlines()), 1)
+        self.assertEqual(self.git(app, "branch", "--list", "bump/*").strip(), "")
+        self.assertEqual(self.git(app, "status", "--porcelain").strip(), "")
+        self.assertEqual(self.worktrees(app), 1)
+
+
 LOCK = (
     'version = 4\n\n'
     '[[package]]\nname = "ctutils"\nversion = "0.4.6"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n\n'

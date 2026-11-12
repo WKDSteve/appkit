@@ -6,6 +6,7 @@
     python tools/bump-apps.py v0.23.2 --dry-run             say what would change, change nothing
     python tools/bump-apps.py v0.23.2 --commit              also commit each app (never pushes)
     python tools/bump-apps.py v0.23.2 --hold-back           a crate the bump made too young goes back to appkit's version
+    python tools/bump-apps.py v0.23.2 --worktree            bump and commit each app in a worktree of its HEAD (see below)
 
 Why a script: an app pins appkit in several places that must agree (and its own check fails when they do
 not), and doing it by hand is what makes a small appkit fix cost an afternoon.
@@ -28,6 +29,13 @@ would turn red on it. Such a crate is named and the app is not done (nothing com
 put back with `cargo update -p <name>@<version> --precise <v>` to the version appkit's own Cargo.lock holds (which
 passed the same gate here), and the check runs again; a crate appkit does not hold, or holds only at the same
 version, stays a failure. The check asks crates.io; `--no-lock` skips it with the refresh.
+
+--worktree (implies --commit): the bump of each app is made in a throw-away git worktree of the app's HEAD, never in
+the clone. Uncommitted work of another session then neither skips the app nor slips into the lock files (`cargo
+update` resolves the whole workspace, so a dependency added to a member's Cargo.toml and not yet committed would land
+in the bump's Cargo.lock; pnpm runs with --lockfile-only there). The commit is moved into the clone's branch as a
+fast-forward; when the clone's own uncommitted changes touch the same files, or its branch moved meanwhile, the commit
+stays on the branch bump/appkit-<tag> and the app counts as not done (merge it once that work is committed).
 
 For work on appkit and an app at the same time, do not bump: use a `[patch]` in an uncommitted
 .cargo/config.toml (see the CLAUDE.md of tasks-desktop).
@@ -172,10 +180,11 @@ def run(cmd: list[str], cwd: Path, env: dict[str, str] | None = None, secret: st
         raise RuntimeError("failed:\n      " + "\n      ".join(output.splitlines()[-12:]))
 
 
-def refresh_locks(app: Path, page: bool = True) -> None:
+def refresh_locks(app: Path, page: bool = True, lockfile_only: bool = False) -> None:
     """Cargo.lock and the pnpm lock follow the new tag; an app without a page (`page=False`) has only Cargo.lock.
     pnpm reads the private appkit from codeload.github.com: the token of the `gh` login goes into a file of this run
-    only (never into the user's ~/.npmrc)."""
+    only (never into the user's ~/.npmrc). `lockfile_only`: pnpm writes the lock and installs nothing (a fresh
+    worktree has no node_modules)."""
     run(["cargo", "update", "-p", "appkit-hub"], app)
     if not page:
         return
@@ -188,7 +197,8 @@ def refresh_locks(app: Path, page: bool = True) -> None:
     with tempfile.TemporaryDirectory() as folder:
         rc = Path(folder) / "pnpm-auth.npmrc"
         rc.write_text(f"//codeload.github.com/:_authToken={token}\n", encoding="utf-8")
-        run([pnpm, "install"], app / "ui", dict(os.environ, NPM_CONFIG_USERCONFIG=str(rc)), secret=token)
+        cmd = [pnpm, "install", "--lockfile-only"] if lockfile_only else [pnpm, "install"]
+        run(cmd, app / "ui", dict(os.environ, NPM_CONFIG_USERCONFIG=str(rc)), secret=token)
 
 
 def young_crates(output: str) -> list[tuple[str, str]]:
@@ -253,6 +263,85 @@ def settle_lock_age(app: Path, min_days: int, hold_back: bool, appkit_lock: Path
     raise RuntimeError(f"younger than {min_days} days in Cargo.lock: {names}{hint}")
 
 
+def lock_targets(app: Path, mode: str, changes: dict[Path, str]) -> list[Path]:
+    """The files a bump writes: the edited ones and the lock files the refresh rewrites."""
+    targets = list(changes)
+    if mode in ("full", "cargo"):
+        targets.append(app / "Cargo.lock")
+    if mode == "full":
+        targets.append(app / "ui" / "pnpm-lock.yaml")
+    return targets
+
+
+def bump_in_worktree(name: str, app: Path, mode: str, tag: str, sha: str, args: argparse.Namespace) -> bool:
+    """The bump of one app in a throw-away worktree of its HEAD, committed there and moved into the clone's branch
+    as a fast-forward (or left on bump/appkit-<tag>)."""
+    try:
+        branch = git(app, "symbolic-ref", "--quiet", "--short", "HEAD").strip()
+    except RuntimeError:
+        print("   skipped: the clone is on no branch (a detached HEAD): nothing to move the bump to")
+        return False
+    base = git(app, "rev-parse", "HEAD").strip()
+    holder = Path(tempfile.mkdtemp(prefix=f"bump-{name}-"))
+    tree = holder / name
+    try:
+        git(app, "worktree", "add", "--detach", str(tree), base)
+        changes, problems = plan(tree, mode, tag, sha)
+        if problems:
+            print("   skipped, nothing written:\n     " + "\n     ".join(problems))
+            return False
+        if not changes:
+            print(f"   already at {tag}")
+            return True
+        for path in changes:
+            verb = "would edit" if args.dry_run else "edit"
+            print(f"   {verb}: {os.path.relpath(path, tree)}   (in a worktree of {base[:12]})")
+        if args.dry_run:
+            return True
+        for path, text in changes.items():
+            path.write_text(text, encoding="utf-8", newline="")
+        try:
+            crates = mode in ("full", "cargo")
+            if crates and not args.no_lock:
+                refresh_locks(tree, page=(mode == "full"), lockfile_only=True)
+            check = "check-appkit-pin.py" if crates else "check-release-kit-pin.py"
+            run([sys.executable, str(Path("tools") / check)], tree)
+            if crates and not args.no_lock:
+                settle_lock_age(tree, getattr(args, "min_days", 7), getattr(args, "hold_back", False),
+                                Path(getattr(args, "appkit_lock", APPKIT / "Cargo.lock")))
+        except RuntimeError as err:
+            print(f"   FAILED: {err}\n   (nothing committed; the worktree is removed)")
+            return False
+        files = [os.path.relpath(p, tree) for p in lock_targets(tree, mode, changes) if p.exists()]
+        git(tree, "add", "--", *files)
+        git(tree, "commit", "-m",
+            f"chore(appkit): {tag} (release-kit actions, pins and lock files together; tools/bump-apps.py of appkit)",
+            "--", *files)
+        commit = git(tree, "rev-parse", "HEAD").strip()
+        print(f"   ok: pins agree on {tag}, committed as {commit[:12]} in the worktree")
+        try:
+            # a fast-forward of the clone's branch; git refuses when the clone's own changes touch the same files
+            git(app, "merge", "--ff-only", "--quiet", commit)
+        except RuntimeError as err:
+            keep = f"bump/appkit-{tag}"
+            git(app, "branch", "--force", keep, commit)
+            print(f"   NOT moved into {branch}: {err}\n   the commit stays on {keep}: "
+                  f"git -C {app} merge --ff-only {keep} once the clone's own work is committed")
+            return False
+        print(f"   moved into {branch} (fast-forward; not pushed)")
+        return True
+    finally:
+        try:
+            git(app, "worktree", "remove", "--force", str(tree))
+        except RuntimeError:
+            pass
+        shutil.rmtree(holder, ignore_errors=True)
+        try:
+            git(app, "worktree", "prune")
+        except RuntimeError:
+            pass
+
+
 def bump_app(name: str, repos: Path, tag: str, sha: str, args: argparse.Namespace) -> bool:
     mode = APPS[name]
     app = repos / name
@@ -260,6 +349,8 @@ def bump_app(name: str, repos: Path, tag: str, sha: str, args: argparse.Namespac
     if not (app / ".git").exists():
         print("   skipped: no clone at " + str(app))
         return False
+    if getattr(args, "worktree", False):
+        return bump_in_worktree(name, app, mode, tag, sha, args)
     changes, problems = plan(app, mode, tag, sha)
     if problems:
         print("   skipped, nothing written:\n     " + "\n     ".join(problems))
@@ -267,14 +358,11 @@ def bump_app(name: str, repos: Path, tag: str, sha: str, args: argparse.Namespac
     if not changes:
         print(f"   already at {tag}")
         return True
-    targets = list(changes)
-    if mode in ("full", "cargo"):
-        targets.append(app / "Cargo.lock")
-    if mode == "full":
-        targets.append(app / "ui" / "pnpm-lock.yaml")
+    targets = lock_targets(app, mode, changes)
     dirty = dirty_files(app, [p for p in targets if p.exists()])
     if dirty:
-        print("   skipped: uncommitted changes in files this bump edits (not mine to sweep in):\n     " + "\n     ".join(dirty))
+        print("   skipped: uncommitted changes in files this bump edits (not mine to sweep in; --worktree bumps"
+              " from HEAD):\n     " + "\n     ".join(dirty))
         return False
     for path in changes:
         print(f"   {'would edit' if args.dry_run else 'edit'}: {os.path.relpath(path, app)}")
@@ -315,6 +403,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--min-days", type=int, default=7, help="the minimum age of a crate, as the apps' CI (default 7)")
     parser.add_argument("--hold-back", action="store_true",
                         help="put a crate the bump made too young back to the version of appkit's Cargo.lock")
+    parser.add_argument("--worktree", action="store_true",
+                        help="bump and commit each app in a worktree of its HEAD, then fast-forward the clone"
+                             " (implies --commit)")
     parser.add_argument("--repos-dir", help="folder with the clones (default: the parent of this clone)")
     args = parser.parse_args(argv)
 

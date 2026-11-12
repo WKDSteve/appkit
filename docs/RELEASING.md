@@ -28,5 +28,11 @@ tag (`pnpm-lock.yaml` holds the commit of each kit), and its CI checks that the 
    puts it back to the version of appkit's own `Cargo.lock` and checks again. It refuses a tag that is not on
    origin, and skips an app whose files to edit hold uncommitted work. Then push each app and watch its CI.
 
+   Other sessions at work in the apps are no reason to wait: `--worktree` (implies `--commit`) makes each
+   bump in a throw-away git worktree of the app's `HEAD`, so their uncommitted work neither skips the app nor
+   slips into the lock files (`cargo update` resolves the whole workspace, and pnpm runs `--lockfile-only`
+   there), and moves the commit into the clone's branch as a fast-forward. When their changes touch the same
+   files, or the branch moved meanwhile, the commit waits on `bump/appkit-<tag>` and the app counts as not done.
+
    While working on appkit and an app at the same time, do not bump at all: use a `[patch]` in an
    uncommitted `.cargo/config.toml` of the app (README of appkit). Tag and bump when the change is done.
