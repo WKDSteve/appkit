@@ -255,7 +255,9 @@ switch that turns the host off.
 * A version that is younger than seven days is not taken (`tools/check-lock-age.py`, also run in CI).
   A `429` or `503` of crates.io is waited out (its `Retry-After`, at most 120 s, else 10 to 60 s, about four
   minutes in all) and asked again; only then exit 2 (not checked). Publication dates never change and are kept in
-  `--cache`, else `$LOCK_AGE_CACHE`, else `target/lock-age-cache.json` of the workspace (not `~/.cache`: there
+  `--cache`, else `$LOCK_AGE_CACHE`, else on a runner `$RUNNER_WORKSPACE/lock-age-cache.json` (the repository's
+  folder beside the checkout, which actions/checkout cleans), else `target/lock-age-cache.json` of the workspace
+  (not `~/.cache`: there
   every job of every repository on a self-hosted runner could enter an old date for a young version), so a run asks
   only for versions it has not seen. A cached date without a time zone is asked again.
 * `unsafe` is denied in the whole workspace. One module allows it: `appkit-hub/src/handles.rs`
