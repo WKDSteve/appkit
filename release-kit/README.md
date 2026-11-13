@@ -103,7 +103,8 @@ into the profile of the administrator account.
 
 Options of both scripts: another release (`-Version vX.Y.Z` / `--version`), the rolling build
 (`-Rolling` / `--rolling`), a file you already have (`-File` / `--file`, with `-Sums` / `-Sha256`),
-more arguments for the install step (`-InstallArgs '--autostart'` / `-- --autostart`). An unstamped
+more arguments for the install step (`-InstallArgs '--autostart'` / `-- --autostart`), a stop without a
+verified attestation (`-RequireAttestation` / `--require-attestation`, see "Attestation"). An unstamped
 copy (the one in this folder) takes the stamped values as options (`-Repo`, `-Kind`, ...).
 
 The `irm ... | iex` line takes no arguments. To pass some without saving the file, make a script block
@@ -243,6 +244,13 @@ published, and a file swapped on the release later, with a token that may write 
 workflow, no longer verifies, while `SHA256SUMS` can be swapped along with it. What it does not prove: that the
 runner was sound. A compromised runner signs with the same token; only a build on a runner it cannot reach (a
 GitHub-hosted one, checked with `--deny-self-hosted-runners`) takes it out of the chain.
+
+The install scripts make the same check after the checksum when `gh` is on the PATH (`--signer-workflow` of the
+channel: `rolling.yml` for `latest`, `release.yml` for a release). A file whose attestation does not verify is never
+installed. Without `gh`, or for a build from before attestations (gh finds none, or is not signed in), they say so and
+go on; `-RequireAttestation` / `--require-attestation` makes either a stop. Mind where the script came from: the
+one-liner takes `install.ps1` from the same release as the file, so a swapped release brings a swapped script that
+checks nothing. The check protects a copy of the script you keep, or got elsewhere, and a file you verify by hand.
 
 ## Checks
 

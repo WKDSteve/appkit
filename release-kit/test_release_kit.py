@@ -340,6 +340,12 @@ class StampTest(unittest.TestCase):
                                          "--app", "a", "--kind", "hub", "--program", "p"]), 1)
 
 
+FAKE_GH_SH = """#!/bin/sh
+printf '%s\n' "$*" > "$GH_ARGS"
+printf '%s\n' "$FAKE_GH_SAY" >&2
+exit "$FAKE_GH_EXIT"
+"""
+
 FAKE_HUB_SH = """#!/bin/sh
 if [ "$1" = "--version" ]; then echo "fake-hub 1.0"; exit 0; fi
 printf '%s\\n' "$*" > "$OUT"
@@ -354,8 +360,66 @@ class InstallShTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
 
     def run_sh(self, script: Path, *args: str, **env: str) -> subprocess.CompletedProcess[str]:
-        full = dict(os.environ, OUT=self.out.as_posix(), **env)
+        # No real gh: a test that wants one passes INSTALL_GH (the fake below).
+        full = dict(os.environ, OUT=self.out.as_posix(), INSTALL_GH="no-such-gh-for-the-tests")
+        full.update(env)
         return subprocess.run([SH_EXE, script.as_posix(), *args], capture_output=True, text=True, env=full)
+
+    def fake_gh(self) -> Path:
+        gh = self.tmp / "fake-gh"
+        gh.write_text(FAKE_GH_SH, encoding="utf-8", newline="\n")
+        gh.chmod(0o755)
+        return gh
+
+    def attested(self, *extra: str, **env: str) -> subprocess.CompletedProcess[str]:
+        archive = self.hub_archive()
+        write_sums(self.tmp, archive)
+        return self.run_sh(SH, "--file", archive.as_posix(), "--kind", "hub", "--program", "demo-hub",
+                           "--allow-root", "--repo", "Owner/demo", *extra, GH_ARGS=(self.tmp / "gh-args").as_posix(),
+                           **env)
+
+    def test_without_gh_the_attestation_is_noted_and_the_install_goes_on(self) -> None:
+        res = self.attested()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("attestation not checked: the GitHub CLI (gh) is not installed", res.stdout)
+        self.assertTrue(self.out.exists())
+
+    def test_require_attestation_without_gh_installs_nothing(self) -> None:
+        res = self.attested("--require-attestation")
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("--require-attestation was given", res.stderr)
+        self.assertFalse(self.out.exists())
+
+    def test_a_verified_attestation_names_the_workflow_of_the_channel(self) -> None:
+        res = self.attested("--rolling", INSTALL_GH=self.fake_gh().as_posix(), FAKE_GH_EXIT="0", FAKE_GH_SAY="ok")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("attestation ok (Owner/demo)", res.stdout)
+        said = (self.tmp / "gh-args").read_text()
+        self.assertIn("attestation verify", said)
+        self.assertIn("-R Owner/demo --signer-workflow Owner/demo/.github/workflows/rolling.yml", said)
+        res = self.attested("--version", "v1.2.3", INSTALL_GH=self.fake_gh().as_posix(), FAKE_GH_EXIT="0",
+                            FAKE_GH_SAY="ok")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("workflows/release.yml", (self.tmp / "gh-args").read_text())
+
+    def test_a_build_without_attestation_is_noted_unless_required(self) -> None:
+        env = dict(INSTALL_GH=self.fake_gh().as_posix(), FAKE_GH_EXIT="1",
+                   FAKE_GH_SAY="Error: no attestations found for subject")
+        res = self.attested(**env)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("attestation not checked: gh found no attestation", res.stdout)
+        self.out.unlink()
+        res = self.attested("--require-attestation", **env)
+        self.assertNotEqual(res.returncode, 0)
+        self.assertFalse(self.out.exists())
+
+    def test_an_attestation_that_does_not_verify_installs_nothing(self) -> None:
+        res = self.attested(INSTALL_GH=self.fake_gh().as_posix(), FAKE_GH_EXIT="1",
+                            FAKE_GH_SAY="Error: verifying with issuer: certificate identity mismatch")
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("does not verify: nothing was installed", res.stderr)
+        self.assertIn("identity mismatch", res.stderr, "gh's own words are shown")
+        self.assertFalse(self.out.exists())
 
     def hub_archive(self, entries: dict[str, str] | None = None) -> Path:
         archive = self.tmp / "demo-hub.tar.gz"
@@ -579,6 +643,7 @@ class InstallShTest(unittest.TestCase):
         self.assertEqual(self.out.read_text().strip(), "install")
 
 
+FAKE_GH_CMD = "@echo off\r\necho %*> \"%GH_ARGS%\"\r\necho %FAKE_GH_SAY% 1>&2\r\nexit /b %FAKE_GH_EXIT%\r\n"
 FAKE_CMD = "@echo off\r\nif \"%~1\"==\"--version\" (echo fake-hub 1.0& exit /b 0)\r\necho %*> \"%OUT%\"\r\nexit /b %FAKE_EXIT%\r\n"
 
 
@@ -591,7 +656,8 @@ class InstallPs1Test(unittest.TestCase):
 
     def run_ps(self, shell: str, script: Path, args: str, fake_exit: str = "0", prelude: str = "",
                cwd: Path | None = None, **env: str) -> subprocess.CompletedProcess[str]:
-        full = dict(os.environ, OUT=str(self.out), FAKE_EXIT=fake_exit)
+        # No real gh: a test that wants one passes INSTALL_GH (the fake below).
+        full = dict(os.environ, OUT=str(self.out), FAKE_EXIT=fake_exit, INSTALL_GH="no-such-gh-for-the-tests")
         full.update(env)
         command = f"{prelude}& '{script}' {args} -AllowElevated"
         # errors="replace": a PowerShell on a German system writes its messages in the OEM code page, and a
@@ -604,6 +670,48 @@ class InstallPs1Test(unittest.TestCase):
         path = self.tmp / name
         path.write_bytes(FAKE_CMD.encode())
         return path
+
+    def attested(self, shell: str, extra: str = "", **env: str) -> subprocess.CompletedProcess[str]:
+        setup = self.fake("demo-setup.cmd")
+        write_sums(self.tmp, setup)
+        gh = self.tmp / "fake-gh.cmd"
+        gh.write_bytes(FAKE_GH_CMD.encode())
+        full = dict(GH_ARGS=str(self.tmp / "gh-args"), FAKE_GH_EXIT="0", FAKE_GH_SAY="ok")
+        full.update(env)
+        if full.pop("WITH_GH", "1") == "1":
+            full["INSTALL_GH"] = str(gh)
+        return self.run_ps(shell, PS1, f"-File '{setup}' -Kind nsis -Repo Owner/demo {extra}", **full)
+
+    def test_attestation_noted_required_verified_and_refused(self) -> None:
+        for shell in self.each_shell():
+            res = self.attested(shell, WITH_GH="0")
+            self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+            self.assertIn("attestation not checked: the GitHub CLI (gh) is not installed", res.stdout)
+            self.assertEqual(self.out_text(), "/S")
+            self.out.unlink()
+
+            res = self.attested(shell, "-RequireAttestation", WITH_GH="0")
+            self.assertNotEqual(res.returncode, 0)
+            self.assertIn("-RequireAttestation was given", res.stdout + res.stderr)
+            self.assertEqual(self.out_text(), "")
+
+            res = self.attested(shell, "-Rolling")
+            self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+            self.assertIn("attestation ok (Owner/demo)", res.stdout)
+            said = (self.tmp / "gh-args").read_text()
+            self.assertIn("-R Owner/demo --signer-workflow Owner/demo/.github/workflows/rolling.yml", said)
+            self.out.unlink()
+
+            res = self.attested(shell, FAKE_GH_EXIT="1", FAKE_GH_SAY="Error: no attestations found for subject")
+            self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+            self.assertIn("attestation not checked: gh found no attestation", res.stdout)
+            self.out.unlink()
+
+            res = self.attested(shell, FAKE_GH_EXIT="1", FAKE_GH_SAY="Error: certificate identity mismatch")
+            self.assertNotEqual(res.returncode, 0)
+            self.assertIn("does not verify", res.stdout + res.stderr)
+            self.assertIn("identity mismatch", res.stdout + res.stderr)
+            self.assertEqual(self.out_text(), "")
 
     def out_text(self) -> str:
         return self.out.read_text().strip() if self.out.exists() else ""

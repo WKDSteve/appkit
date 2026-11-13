@@ -23,6 +23,10 @@
 #   --file FILE       a build you already have (no download); the checksum then comes from
 #                     --sums FILE, --sha256 HEX, or a SHA256SUMS next to the file
 #   --allow-root      install although this runs as root (a build machine)
+#   --require-attestation
+#                     stop unless the GitHub CLI `gh` confirms the file's attestation (without it a
+#                     missing gh or a build without attestation is only noted; a file whose
+#                     attestation does not verify is never installed)
 #   --repo, --app, --kind, --program, --release-asset, --rolling-asset
 #                     what the release workflow stamps into this copy; given here, they win.
 #                     --release-asset may hold {version} (the tag without its v) and {triple}
@@ -54,6 +58,7 @@ FILE=""
 SUMS=""
 SHA256=""
 ALLOW_ROOT=""
+REQUIRE_ATTESTATION=""
 
 say() { printf '%s\n' "$*"; }
 fail() {
@@ -82,6 +87,7 @@ while [ $# -gt 0 ]; do
         --sums) need_value "$@"; SUMS="$2"; shift 2 ;;
         --sha256) need_value "$@"; SHA256="$2"; shift 2 ;;
         --allow-root) ALLOW_ROOT=1; shift ;;
+        --require-attestation) REQUIRE_ATTESTATION=1; shift ;;
         --repo) need_value "$@"; REPO="$2"; shift 2 ;;
         --app) need_value "$@"; APP="$2"; shift 2 ;;
         --kind) need_value "$@"; KIND="$2"; shift 2 ;;
@@ -264,6 +270,48 @@ EXPECTED="$(printf '%s' "$SHA256" | tr 'A-F' 'a-f')"
 ACTUAL="$(sha256_of "$FILE")"
 [ "$ACTUAL" = "$EXPECTED" ] || fail "the checksum of $FILE does not match (expected $EXPECTED, got $ACTUAL): nothing was installed"
 say "checksum ok"
+
+# The attestation (release-kit README, "Attestation"), checked by the GitHub CLI when it is there. It is the
+# stronger check, but only when this script did not come from the same release as the file: then a swapped
+# release brings a swapped script as well.
+GH="${INSTALL_GH:-gh}"
+ATTEST_SKIP=""
+case "$REPO" in
+    */*) ;;
+    *) ATTEST_SKIP="no repository is known (--repo)" ;;
+esac
+if [ -z "$ATTEST_SKIP" ] && ! command -v "$GH" >/dev/null 2>&1; then
+    ATTEST_SKIP="the GitHub CLI (gh) is not installed"
+fi
+if [ -z "$ATTEST_SKIP" ]; then
+    case "$CHANNEL" in
+        latest) WORKFLOW="rolling.yml" ;;
+        "") WORKFLOW="" ;;
+        *) WORKFLOW="release.yml" ;;
+    esac
+    ATTEST_RC=0
+    if [ -n "$WORKFLOW" ]; then
+        ATTEST_SAID="$("$GH" attestation verify "$FILE" -R "$REPO" --signer-workflow "$REPO/.github/workflows/$WORKFLOW" 2>&1)" || ATTEST_RC=$?
+    else
+        ATTEST_SAID="$("$GH" attestation verify "$FILE" -R "$REPO" 2>&1)" || ATTEST_RC=$?
+    fi
+    if [ "$ATTEST_RC" = 0 ]; then
+        say "attestation ok ($REPO)"
+    else
+        case "$(printf '%s' "$ATTEST_SAID" | tr '[:upper:]' '[:lower:]')" in
+            *"no attestations found"* | *"gh auth login"* | *"http 401"* | *"http 403"* | *"http 404"*)
+                ATTEST_SKIP="gh found no attestation it could check (a build from before attestations, or gh is not signed in)" ;;
+            *)
+                printf '%s
+' "$ATTEST_SAID" >&2
+                fail "the attestation of $FILE does not verify: nothing was installed" ;;
+        esac
+    fi
+fi
+if [ -n "$ATTEST_SKIP" ]; then
+    [ -z "$REQUIRE_ATTESTATION" ] || fail "$ATTEST_SKIP, and --require-attestation was given: nothing was installed"
+    say "attestation not checked: $ATTEST_SKIP"
+fi
 
 case "$KIND" in
     hub)

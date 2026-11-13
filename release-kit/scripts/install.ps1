@@ -35,6 +35,9 @@ Parameters (all optional):
   -Sha256 HEX         the expected SHA-256 of the file
   -InstallArgs A,B    more arguments for the install step (`<program> install ...` or the setup)
   -AllowElevated      install although the session is elevated (a build machine)
+  -RequireAttestation stop unless the GitHub CLI `gh` confirms the file's attestation (without it a
+                      missing `gh` or a build without attestation is only noted; a file whose
+                      attestation does not verify is never installed)
   -Repo, -App, -Kind, -Program, -ReleaseAsset, -RollingAsset
                       what the release workflow stamps into this copy; given here, they win (for a
                       copy that is not stamped). -ReleaseAsset may hold {version} (the tag without
@@ -59,6 +62,7 @@ Parameters (all optional):
         [string] $Sha256 = '',
         [string[]] $InstallArgs = @(),
         [switch] $AllowElevated,
+        [switch] $RequireAttestation,
         [string] $Repo = '',
         [string] $App = '',
         [string] $Kind = '',
@@ -184,6 +188,7 @@ Parameters (all optional):
 
     $work = Join-Path ([IO.Path]::GetTempPath()) ("$app-install-" + [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $work | Out-Null
+    $channel = ''
     try {
         if ($File -eq '') {
             if ($repo -cnotmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\z') {
@@ -278,6 +283,44 @@ Parameters (all optional):
             Exit-Install "the checksum of $path does not match (expected $($expected.ToLowerInvariant()), got $actual): nothing was installed"
         }
         Write-Output 'checksum ok'
+
+        # The attestation (release-kit README, "Attestation"), checked by the GitHub CLI when it is there. It is the
+        # stronger check, but only when this script did not come from the same release as the file: then a swapped
+        # release brings a swapped script as well.
+        if ($channel -eq '') {
+            if ($Version -ne '') { $channel = $Version }
+            elseif ($Rolling) { $channel = 'latest' }
+            else { $channel = $StampChannel }
+        }
+        $ghName = 'gh'
+        if ($env:INSTALL_GH) { $ghName = $env:INSTALL_GH }
+        $gh = Get-Command -Name $ghName -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        $skip = ''
+        if ($repo -cnotmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\z') { $skip = 'no repository is known (-Repo)' }
+        elseif (-not $gh) { $skip = 'the GitHub CLI (gh) is not installed' }
+        else {
+            $verify = @('attestation', 'verify', $path, '-R', $repo)
+            if ($channel -eq 'latest') { $verify += @('--signer-workflow', "$repo/.github/workflows/rolling.yml") }
+            elseif ($channel -ne '') { $verify += @('--signer-workflow', "$repo/.github/workflows/release.yml") }
+            # Windows PowerShell 5.1 turns a line on stderr of a program into an error under 'Stop'; gh writes its
+            # verdict there, so for this one call errors are text.
+            $before = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try { $said = (& $gh.Source @verify 2>&1 | Out-String); $rc = $LASTEXITCODE }
+            finally { $ErrorActionPreference = $before }
+            if ($rc -eq 0) { Write-Output "attestation ok ($repo)" }
+            elseif ($said -match '(?i)no attestations found|gh auth login|HTTP 40[134]') {
+                $skip = 'gh found no attestation it could check (a build from before attestations, or gh is not signed in)'
+            }
+            else {
+                Write-Output $said.TrimEnd()
+                Exit-Install "the attestation of $path does not verify: nothing was installed"
+            }
+        }
+        if ($skip -ne '') {
+            if ($RequireAttestation) { Exit-Install "${skip}, and -RequireAttestation was given: nothing was installed" }
+            Write-Output "attestation not checked: $skip"
+        }
 
         if ($kind -eq 'hub') {
             $exe = $path
