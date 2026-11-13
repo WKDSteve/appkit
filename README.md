@@ -158,3 +158,18 @@ are not public, the code and its tests are the reference.
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+<!-- connections:begin (written by the app-icons tool of the workshop; change integrations.json there, not this block) -->
+## Connections
+
+![appkit: what it uses and what uses it](assets/graphs/appkit.png)
+
+**Used by**
+
+- [hub-desktop](https://github.com/WKDSteve/hub-desktop): hub-desktop is built on appkit: guard, pairing and install (`appkit-core`, `appkit-hub`) and the page kit (`appkit-ui`, `appkit-web`). ([picture](assets/graphs/pair/hub-desktop--appkit.png))
+- [pult](https://github.com/WKDSteve/pult): The hub of pult is built on appkit: guard, pairing and install (`appkit-core`, `appkit-hub`). ([picture](assets/graphs/pair/pult--appkit.png))
+- [rules-desktop](https://github.com/WKDSteve/rules-desktop): rules-desktop is built on appkit: guard, pairing and install (`appkit-core`, `appkit-hub`) and the page kit (`appkit-ui`). ([picture](assets/graphs/pair/rules-desktop--appkit.png))
+- [tasks-desktop](https://github.com/WKDSteve/tasks-desktop): tasks-desktop is built on appkit: guard, pairing and install (`appkit-core`, `appkit-hub`), the page kit (`appkit-ui`, `appkit-web`) and the phone side (`appkit-mobile`). ([picture](assets/graphs/pair/tasks-desktop--appkit.png))
+- [tasks-mobile](https://github.com/WKDSteve/tasks-mobile): The phone page of tasks-mobile uses the page kit of appkit (`appkit-ui`): its tokens, the hub client and the pairing code. ([picture](assets/graphs/pair/tasks-mobile--appkit.png))
+- [testing-desktop](https://github.com/WKDSteve/testing-desktop): testing-desktop is built on appkit: guard, pairing and install (`appkit-core`, `appkit-hub`) and the page kit (`appkit-ui`, `appkit-web`). ([picture](assets/graphs/pair/testing-desktop--appkit.png))
+<!-- connections:end -->
