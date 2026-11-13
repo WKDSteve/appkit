@@ -82,6 +82,10 @@ Each device has a level, which the hub checks on every request (`MOB-03`):
   SHA-256 of the body with a fresh challenge of the hub (`x-device-confirm: <challenge>.<signature>`). Without it, with
   a wrong or spent one, or from a phone paired without that key: `403 confirm_required`. The phone shows the prompt
   before it signs; cancelling sends nothing (`appkit-mobile`: `Link::trigger`).
+- A page installed on the phone (a PWA, `appkit-ui/device`) has such a key too, made at pairing and non-extractable,
+  but not behind the biometrics: it signs only after the person tapped to confirm on the page (`confirmHeader`), which
+  keeps a stolen session token from triggering, not a script of the page itself (SECURITY.md). A page paired before
+  it had the key pairs again to trigger (`canConfirm` tells it).
 - Never from a phone, at any level, because no app releases a route for it: trusting a commit of somebody else
   (`testing ci trust`), pushing, deleting for good, any command of the person's choice. Each app's tests prove that its
   released routes hold none of these.

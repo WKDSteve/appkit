@@ -161,6 +161,14 @@ SHA-256 of the body; the guard reads the body (within the body limit), checks it
 Missing, wrong, spent, or from a device without that key: `403 confirm_required`. A session of the PC is no device and
 is held to none of this.
 
+A page installed on a phone (`appkit-ui/device`, a PWA) makes its confirmation key at pairing too, non-extractable in
+WebCrypto, and signs a trigger only after the person tapped to confirm it on the page (`confirmHeader`). A page has
+no key bound to biometrics or the lock: its confirmation keeps a stolen session token from triggering anything and
+makes each trigger one deliberate, single-use request for exactly that method, path and body, but it does not prove
+a person was there; a script running in the page's origin could sign as well as the page. Where that matters, the
+app's native shell (`appkit-mobile`, the key behind the biometrics) is the way. A page paired before it had a
+confirmation key cannot trigger (`NoConfirmKey`) until it pairs again.
+
 Web Push (`GuardRules::with_push`, `appkit-hub/src/push.rs`): the VAPID key is made once in the settings folder
 (`push-key.json`); a file there that is not a key stops the start rather than make a new one. Only a device subscribes
 (`/api/push/*`, level `read`), and only with an endpoint the hub may post to: `https`, a public host name, port 443, no

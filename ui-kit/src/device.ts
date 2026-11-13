@@ -4,8 +4,14 @@
 // in IndexedDB of its origin. Every start after that asks the hub for a challenge, signs it together with the origin,
 // and gets a fresh session; no code again. A device the PC revoked gets no session: then the page pairs again.
 //
-// Nothing here is a secret that leaves the device: the private key cannot be exported, the public key and the id are
-// not secret, and the session token stays in memory.
+// A second key pair, made at the same pairing, confirms a trigger (a route at the level `trigger`, which starts
+// something on the PC): it signs that one request (method, path, body) with a fresh challenge (`confirmHeader`). The
+// page asks for it only after the person tapped to confirm, never by itself. Unlike a phone app's key it is not bound
+// to the phone's biometrics or lock (a page has no such key): it keeps a stolen session token from triggering anything,
+// and it makes each trigger one deliberate request; it does not prove a person was there (see SECURITY.md).
+//
+// Nothing here is a secret that leaves the device: the private keys cannot be exported, the public keys and the id
+// are not secret, and the session token stays in memory.
 
 import { ApiError, failure, PLAIN } from './client';
 
@@ -13,6 +19,8 @@ import { ApiError, failure, PLAIN } from './client';
 export interface DeviceRecord {
   id: string;
   keys: CryptoKeyPair;
+  /** The key that confirms a trigger; missing on a device paired before pages had one (it pairs again to trigger). */
+  confirmKeys?: CryptoKeyPair;
 }
 
 /** Where the record is kept (IndexedDB in the page, memory in the tests). */
@@ -28,6 +36,18 @@ const TOKEN = /^[0-9a-f]{32,128}$/;
 /** The message a device signs: the same as `devices::login_message` of the hub, byte for byte. */
 export function loginMessage(origin: string, device: string, challenge: string): string {
   return `appkit-device-login/1\n${origin}\n${device}\n${challenge}`;
+}
+
+/** What the confirmation key signs: the same as `devices::confirm_message` of the hub, byte for byte. */
+export function confirmMessage(
+  origin: string,
+  device: string,
+  challenge: string,
+  method: string,
+  pathAndQuery: string,
+  bodySha256: string,
+): string {
+  return `appkit-device-confirm/1\n${origin}\n${device}\n${challenge}\n${method} ${pathAndQuery}\n${bodySha256}`;
 }
 
 function hex(bytes: ArrayBuffer): string {
@@ -91,13 +111,63 @@ export interface DeviceDeps {
  */
 export async function pairDevice(deps: DeviceDeps, code: string, name: string): Promise<string> {
   const keys = await makeKeys(deps.subtle);
+  const confirmKeys = await makeKeys(deps.subtle);
   const key = await publicKeyHex(deps.subtle, keys);
-  const doc = await postJson(deps.fetchFn, deps.base ?? '', '/auth/device/pair', { code, name, key });
+  const confirmKey = await publicKeyHex(deps.subtle, confirmKeys);
+  const doc = await postJson(deps.fetchFn, deps.base ?? '', '/auth/device/pair', { code, name, key, confirm_key: confirmKey });
   const id = doc['device'];
   if (typeof id !== 'string' || !ID.test(id)) throw new ApiError(502, 'bad_reply', 'no device id');
   const token = tokenOf(doc);
-  await deps.store.save({ id, keys });
+  await deps.store.save({ id, keys, confirmKeys });
   return token;
+}
+
+/** The device has no confirmation key (paired before pages had one): to trigger, it pairs again. */
+export class NoConfirmKey extends Error {
+  constructor() {
+    super('this device has no confirmation key; pair it again to trigger');
+    this.name = 'NoConfirmKey';
+  }
+}
+
+async function bodyBytes(body: string | Uint8Array): Promise<Uint8Array<ArrayBuffer>> {
+  const bytes = typeof body === 'string' ? new TextEncoder().encode(body) : body;
+  const copy = new Uint8Array(new ArrayBuffer(bytes.byteLength));
+  copy.set(bytes);
+  return copy;
+}
+
+/**
+ * The confirmation of one trigger, for the header `x-device-confirm`: a fresh challenge and the signature of the
+ * confirmation key over `confirmMessage` of exactly this request. Call it only after the person confirmed on the page;
+ * send the request with exactly this method, path (with its query) and body, once. `NoConfirmKey` when the device was
+ * paired without one; a refused challenge (a revoked device) is the hub's `ApiError`.
+ */
+export async function confirmHeader(
+  deps: DeviceDeps,
+  method: string,
+  pathAndQuery: string,
+  body: string | Uint8Array,
+): Promise<string> {
+  const record = await deps.store.load();
+  if (record === null) throw new ApiError(401, 'unpaired', 'no device');
+  if (!record.confirmKeys) throw new NoConfirmKey();
+  const asked = await postJson(deps.fetchFn, deps.base ?? '', '/auth/device/challenge', { device: record.id });
+  const challenge = asked['challenge'];
+  if (typeof challenge !== 'string' || !/^[0-9a-f]{64}$/.test(challenge)) {
+    throw new ApiError(502, 'bad_reply', 'no challenge');
+  }
+  const digest = hex(await deps.subtle.digest('SHA-256', await bodyBytes(body)));
+  const message = confirmMessage(deps.origin, record.id, challenge, method.toUpperCase(), pathAndQuery, digest);
+  const signature = hex(
+    await deps.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, record.confirmKeys.privateKey, new TextEncoder().encode(message)),
+  );
+  return `${challenge}.${signature}`;
+}
+
+/** Can this device confirm a trigger (it was paired with a confirmation key)? */
+export async function canConfirm(store: DeviceRecordStore): Promise<boolean> {
+  return (await store.load())?.confirmKeys !== undefined;
 }
 
 /** What a start finds: a session, no paired device, or a device the hub does not take any more. */
@@ -131,15 +201,18 @@ export async function deviceLogin(deps: DeviceDeps): Promise<LoginResult> {
 
 function isRecord(value: unknown): value is DeviceRecord {
   if (typeof value !== 'object' || value === null) return false;
-  const v = value as { id?: unknown; keys?: { privateKey?: unknown; publicKey?: unknown } };
-  return (
-    typeof v.id === 'string' &&
-    ID.test(v.id) &&
-    typeof CryptoKey !== 'undefined' &&
-    v.keys?.privateKey instanceof CryptoKey &&
-    v.keys.publicKey instanceof CryptoKey &&
-    v.keys.privateKey.extractable === false
-  );
+  const v = value as { id?: unknown; keys?: unknown; confirmKeys?: unknown };
+  const pair = (k: unknown): boolean => {
+    const p = k as { privateKey?: unknown; publicKey?: unknown } | undefined;
+    return (
+      typeof CryptoKey !== 'undefined' &&
+      p?.privateKey instanceof CryptoKey &&
+      p.publicKey instanceof CryptoKey &&
+      p.privateKey.extractable === false
+    );
+  };
+  // A confirmation key, when there is one, holds to the same rule; a record kept before there was one has none.
+  return typeof v.id === 'string' && ID.test(v.id) && pair(v.keys) && (v.confirmKeys === undefined || pair(v.confirmKeys));
 }
 
 function request<T>(r: IDBRequest<T>): Promise<T> {
