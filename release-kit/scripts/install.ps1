@@ -306,15 +306,21 @@ Parameters (all optional):
             # verdict there, so for this one call errors are text.
             $before = $ErrorActionPreference
             $ErrorActionPreference = 'Continue'
-            try { $said = (& $gh.Source @verify 2>&1 | Out-String); $rc = $LASTEXITCODE }
+            # "$_" per line: Out-String of a stderr line would prefix it with the program's name in 5.1.
+            try { $said = (@(& $gh.Source @verify 2>&1 | ForEach-Object { "$_" }) -join "`n"); $rc = $LASTEXITCODE }
             finally { $ErrorActionPreference = $before }
             if ($rc -eq 0) { Write-Output "attestation ok ($repo)" }
-            elseif ($said -match '(?i)no attestations found|gh auth login|HTTP 40[134]') {
-                $skip = 'gh found no attestation it could check (a build from before attestations, or gh is not signed in)'
-            }
-            else {
+            # Only gh's verdict that the attestation is wrong stops the install. Anything else - no attestation (a
+            # build from before them), not signed in, no network - means it could not be checked, which is not a "no".
+            elseif ($said -match "(?i)verification failed|mismatch|does not match|doesn't match") {
                 Write-Output $said.TrimEnd()
                 Exit-Install "the attestation of $path does not verify: nothing was installed"
+            }
+            else {
+                $first = @($said -split '\r?\n' | Where-Object { $_.Trim() -ne '' })
+                $line = ''
+                if ($first.Count -gt 0) { $line = $first[0].Trim() }
+                $skip = "gh could not check it ($line)"
             }
         }
         if ($skip -ne '') {

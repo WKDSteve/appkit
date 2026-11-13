@@ -247,8 +247,10 @@ GitHub-hosted one, checked with `--deny-self-hosted-runners`) takes it out of th
 
 The install scripts make the same check after the checksum when `gh` is on the PATH (`--signer-workflow` of the
 channel: `rolling.yml` for `latest`, `release.yml` for a release). A file whose attestation does not verify is never
-installed. Without `gh`, or for a build from before attestations (gh finds none, or is not signed in), they say so and
-go on; `-RequireAttestation` / `--require-attestation` makes either a stop. Mind where the script came from: the
+installed; that takes gh's verdict that it is wrong (verification failed, a mismatch). Without `gh`, or when gh cannot
+check (a build from before attestations, gh not signed in, no network), they say so with gh's first line and go on;
+`-RequireAttestation` / `--require-attestation` makes either a stop. The publish job says at once when attestation is on
+but the job has no OIDC token (`id-token: write` missing). Mind where the script came from: the
 one-liner takes `install.ps1` from the same release as the file, so a swapped release brings a swapped script that
 checks nothing. The check protects a copy of the script you keep, or got elsewhere, and a file you verify by hand.
 

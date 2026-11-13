@@ -298,13 +298,14 @@ if [ -z "$ATTEST_SKIP" ]; then
     if [ "$ATTEST_RC" = 0 ]; then
         say "attestation ok ($REPO)"
     else
+        # Only gh's verdict that the attestation is wrong stops the install. Anything else - no attestation (a build
+        # from before them), not signed in, no network - means it could not be checked, which is not a "no".
         case "$(printf '%s' "$ATTEST_SAID" | tr '[:upper:]' '[:lower:]')" in
-            *"no attestations found"* | *"gh auth login"* | *"http 401"* | *"http 403"* | *"http 404"*)
-                ATTEST_SKIP="gh found no attestation it could check (a build from before attestations, or gh is not signed in)" ;;
-            *)
-                printf '%s
-' "$ATTEST_SAID" >&2
+            *"verification failed"* | *"mismatch"* | *"does not match"* | *"doesn't match"*)
+                printf '%s\n' "$ATTEST_SAID" >&2
                 fail "the attestation of $FILE does not verify: nothing was installed" ;;
+            *)
+                ATTEST_SKIP="gh could not check it ($(printf '%s\n' "$ATTEST_SAID" | sed -n '/[^[:space:]]/{p;q;}'))" ;;
         esac
     fi
 fi

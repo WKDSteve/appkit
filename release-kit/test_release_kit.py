@@ -22,6 +22,7 @@ import tarfile
 import tempfile
 import threading
 import unittest
+import unittest.mock
 import zipfile
 from pathlib import Path
 
@@ -407,7 +408,18 @@ class InstallShTest(unittest.TestCase):
                    FAKE_GH_SAY="Error: no attestations found for subject")
         res = self.attested(**env)
         self.assertEqual(res.returncode, 0, res.stderr)
-        self.assertIn("attestation not checked: gh found no attestation", res.stdout)
+        self.assertIn("attestation not checked: gh could not check it", res.stdout)
+        self.out.unlink()
+        res = self.attested("--require-attestation", **env)
+        self.assertNotEqual(res.returncode, 0)
+        self.assertFalse(self.out.exists())
+
+    def test_no_network_is_not_a_failed_attestation(self) -> None:
+        env = dict(INSTALL_GH=self.fake_gh().as_posix(), FAKE_GH_EXIT="1",
+                   FAKE_GH_SAY="Error: dial tcp: lookup api.github.com: no such host")
+        res = self.attested(**env)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("attestation not checked: gh could not check it (Error: dial tcp", res.stdout)
         self.out.unlink()
         res = self.attested("--require-attestation", **env)
         self.assertNotEqual(res.returncode, 0)
@@ -704,7 +716,12 @@ class InstallPs1Test(unittest.TestCase):
 
             res = self.attested(shell, FAKE_GH_EXIT="1", FAKE_GH_SAY="Error: no attestations found for subject")
             self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
-            self.assertIn("attestation not checked: gh found no attestation", res.stdout)
+            self.assertIn("attestation not checked: gh could not check it", res.stdout)
+            self.out.unlink()
+
+            res = self.attested(shell, FAKE_GH_EXIT="1", FAKE_GH_SAY="Error: dial tcp: no such host")
+            self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+            self.assertIn("gh could not check it (Error: dial tcp", res.stdout)
             self.out.unlink()
 
             res = self.attested(shell, FAKE_GH_EXIT="1", FAKE_GH_SAY="Error: certificate identity mismatch")
@@ -1385,6 +1402,17 @@ class PublishTest(unittest.TestCase):
         res = self.publish(STEP="both", STAGE=self.stage_dir().as_posix())
         self.assertNotEqual(res.returncode, 0)
         self.assertIn("step must be all, stage or upload", res.stderr)
+
+    def test_attest_without_an_oidc_token_says_what_the_job_lacks(self) -> None:
+        env = {k: v for k, v in os.environ.items() if k != "ACTIONS_ID_TOKEN_REQUEST_URL"}
+        with unittest.mock.patch.dict(os.environ, env, clear=True):
+            res = self.publish(STEP="stage", STAGE=self.stage_dir().as_posix(), ATTEST="true")
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("id-token: write", res.stderr)
+        self.assertFalse(self.stage_dir().exists(), "nothing staged")
+        res = self.publish(STEP="stage", STAGE=self.stage_dir().as_posix(), ATTEST="true",
+                           ACTIONS_ID_TOKEN_REQUEST_URL="https://example.invalid/token")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
 
     def test_a_stage_that_is_not_empty_is_refused(self) -> None:
         self.stage_dir().mkdir()

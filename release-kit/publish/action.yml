@@ -146,6 +146,7 @@ runs:
         TITLE: ${{ inputs.title }}
         VERSION: ${{ inputs.version }}
         STEP: stage
+        ATTEST: ${{ inputs.attest }}
         STAGE: ${{ runner.temp }}/release-kit-stage
       run: bash "$KIT/publish.sh"
     - name: Stage (Windows)
@@ -172,6 +173,7 @@ runs:
         TITLE: ${{ inputs.title }}
         VERSION: ${{ inputs.version }}
         STEP: stage
+        ATTEST: ${{ inputs.attest }}
         STAGE: ${{ runner.temp }}/release-kit-stage
       run: bash "$(cygpath -u "$KIT")/publish.sh"
     # Sigstore build provenance for exactly the staged bytes, signed with the workflow's OIDC token: a file swapped

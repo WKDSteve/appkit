@@ -51,6 +51,11 @@ case "$STEP" in
     *) fail "step must be all, stage or upload, got '$STEP'" ;;
 esac
 [ "$STEP" = all ] || [ -n "$STAGE" ] || fail "step $STEP needs STAGE, the folder of the staged files"
+# The action attests between the halves (ATTEST=true); actions/attest needs the job's OIDC token, which GitHub hands
+# out only with `id-token: write`. Said here, before anything is staged, rather than by the attestation's own error.
+if [ "$STEP" = stage ] && [ "${ATTEST:-}" = true ] && [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+    fail "attest is on, but this job has no OIDC token: give the publish job 'id-token: write' and 'attestations: write', or set attest: false"
+fi
 # On a Windows runner `runner.temp` is a path with backslashes; Git Bash wants its own form.
 if [ -n "$STAGE" ] && command -v cygpath > /dev/null 2>&1; then STAGE="$(cygpath -u "$STAGE")"; fi
 
