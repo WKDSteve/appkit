@@ -13,6 +13,13 @@
 #   TAG=vX.Y.Z   a release: a draft is made if there is none (a published release is never touched
 #                again), the files and the checksums are attached, and it stays a draft for a person
 #                to open (NREL-07).
+#
+#   STEP=all     (the default) both halves in one call.
+#   STEP=stage   only the first half: the files, the stamped scripts and version.json go into the folder STAGE and
+#                their checksums into STAGE.sums; nothing is sent. Between the two halves the action attests exactly
+#                these bytes (actions/attest), which is why the second half must not stage again: version.json
+#                carries the time of the build.
+#   STEP=upload  only the second half: what STAGE holds goes up, after checking it still matches STAGE.sums.
 
 set -euo pipefail
 
@@ -37,6 +44,15 @@ GH_TRIES="${GH_TRIES:-4}"
 GH_WAIT="${GH_WAIT:-10}"
 [[ "$GH_TRIES" =~ ^[1-9][0-9]*$ ]] || fail "GH_TRIES must be a number above 0, got '$GH_TRIES'"
 [[ "$GH_WAIT" =~ ^[0-9]+$ ]] || fail "GH_WAIT must be a number, got '$GH_WAIT'"
+STEP="${STEP:-all}"
+STAGE="${STAGE:-}"
+case "$STEP" in
+    all | stage | upload) ;;
+    *) fail "step must be all, stage or upload, got '$STEP'" ;;
+esac
+[ "$STEP" = all ] || [ -n "$STAGE" ] || fail "step $STEP needs STAGE, the folder of the staged files"
+# On a Windows runner `runner.temp` is a path with backslashes; Git Bash wants its own form.
+if [ -n "$STAGE" ] && command -v cygpath > /dev/null 2>&1; then STAGE="$(cygpath -u "$STAGE")"; fi
 
 # Run a `gh` call again when GitHub's answer says it may pass (an HTTP 5xx, a timeout, a dropped connection), up to
 # GH_TRIES times; any other failure (a 4xx, a missing file) ends it at once. Only for calls that are safe to repeat:
@@ -79,9 +95,10 @@ esac
 TITLE="${TITLE:-$TAG}"
 [[ "$TITLE" != *$'\n'* ]] || fail "title must be one line"
 [[ "$EXPECT" =~ ^[0-9]+$ ]] || fail "expect must be a number, got '$EXPECT'"
-[ -d "$FILES" ] || fail "no folder $FILES (download the build artifacts there first)"
 [[ "$APP" =~ ^[A-Za-z0-9._-]+$ ]] || fail "app must be a plain word, got '$APP'"
 
+stage_files() {
+[ -d "$FILES" ] || fail "no folder $FILES (download the build artifacts there first)"
 # The built files: exactly as many as expected, plain names, nothing in sub folders.
 mapfile -t built < <(find "$FILES" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
 if [ "${#built[@]}" -ne "$EXPECT" ]; then
@@ -91,8 +108,14 @@ if [ -n "$(find "$FILES" -mindepth 1 -maxdepth 1 ! -type f -print -quit)" ]; the
     fail "$FILES holds a folder: download the artifacts with merge-multiple: true"
 fi
 
-stage="$(mktemp -d)"
-trap 'rm -rf "$stage"' EXIT
+if [ -n "$STAGE" ]; then
+    mkdir -p "$STAGE"
+    [ -z "$(ls -A "$STAGE")" ] || fail "the stage $STAGE is not empty"
+    stage="$STAGE"
+else
+    stage="$(mktemp -d)"
+    trap 'rm -rf "$stage"' EXIT
+fi
 
 add() {
     local from="$1" name
@@ -142,6 +165,23 @@ mapfile -t names < <(find "$stage" -mindepth 1 -maxdepth 1 -type f -printf '%f\n
 (cd "$stage" && sha256sum "${names[@]}") | sed 's/^\([0-9a-f]\{64\}\) \*/\1  /' > "$stage.sums"
 say "files of $TAG:"
 cat "$stage.sums"
+}
+
+if [ "$STEP" = upload ]; then
+    stage="$STAGE"
+    [ -d "$stage" ] && [ -f "$stage.sums" ] || fail "nothing staged in $STAGE (run step stage first)"
+    mapfile -t names < <(find "$stage" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+    # The bytes that were attested are the bytes that go up: same names, same hashes.
+    mapfile -t listed < <(sed 's/^[0-9a-f]\{64\}  //' "$stage.sums" | LC_ALL=C sort)
+    [ "${names[*]}" = "${listed[*]}" ] || fail "the stage $STAGE no longer holds the files of its checksums"
+    (cd "$stage" && sha256sum --check --quiet "$stage.sums") || fail "a file in $STAGE changed after it was staged"
+else
+    stage_files
+fi
+if [ "$STEP" = stage ]; then
+    say "staged in $stage (checksums: $stage.sums)"
+    exit 0
+fi
 
 # The words of the release page; {tag} in the notes file is the tag (the command to install this release).
 notes() {

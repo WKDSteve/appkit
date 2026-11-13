@@ -7,7 +7,7 @@ install script that installs exactly that build.
 | Part | What it does |
 |---|---|
 | `prepare/` | A GitHub Action: is the commit of a green CI run the tip of `main`? Makes the pre-release `latest` once. |
-| `publish/` | A GitHub Action: puts the built files, the stamped install scripts and `SHA256SUMS` on `latest` (and moves it) or on a release draft. Its steps are `publish.sh`. |
+| `publish/` | A GitHub Action: puts the built files, the stamped install scripts and `SHA256SUMS` on `latest` (and moves it) or on a release draft, and attests them (see "Attestation"). Its steps are `publish.sh`. |
 | `scripts/install.ps1` | Windows: downloads the build, checks it against `SHA256SUMS`, installs it for the current user. |
 | `scripts/install.sh` | Linux and macOS: the same. |
 | `stamp.py` | Writes the repository, the app and the channel into a copy of an install script. |
@@ -168,6 +168,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write       # the attestation of the files (see "Attestation"); attest: false needs neither
+      attestations: write
     steps:
       - uses: actions/checkout@<sha>
         with:
@@ -218,6 +220,29 @@ Bash by its full path (`C:\PROGRA~1\Git\bin\bash.exe`, the 8.3 form: the shell s
 `bash` step is skipped there. Git for Windows must be in `C:\Program Files`. For an app that is built for Windows only,
 leave the `unix-*` inputs empty and set `expect` to the number of Windows files (one): there is no `install.sh`.
 `publish` then needs `python3`, `gh` and `sha256sum` on the runner's PATH (Git Bash brings the last one).
+
+## Attestation
+
+`publish` attests every file it puts on a release, the install scripts and `version.json` included, with
+[`actions/attest`](https://github.com/actions/attest): a Sigstore build provenance, signed with the OIDC token of the
+workflow, that names the repository, the workflow file, the commit and the kind of runner. It runs between two halves of
+`publish.sh`: `STEP=stage` puts the files into a folder and writes their checksums beside it, the attestation takes
+exactly those checksums, and `STEP=upload` sends the folder only after checking it still matches them (`version.json`
+carries the time of the build, so staging again would make other bytes). The publish job needs `id-token: write` and
+`attestations: write`; `attest: false` turns it off. Attestations are free for public repositories; a private one needs
+GitHub Enterprise Cloud, so set `attest: false` there.
+
+Check a downloaded file by hand:
+
+```
+gh attestation verify <file> -R OWNER/NAME --signer-workflow OWNER/NAME/.github/workflows/rolling.yml
+```
+
+(`release.yml` for a release.) What it proves: the file is the one this workflow of this repository built and
+published, and a file swapped on the release later, with a token that may write releases but cannot sign as the
+workflow, no longer verifies, while `SHA256SUMS` can be swapped along with it. What it does not prove: that the
+runner was sound. A compromised runner signs with the same token; only a build on a runner it cannot reach (a
+GitHub-hosted one, checked with `--deny-self-hosted-runners`) takes it out of the chain.
 
 ## Checks
 

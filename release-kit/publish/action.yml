@@ -10,6 +10,8 @@
 #     runs-on: ubuntu-latest
 #     permissions:
 #       contents: write
+#       id-token: write                            # for the attestation (attest: true, the default)
+#       attestations: write
 #     steps:
 #       - uses: actions/checkout@<sha>            # only for notes-file and extra files
 #         with: { persist-credentials: false }
@@ -38,7 +40,8 @@
 #           title: my-app ${{ github.ref_name }}      # a release only; default: the tag
 #           version: 1.2.3                            # the program's own version, for version.json (rolling build)
 #
-# What it does, in order: release-kit/publish.sh.
+# What it does, in order: release-kit/publish.sh with STEP=stage, the attestation of exactly those bytes
+# (actions/attest), then publish.sh with STEP=upload, which checks the stage against its checksums first.
 
 name: release-kit publish
 description: Attach built files, stamped install scripts and SHA256SUMS to the rolling build or a release draft.
@@ -107,6 +110,10 @@ inputs:
     description: The title of the release page of a tag, by default the tag itself. The rolling build names its commit itself.
     required: false
     default: ""
+  attest:
+    description: true (default) attests every staged file with actions/attest (the job needs id-token and attestations write); false skips it.
+    required: false
+    default: "true"
   version:
     description: The version the program reports about itself (X.Y.Z), written to version.json. A release has the version of its tag and refuses another; the rolling build says null without it.
     required: false
@@ -115,6 +122,68 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Stage
+      if: runner.os != 'Windows'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        KIT: ${{ github.action_path }}/..
+        TAG: ${{ inputs.tag }}
+        SHA: ${{ inputs.sha }}
+        FILES: ${{ inputs.files }}
+        EXPECT: ${{ inputs.expect }}
+        APP: ${{ inputs.app }}
+        WINDOWS_KIND: ${{ inputs.windows-kind }}
+        WINDOWS_PROGRAM: ${{ inputs.windows-program }}
+        WINDOWS_RELEASE_ASSET: ${{ inputs.windows-release-asset }}
+        WINDOWS_ROLLING_ASSET: ${{ inputs.windows-rolling-asset }}
+        UNIX_KIND: ${{ inputs.unix-kind }}
+        UNIX_PROGRAM: ${{ inputs.unix-program }}
+        UNIX_RELEASE_ASSET: ${{ inputs.unix-release-asset }}
+        UNIX_ROLLING_ASSET: ${{ inputs.unix-rolling-asset }}
+        EXTRA: ${{ inputs.extra }}
+        NOTES_FILE: ${{ inputs.notes-file }}
+        TITLE: ${{ inputs.title }}
+        VERSION: ${{ inputs.version }}
+        STEP: stage
+        STAGE: ${{ runner.temp }}/release-kit-stage
+      run: bash "$KIT/publish.sh"
+    - name: Stage (Windows)
+      if: runner.os == 'Windows'
+      shell: C:\PROGRA~1\Git\bin\bash.exe --noprofile --norc -e -o pipefail {0}
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        KIT: ${{ github.action_path }}/..
+        TAG: ${{ inputs.tag }}
+        SHA: ${{ inputs.sha }}
+        FILES: ${{ inputs.files }}
+        EXPECT: ${{ inputs.expect }}
+        APP: ${{ inputs.app }}
+        WINDOWS_KIND: ${{ inputs.windows-kind }}
+        WINDOWS_PROGRAM: ${{ inputs.windows-program }}
+        WINDOWS_RELEASE_ASSET: ${{ inputs.windows-release-asset }}
+        WINDOWS_ROLLING_ASSET: ${{ inputs.windows-rolling-asset }}
+        UNIX_KIND: ${{ inputs.unix-kind }}
+        UNIX_PROGRAM: ${{ inputs.unix-program }}
+        UNIX_RELEASE_ASSET: ${{ inputs.unix-release-asset }}
+        UNIX_ROLLING_ASSET: ${{ inputs.unix-rolling-asset }}
+        EXTRA: ${{ inputs.extra }}
+        NOTES_FILE: ${{ inputs.notes-file }}
+        TITLE: ${{ inputs.title }}
+        VERSION: ${{ inputs.version }}
+        STEP: stage
+        STAGE: ${{ runner.temp }}/release-kit-stage
+      run: bash "$(cygpath -u "$KIT")/publish.sh"
+    # Sigstore build provenance for exactly the staged bytes, signed with the workflow's OIDC token: a file swapped
+    # on the release later no longer verifies (`gh attestation verify <file> -R <repo> --signer-workflow ...`). The
+    # job needs `id-token: write` and `attestations: write`. It proves the workflow, commit and runner kind, not
+    # that the runner was sound: a compromised runner signs too.
+    - name: Attest
+      if: inputs.attest == 'true'
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+      with:
+        subject-checksums: ${{ runner.temp }}/release-kit-stage.sums
+        github-token: ${{ inputs.token }}
     - name: Publish
       if: runner.os != 'Windows'
       shell: bash
@@ -138,6 +207,8 @@ runs:
         NOTES_FILE: ${{ inputs.notes-file }}
         TITLE: ${{ inputs.title }}
         VERSION: ${{ inputs.version }}
+        STEP: upload
+        STAGE: ${{ runner.temp }}/release-kit-stage
       run: bash "$KIT/publish.sh"
     - name: Publish (Windows)
       if: runner.os == 'Windows'
@@ -162,4 +233,6 @@ runs:
         NOTES_FILE: ${{ inputs.notes-file }}
         TITLE: ${{ inputs.title }}
         VERSION: ${{ inputs.version }}
+        STEP: upload
+        STAGE: ${{ runner.temp }}/release-kit-stage
       run: bash "$(cygpath -u "$KIT")/publish.sh"

@@ -245,7 +245,9 @@ class ManifestsTest(unittest.TestCase):
             with self.subTest(action=path.parent.name):
                 text = path.read_text(encoding="utf-8")
                 declared = set((yaml.safe_load(text).get("inputs") or {}).keys())
+                # `${{ inputs.x }}`, and an `if:` reads `inputs.x` without the braces
                 used = set(re.findall(r"\$\{\{\s*inputs\.([A-Za-z0-9_-]+)\s*\}\}", text))
+                used |= set(re.findall(r"^\s*if:.*?\binputs\.([A-Za-z0-9_-]+)", text, re.M))
                 self.assertEqual(used - declared, set(), "read but not declared")
                 self.assertEqual(declared - used, set(), "declared but never read")
 
@@ -1215,6 +1217,87 @@ class PublishTest(unittest.TestCase):
         self.assertNotEqual(res.returncode, 0)
         self.assertIn("two files are called version.json", res.stderr)
         self.assertEqual(self.calls(), [])
+
+    # ── the two halves, with the attestation between them ─────────────────────
+
+    def stage_dir(self) -> Path:
+        return self.tmp / "stage"
+
+    def test_stage_sends_nothing_and_leaves_files_and_sums(self) -> None:
+        res = self.publish(STEP="stage", STAGE=self.stage_dir().as_posix())
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self.calls(), [], "staging talks to nobody")
+        staged = sorted(p.name for p in self.stage_dir().iterdir())
+        self.assertIn("install.ps1", staged)
+        self.assertIn("version.json", staged)
+        self.assertNotIn("SHA256SUMS", staged, "the checksums lie beside the stage, so attest reads them as a list")
+        sums = Path(self.stage_dir().as_posix() + ".sums").read_text().splitlines()
+        self.assertEqual(sorted(line.split("  ", 1)[1] for line in sums), staged)
+
+    def test_upload_sends_the_staged_bytes_without_staging_again(self) -> None:
+        stage = self.stage_dir().as_posix()
+        self.assertEqual(self.publish(STEP="stage", STAGE=stage).returncode, 0)
+        before = (self.stage_dir() / "version.json").read_bytes()
+        res = self.publish(STEP="upload", STAGE=stage, FILES=(self.tmp / "nowhere").as_posix())
+        # FILES is not read again: the upload goes by the stage alone (the folder need not even be there).
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual((self.stage_dir() / "version.json").read_bytes(), before, "version.json is not made again")
+        uploads = self.uploads()
+        self.assertTrue(any("install.ps1" in c for c in uploads), uploads)
+        self.assertTrue(any("SHA256SUMS" in c for c in uploads), uploads)
+
+    def test_upload_refuses_a_file_changed_after_staging(self) -> None:
+        stage = self.stage_dir().as_posix()
+        self.assertEqual(self.publish(STEP="stage", STAGE=stage).returncode, 0)
+        (self.stage_dir() / "demo-hub-windows-x86_64.exe").write_bytes(b"swapped")
+        res = self.publish(STEP="upload", STAGE=stage)
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("changed after it was staged", res.stderr)
+        self.assertEqual(self.uploads(), [], "nothing goes up")
+
+    def test_upload_refuses_a_file_added_after_staging(self) -> None:
+        stage = self.stage_dir().as_posix()
+        self.assertEqual(self.publish(STEP="stage", STAGE=stage).returncode, 0)
+        (self.stage_dir() / "extra.exe").write_bytes(b"not attested")
+        res = self.publish(STEP="upload", STAGE=stage)
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("no longer holds the files of its checksums", res.stderr)
+        self.assertEqual(self.uploads(), [])
+
+    def test_upload_without_a_stage_fails(self) -> None:
+        res = self.publish(STEP="upload", STAGE=self.stage_dir().as_posix())
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("nothing staged", res.stderr)
+        self.assertEqual(self.calls(), [])
+
+    def test_a_step_needs_a_stage_and_a_known_name(self) -> None:
+        res = self.publish(STEP="stage")
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("needs STAGE", res.stderr)
+        res = self.publish(STEP="both", STAGE=self.stage_dir().as_posix())
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("step must be all, stage or upload", res.stderr)
+
+    def test_a_stage_that_is_not_empty_is_refused(self) -> None:
+        self.stage_dir().mkdir()
+        (self.stage_dir() / "left-over").write_text("x")
+        res = self.publish(STEP="stage", STAGE=self.stage_dir().as_posix())
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("is not empty", res.stderr)
+
+
+class PublishActionTest(unittest.TestCase):
+    """The action attests between the two halves of publish.sh, pinned, and only the staged checksums."""
+
+    def test_stage_attest_upload_in_this_order(self) -> None:
+        text = (KIT / "publish" / "action.yml").read_text(encoding="utf-8")
+        steps = text[text.index("\nruns:") :]
+        order = [steps.index(word) for word in ("STEP: stage", "uses: actions/attest@", "STEP: upload")]
+        self.assertEqual(order, sorted(order), "stage, attest, upload")
+        self.assertRegex(steps, r"uses: actions/attest@[0-9a-f]{40} # v\d+\.\d+\.\d+", "pinned to a commit")
+        self.assertIn("subject-checksums: ${{ runner.temp }}/release-kit-stage.sums", steps)
+        self.assertIn("if: inputs.attest == 'true'", steps)
+        self.assertEqual(steps.count("STAGE: ${{ runner.temp }}/release-kit-stage"), 4, "every bash step, both systems")
 
 
 if __name__ == "__main__":
