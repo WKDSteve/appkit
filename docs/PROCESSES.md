@@ -10,16 +10,40 @@ protection looks for. A child of an app is visible as what it is: it runs under 
 name, it is tied to the app by the system, its start is in the app's log, and it is listed in
 the app's documentation.
 
-## Which helper
+## Three ways, and when each applies
 
-| The program | Helper | What it gives |
-|---|---|---|
-| does work for the app and gives its result back (an engine call, `git status`, a version probe) | `appkit_core::child::run` | output collected, time limit, size limit |
-| serves the app as long as it runs (an engine host) | `appkit_core::child::spawn` | an `Owned` with the three pipes |
-| belongs to somebody else and is meant to stay (another app, a hub) | `appkit_hub::launch::spawn` | nothing inherited, a window of its own when asked for |
-| is the person's browser | `appkit_hub::browser::open` | only `http://127.0.0.1:<port>/…` |
+The kit used to have two ways that seemed to contradict each other: `proc::run` started a
+child with `CREATE_NO_WINDOW`, and `launch::spawn` says "never `CREATE_NO_WINDOW`". Both are
+right, for different programs. What decides is who owns the process:
+
+| | The program | How | Window | Lifetime |
+|---|---|---|---|---|
+| (a) | **a child of the app**: it does work for the app (an engine call, an engine host, `git`, `gh`) | `appkit_core::child`: `run`, `run_lines`, `spawn` | none: it has nothing to show, its streams are pipes of the app | bound to the app by the system (job object, process group); time and size limits; named in the log |
+| (b) | **a program that is not the app's**: another app, a server in its console, an editor the person works in | `appkit_hub::launch::spawn` | its own, visible; never `CREATE_NO_WINDOW` or `DETACHED_PROCESS` | outlives the app on purpose; nothing of the app is inherited |
+| (c) | **something the system opens**: a link in the default browser | `appkit_hub::browser::open` (`ShellExecuteW`, `open`, `xdg-open`) | the browser's | no process of the app at all |
+
+So a process without a window is always one that is bound to the app and ends with it, and a
+process that outlives the app always has a window of its own or is the person's own program.
+An invisible process that stays is what neither way allows.
+
+A hub that has no console itself (a program of the GUI subsystem, a hub in the background)
+makes this visible: a console program it starts by hand gets a console of its own and a window
+flashes up. Started through `child` it gets none; `tests/child.rs` of `appkit-testkit` shows
+both.
 
 Everything else is a finding of [`tools/check-process-starts.py`](#the-check).
+
+### Named exceptions
+
+These starts are written by hand on purpose and stay; the allow file of the check names them:
+
+- **Neovim as the editor**, in a visible console of its own (`appkit-hub/src/editor.rs`,
+  `CREATE_NEW_CONSOLE`): a window the person asked for and works in.
+- **Another app as a server in its console** (`launch::spawn` with `Window::NewConsole`): the
+  console is how that app is operated.
+- **The hub in the background** (`background::start`): the hub puts itself in the background.
+  It is not a child of an app; when it ends is its own matter (see the README, "A hub in the
+  background ends itself").
 
 ## A child of the app (`appkit_core::child`)
 
@@ -40,6 +64,9 @@ let out = child::run(Run {
     leftovers: Leftovers::End,
 })
 .await?;
+
+// A call whose output is shown while it runs: every line as it arrives.
+let code = child::run_lines(run, |stream, line| progress.push(stream, line)).await?;
 
 // A child that stays.
 let mut host = child::spawn(&Start::new("tasks-hub engine host", nvim).args(args))?;
@@ -76,7 +103,8 @@ What every child gets:
   ended always writes `child of <caller>: <program> (pid <n>) was ended: <why>`. The lines go
   to stderr, which is `hub.log` for a hub in the background; `child::set_log` names another
   place. The arguments are not logged: they can hold paths and data of the person.
-- **Limits** (`run`): one time limit for the whole call and a size limit per output stream.
+- **Limits** (`run`, `run_lines`): one time limit for the whole call and a size limit per
+  output stream (for `run_lines`: all bytes of the stream, nothing is kept).
   When one is passed, the child and what it started are ended and the call fails with
   `ProcError::Timeout` or `ProcError::TooLarge`.
 - **An environment that is named.** `Environment::Only(list)` is the whole environment;
@@ -132,10 +160,9 @@ A file that may start processes itself is listed in `tools/process-starts.allow`
 
 `<count>` is the number of lines found in the file. More or fewer lines than the entry says
 fail, and so does an entry for a file without any, so the list can neither hide a new start nor
-keep an exception that is gone. In this repository the list holds the two helpers, the places
-that hand something to a program of the person (browser, editor, file manager, folder dialog),
-the hub putting itself in the background, and two calls of system tools that have not moved to
-the helper yet.
+keep an exception that is gone. In this repository the list holds the two helpers, the named
+exceptions above, the link handed to the browser, and the calls of system tools (`icacls`,
+`reg`, `taskkill`, the file manager, the folder dialog) that are being replaced.
 
 The script knows no repository. An app copies it into its own `tools/`, starts with an allow
 file that lists what it has today, and removes the entries as the starts move to the helpers:

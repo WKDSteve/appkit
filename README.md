@@ -127,9 +127,11 @@ An app starts a process for its own work through `appkit_core::child` and never 
 child has no console window, is tied to the app (a job object on Windows; a process group
 elsewhere, on Linux with the parent-death signal) so that it ends with the app, gets its
 arguments as an argv, runs under its own name, and its start is in the log. `child::run` is a
-call with a time limit and a size limit, `child::spawn` a child that stays.
+call with a time limit and a size limit, `child::run_lines` one whose lines are handed over
+while it runs, `child::spawn` a child that stays. A program that is not the app's (another
+app, an editor) is started through `launch::spawn`, visibly, and outlives the hub.
 `tools/check-process-starts.py` fails on a start written by hand. See
-[docs/PROCESSES.md](docs/PROCESSES.md).
+[docs/PROCESSES.md](docs/PROCESSES.md) for which way applies when.
 
 `launch::spawn(program, args, &LaunchOpts { cwd, window })` starts a program of somebody else:
 the program is an absolute path to a file, the arguments an argv (never a shell string), stdin,

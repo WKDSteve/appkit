@@ -5,6 +5,10 @@
 //! - `env <NAME>`: prints the value of the variable, or `(unset)`.
 //! - `cat`: copies stdin to stdout.
 //! - `flood`: writes to stdout without end.
+//! - `lines`: writes `out 1` to stdout and `err 1` to stderr, waits, then `out 2` with a carriage
+//!   return and `tail` without a line end.
+//! - `hub <helper|plain> <out>`: plays a hub that has no console: asks a `console` child of its
+//!   own, through the helper or by hand, and writes the answer to `<out>`.
 //! - `sleep`: does nothing for a minute.
 //! - `console`: prints `window` when its console has a window, else `none` (Windows; elsewhere
 //!   `none`).
@@ -48,6 +52,14 @@ fn main() {
             let mut out = std::io::stdout();
             while out.write_all(&block).is_ok() {}
         }
+        "lines" => {
+            println!("out 1");
+            eprintln!("err 1");
+            std::thread::sleep(Duration::from_millis(300));
+            print!("out 2\r\ntail");
+            std::io::stdout().flush().expect("write stdout");
+        }
+        "hub" => hub(&rest[0], &rest[1]),
         "sleep" => std::thread::sleep(Duration::from_secs(60)),
         "console" => println!("{}", if console_window() { "window" } else { "none" }),
         "beat" => beat(&rest[0]),
@@ -98,6 +110,39 @@ fn start_beat(file: &str) {
         .stderr(Stdio::null())
         .spawn()
         .expect("start the beat");
+}
+
+fn hub(how: &str, out: &str) {
+    let me = std::env::current_exe().expect("the path of this program");
+    let answer = if how == "helper" {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime");
+        let run = child::Run {
+            start: Start::new("child-probe hub", me)
+                .arg("console")
+                .env(Environment::Inherited {
+                    set: Vec::new(),
+                    remove: Vec::new(),
+                }),
+            stdin: Vec::new(),
+            timeout: Duration::from_secs(30),
+            max_stdout: 1024,
+            max_stderr: 1024,
+            leftovers: child::Leftovers::End,
+        };
+        runtime.block_on(child::run(run)).expect("the child").stdout
+    } else {
+        Command::new(me)
+            .arg("console")
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .expect("the child")
+            .stdout
+    };
+    std::fs::write(out, answer).expect("write the answer");
 }
 
 fn app(role: &[String]) {

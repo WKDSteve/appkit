@@ -8,7 +8,7 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use appkit_core::child::{self, Environment, Leftovers, ProcError, Run, Start};
+use appkit_core::child::{self, Environment, Leftovers, ProcError, Run, Start, Stream};
 use appkit_scratch::Scratch;
 
 const PROBE: &str = env!("CARGO_BIN_EXE_child-probe");
@@ -242,6 +242,49 @@ async fn a_call_that_writes_too_much_is_ended() {
 }
 
 #[tokio::test]
+async fn the_lines_of_a_call_arrive_one_by_one_while_it_runs() {
+    let mut seen: Vec<(Stream, String, Duration)> = Vec::new();
+    let began = Instant::now();
+    let code = child::run_lines(call(probe(&["lines"])), |stream, line| {
+        seen.push((stream, line.to_owned(), began.elapsed()));
+    })
+    .await
+    .unwrap();
+    assert_eq!(code, Some(0));
+    let of = |which: Stream| -> Vec<&str> {
+        let lines = seen.iter().filter(|(s, _, _)| *s == which);
+        lines.map(|(_, line, _)| line.as_str()).collect()
+    };
+    assert_eq!(of(Stream::Stdout), ["out 1", "out 2", "tail"]);
+    assert_eq!(of(Stream::Stderr), ["err 1"]);
+    // The first line was handed over before the child wrote the second: it is not collected.
+    let at = |text: &str| seen.iter().find(|(_, l, _)| l == text).unwrap().2;
+    assert!(at("out 2") - at("out 1") >= Duration::from_millis(200));
+}
+
+#[tokio::test]
+async fn the_limits_hold_for_a_call_read_line_by_line() {
+    let outcome = child::run_lines(call(probe(&["flood"])), |_, _| {}).await;
+    assert!(
+        matches!(
+            outcome,
+            Err(ProcError::TooLarge {
+                stream: "stdout",
+                ..
+            })
+        ),
+        "{outcome:?}"
+    );
+    let dir = Scratch::new("child-lines-timeout");
+    let file = dir.join("beat");
+    let mut run = call(probe(&["tree", text(&file)]));
+    run.timeout = Duration::from_secs(3);
+    let outcome = child::run_lines(run, |_, _| {}).await;
+    assert!(matches!(outcome, Err(ProcError::Timeout(_))), "{outcome:?}");
+    assert!(stops(&file).await, "the grandchild outlived the time limit");
+}
+
+#[tokio::test]
 async fn what_a_call_left_running_is_ended() {
     let dir = Scratch::new("child-leftover");
     let file = dir.join("beat");
@@ -356,4 +399,36 @@ async fn a_child_has_no_console_window() {
     );
     let out = child::run(call(probe(&["console"]))).await.unwrap();
     assert_eq!(lines(&out.stdout), ["none"]);
+}
+
+/// A hub without a console (a program of the GUI subsystem, or one put in the background): a
+/// console program it starts by hand gets a console of its own, with a window. Through the
+/// helper it gets none.
+#[cfg(windows)]
+#[tokio::test]
+async fn a_child_of_a_hub_without_a_console_opens_no_console_window() {
+    use std::os::windows::process::CommandExt;
+
+    /// `DETACHED_PROCESS`: the hub of this test has no console at all.
+    const DETACHED: u32 = 0x0000_0008;
+    let dir = Scratch::new("child-hub-console");
+    let ask = |how: &str| {
+        let out = dir.join(how);
+        let status = std::process::Command::new(PROBE)
+            .args(["hub", how, text(&out)])
+            .creation_flags(DETACHED)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "the hub of the test failed ({how})");
+        lines(&std::fs::read(&out).unwrap())
+    };
+    assert_eq!(
+        ask("plain"),
+        ["window"],
+        "a start by hand opened no console window, so the test proves nothing"
+    );
+    assert_eq!(ask("helper"), ["none"]);
 }

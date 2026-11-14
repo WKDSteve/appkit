@@ -19,9 +19,14 @@
 //!   not cut while it runs). A child that had to be ended (time, size) always gets a line.
 //!   Arguments are not logged: they can hold paths and data.
 //!
-//! Two shapes: [`run`] for a call that ends by itself (its output is collected, with a time
-//! limit and a size limit), and [`spawn`] for a child that stays (an engine host), which gives
-//! an [`Owned`] with the three pipes.
+//! Three shapes: [`run`] for a call that ends by itself (its output is collected, with a time
+//! limit and a size limit), [`run_lines`] for one whose output is shown line by line while it
+//! runs, and [`spawn`] for a child that stays (an engine host), which gives an [`Owned`] with
+//! the three pipes.
+//!
+//! This module is for a child the app owns. A program that is meant to outlive the app (another
+//! app, an editor the person works in) is started through `appkit_hub::launch`, visibly and
+//! without a job; a link or a folder is handed to the system (`appkit_hub::browser`).
 //!
 //! Both need a tokio runtime.
 //!
@@ -43,6 +48,7 @@
 
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
+use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
@@ -448,7 +454,9 @@ where
     R: AsyncRead + Unpin,
 {
     let mut buf = Vec::new();
-    let mut chunk = [0u8; 16 * 1024];
+    // On the heap: the futures of a call are moved, and two such blocks in each would be copied
+    // on the stack every time.
+    let mut chunk = vec![0u8; 16 * 1024];
     loop {
         let n = reader.read(&mut chunk).await.map_err(ProcError::Io)?;
         if n == 0 {
@@ -478,40 +486,82 @@ where
     }
 }
 
-/// Run a call to its end and collect what it wrote, or end it. Must be called in a tokio
-/// runtime.
-///
-/// # Errors
-///
-/// As [`spawn`]; [`ProcError::Timeout`] and [`ProcError::TooLarge`] when a limit was passed
-/// (the child and what it started are ended first); [`ProcError::Io`] when a pipe failed.
-pub async fn run(run: Run) -> Result<Output, ProcError> {
-    let mut owned = start_child(&run.start)?;
-    if first_call(&run.start) {
-        log(&format!(
-            "child started by {} (later calls of the same kind are not logged)",
-            owned.what
-        ));
+/// Which output stream of a child a line came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stream {
+    Stdout,
+    Stderr,
+}
+
+impl Stream {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Stdout => "stdout",
+            Self::Stderr => "stderr",
+        }
     }
-    let pipes = (owned.take_stdin(), owned.take_stdout(), owned.take_stderr());
-    let (Some(stdin), Some(stdout), Some(stderr)) = pipes else {
-        owned.end().await;
-        return Err(ProcError::Io(io::Error::other(
-            "a pipe of the child is missing",
-        )));
-    };
+}
 
-    let pipes = async {
-        tokio::try_join!(
-            write_stdin(stdin, run.stdin),
-            read_limited(stdout, run.max_stdout, "stdout"),
-            read_limited(stderr, run.max_stderr, "stderr"),
-        )
+/// Hand every line of `reader` to `on_line` as it arrives; more than `limit` bytes in all is an
+/// error. A line is what stands before a line feed, without a carriage return at its end; bytes
+/// that are no UTF-8 become the replacement character.
+async fn read_lines<R, F>(
+    mut reader: R,
+    limit: usize,
+    stream: Stream,
+    on_line: &Mutex<F>,
+) -> Result<(), ProcError>
+where
+    R: AsyncRead + Unpin,
+    F: FnMut(Stream, &str),
+{
+    let emit = |line: &[u8]| {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        let mut on_line = on_line.lock().unwrap_or_else(PoisonError::into_inner);
+        on_line(stream, &String::from_utf8_lossy(line));
     };
+    let mut pending: Vec<u8> = Vec::new();
+    let mut total = 0usize;
+    // On the heap: the futures of a call are moved, and two such blocks in each would be copied
+    // on the stack every time.
+    let mut chunk = vec![0u8; 16 * 1024];
+    loop {
+        let n = reader.read(&mut chunk).await.map_err(ProcError::Io)?;
+        if n == 0 {
+            // What the child wrote last without ending the line.
+            if !pending.is_empty() {
+                emit(&pending);
+            }
+            return Ok(());
+        }
+        total += n;
+        if total > limit {
+            return Err(ProcError::TooLarge {
+                stream: stream.name(),
+                limit,
+            });
+        }
+        let mut rest = &chunk[..n];
+        while let Some(at) = rest.iter().position(|b| *b == b'\n') {
+            pending.extend_from_slice(&rest[..at]);
+            emit(&pending);
+            pending.clear();
+            rest = &rest[at + 1..];
+        }
+        pending.extend_from_slice(rest);
+    }
+}
 
+/// The part every call shares: wait for the pipes and the end of the child within the time,
+/// deal with what the child left running, and end everything when something went wrong.
+async fn finish<T>(
+    mut owned: Owned,
+    timeout: Duration,
+    leftovers: Leftovers,
+    pipes: impl Future<Output = Result<T, ProcError>>,
+) -> Result<(T, ExitStatus), ProcError> {
     // What the child left running is ended as soon as the child itself has ended, not after the
     // pipes: a leftover that inherited a pipe would hold it open until the time is over.
-    let leftovers = run.leftovers;
     let child = &mut owned.child;
     let tree = &mut owned.tree;
     let exit = async {
@@ -526,25 +576,91 @@ pub async fn run(run: Run) -> Result<Output, ProcError> {
 
     // One deadline for the whole call: the pipes and the wait share it, so the time is never
     // granted twice.
-    let deadline = tokio::time::Instant::now() + run.timeout;
-    let both = async { tokio::try_join!(pipes, exit) };
+    let deadline = tokio::time::Instant::now() + timeout;
+    let both = Box::pin(async { tokio::try_join!(pipes, exit) });
     let failure = match tokio::time::timeout_at(deadline, both).await {
-        Ok(Ok((((), out, err), status))) => {
+        Ok(Ok(done)) => {
             if leftovers == Leftovers::Keep {
                 owned.tree.release();
             }
-            return Ok(Output {
-                code: status.code(),
-                stdout: out,
-                stderr: err,
-            });
+            return Ok(done);
         }
         Ok(Err(e)) => e,
-        Err(_) => ProcError::Timeout(run.timeout),
+        Err(_) => ProcError::Timeout(timeout),
     };
 
     // Every way that gets here ends the child and what it started.
     log(&format!("child of {} was ended: {failure}", owned.what));
     owned.end().await;
     Err(failure)
+}
+
+/// The three pipes of a call that was just started.
+async fn call_pipes(
+    start: &Start,
+) -> Result<(Owned, ChildStdin, ChildStdout, ChildStderr), ProcError> {
+    let mut owned = start_child(start)?;
+    if first_call(start) {
+        log(&format!(
+            "child started by {} (later calls of the same kind are not logged)",
+            owned.what
+        ));
+    }
+    let pipes = (owned.take_stdin(), owned.take_stdout(), owned.take_stderr());
+    let (Some(stdin), Some(stdout), Some(stderr)) = pipes else {
+        owned.end().await;
+        return Err(ProcError::Io(io::Error::other(
+            "a pipe of the child is missing",
+        )));
+    };
+    Ok((owned, stdin, stdout, stderr))
+}
+
+/// Run a call to its end and collect what it wrote, or end it. Must be called in a tokio
+/// runtime.
+///
+/// # Errors
+///
+/// As [`spawn`]; [`ProcError::Timeout`] and [`ProcError::TooLarge`] when a limit was passed
+/// (the child and what it started are ended first); [`ProcError::Io`] when a pipe failed.
+pub async fn run(run: Run) -> Result<Output, ProcError> {
+    let (owned, stdin, stdout, stderr) = call_pipes(&run.start).await?;
+    let pipes = async {
+        tokio::try_join!(
+            write_stdin(stdin, run.stdin),
+            read_limited(stdout, run.max_stdout, "stdout"),
+            read_limited(stderr, run.max_stderr, "stderr"),
+        )
+    };
+    let (((), out, err), status) = finish(owned, run.timeout, run.leftovers, pipes).await?;
+    Ok(Output {
+        code: status.code(),
+        stdout: out,
+        stderr: err,
+    })
+}
+
+/// As [`run`], for a call whose output is shown while it runs (an update, a clone): every line
+/// of stdout and stderr goes to `on_line` as it arrives, and nothing is collected. The size
+/// limits count all bytes of a stream. The exit code is the answer; `None` when a signal ended
+/// the child.
+///
+/// # Errors
+///
+/// As [`run`].
+pub async fn run_lines<F>(run: Run, on_line: F) -> Result<Option<i32>, ProcError>
+where
+    F: FnMut(Stream, &str),
+{
+    let (owned, stdin, stdout, stderr) = call_pipes(&run.start).await?;
+    let on_line = Mutex::new(on_line);
+    let pipes = async {
+        tokio::try_join!(
+            write_stdin(stdin, run.stdin),
+            read_lines(stdout, run.max_stdout, Stream::Stdout, &on_line),
+            read_lines(stderr, run.max_stderr, Stream::Stderr, &on_line),
+        )
+    };
+    let (_, status) = finish(owned, run.timeout, run.leftovers, pipes).await?;
+    Ok(status.code())
 }
