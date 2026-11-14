@@ -140,6 +140,15 @@ runs `install` in a terminal sees it there.
 - With `Leftovers::Keep`, a process the child left running that holds one of the child's pipes
   keeps the call waiting until the time is over.
 
+### The folder dialog
+
+`FileOpener::pick_folder` of `appkit_hub::editor` asks the person for a folder. On Windows the
+hub shows the dialog itself (`IFileOpenDialog` with `FOS_PICKFOLDERS`, on a thread of its own):
+no program is started, and in particular no PowerShell with a script in its arguments. macOS and
+Linux have no such call without a toolkit of windows in the hub, so there the dialog program of
+the system stays (`/usr/bin/osascript`; `zenity` or `kdialog` from `PATH`), as a child of the hub
+through `child::run`: bound to the hub, named in the log, closed after thirty minutes.
+
 ## A program of somebody else (`appkit_hub::launch`)
 
 A hub that starts another app does not own it: the other app stays when the hub ends. Such a
@@ -167,7 +176,7 @@ A file that may start processes itself is listed in `tools/process-starts.allow`
 fail, and so does an entry for a file without any, so the list can neither hide a new start nor
 keep an exception that is gone. In this repository the list holds the two helpers, the named
 exceptions above, the link handed to the browser, and the calls of system tools (`icacls`,
-`reg`, `taskkill`, the file manager, the folder dialog) that are being replaced.
+`reg`, `taskkill`, the file manager) that are being replaced.
 
 The script knows no repository. An app copies it into its own `tools/`, starts with an allow
 file that lists what it has today, and removes the entries as the starts move to the helpers:

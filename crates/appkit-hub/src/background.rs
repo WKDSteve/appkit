@@ -1126,25 +1126,20 @@ pub fn start_from(program: &Path) -> Result<String, String> {
         max_stderr: START_FROM_OUTPUT,
         leftovers: Leftovers::Keep,
     };
-    let call = || -> Result<(Option<i32>, String), String> {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| format!("the installed program did not start: {e}"))?;
+    let (code, printed) = crate::blocking::block_on(|| async move {
         let mut printed = String::new();
-        let code = runtime
-            .block_on(child::run_lines(run, |stream, line| match stream {
-                Stream::Stdout => {
-                    printed.push_str(line);
-                    printed.push('\n');
-                }
-                Stream::Stderr => eprintln!("{line}"),
-            }))
-            .map_err(|e| format!("the installed program did not start: {e}"))?;
-        Ok((code, printed))
-    };
-    let (code, printed) = std::thread::scope(|scope| scope.spawn(call).join())
-        .map_err(|_| "the installed program did not start: the call broke off".to_owned())??;
+        let code = child::run_lines(run, |stream, line| match stream {
+            Stream::Stdout => {
+                printed.push_str(line);
+                printed.push('\n');
+            }
+            Stream::Stderr => eprintln!("{line}"),
+        })
+        .await;
+        (code, printed)
+    })
+    .map_err(|e| format!("the installed program did not start: {e}"))?;
+    let code = code.map_err(|e| format!("the installed program did not start: {e}"))?;
     if code == Some(0) {
         Ok(printed)
     } else {

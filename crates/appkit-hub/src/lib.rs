@@ -47,6 +47,7 @@ use tokio::task::JoinHandle;
 
 pub mod access;
 pub mod background;
+mod blocking;
 pub mod browser;
 pub mod client;
 pub mod config;
@@ -55,6 +56,8 @@ pub mod discovery;
 pub mod editor;
 pub mod engine;
 pub mod env;
+#[cfg(windows)]
+mod folder_dialog;
 pub mod fs_watch;
 pub mod guard;
 #[cfg(windows)]

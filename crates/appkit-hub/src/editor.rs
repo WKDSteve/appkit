@@ -118,28 +118,22 @@ pub fn reveal_plan(dir: &Path, os: &str, find: &dyn Fn(&str) -> Option<PathBuf>)
     })
 }
 
-/// The PowerShell script that shows the folder dialog of Windows and prints the chosen folder. The
-/// output is UTF-8, so that a name with a non-ASCII letter reaches the hub as it is.
-const PICK_SCRIPT_WINDOWS: &str = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; \
-Add-Type -AssemblyName System.Windows.Forms; \
-$d = New-Object System.Windows.Forms.FolderBrowserDialog; \
-if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $d.SelectedPath }";
-
 fn args(list: &[&str]) -> Vec<OsString> {
     list.iter().map(OsString::from).collect()
 }
 
-/// How to show the folder dialog of the system on `os` and get the chosen folder on standard output,
-/// or `None` when no way is known. `find` looks a program up.
+/// The program that shows the folder dialog of the system on `os` and prints the chosen folder on
+/// standard output, or `None` when there is none. `find` looks a program up.
+///
+/// Windows has none on purpose: its dialog is shown by the hub itself (`IFileOpenDialog`, see
+/// `folder_dialog`), no program is started. macOS and Linux have no such call without a toolkit
+/// of windows in the hub, so the program of the system that shows the dialog stays there
+/// (`osascript`; `zenity` or `kdialog`), as a child of the hub (`appkit_core::child`).
 #[must_use]
 pub fn pick_plan(os: &str, find: &dyn Fn(&str) -> Option<PathBuf>) -> Option<Launch> {
     match os {
-        "windows" => Some(Launch {
-            program: PathBuf::from("powershell.exe"),
-            args: args(&["-NoProfile", "-STA", "-Command", PICK_SCRIPT_WINDOWS]),
-        }),
         "macos" => Some(Launch {
-            program: PathBuf::from("osascript"),
+            program: PathBuf::from("/usr/bin/osascript"),
             args: args(&["-e", "POSIX path of (choose folder)"]),
         }),
         "linux" => find("zenity")
@@ -289,20 +283,63 @@ impl FileOpener for TerminalOpener {
                 .map(|c| c.to_string_lossy().into_owned());
             return Ok(chosen.and_then(|c| picked_folder(c.as_bytes(), true)));
         }
-        let find = |name: &str| on_path(&self.env, name);
-        let launch = pick_plan(std::env::consts::OS, &find)
-            .ok_or_else(|| "no folder dialog is known on this system".to_owned())?;
         if self.picking.swap(true, Ordering::SeqCst) {
             return Err("a folder dialog is open already".to_owned());
         }
-        let output = std::process::Command::new(&launch.program)
-            .args(&launch.args)
-            .stdin(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .output();
+        let answer = self.ask_for_folder();
         self.picking.store(false, Ordering::SeqCst);
-        let output = output.map_err(|_| "the folder dialog could not be started".to_owned())?;
-        Ok(picked_folder(&output.stdout, output.status.success()))
+        answer
+    }
+}
+
+/// How long a folder dialog may stay open before it is closed: a person who walked away.
+#[cfg(not(windows))]
+const PICK_LIMIT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+impl TerminalOpener {
+    /// The dialog of Windows, shown by this process: no program is started.
+    #[cfg(windows)]
+    fn ask_for_folder(&self) -> Result<Option<PathBuf>, String> {
+        let chosen = crate::folder_dialog::pick_folder()?;
+        // The same rule as for a dialog that prints its answer: no control character.
+        Ok(chosen.filter(|path| !path.to_string_lossy().chars().any(char::is_control)))
+    }
+
+    /// The dialog program of the system, as a child of the hub: it ends with the hub, and its
+    /// start is in the log.
+    #[cfg(not(windows))]
+    fn ask_for_folder(&self) -> Result<Option<PathBuf>, String> {
+        use appkit_core::child::{self, Environment, Leftovers, ProcError, Run, Start};
+
+        let find = |name: &str| on_path(&self.env, name);
+        let launch = pick_plan(std::env::consts::OS, &find)
+            .ok_or_else(|| "no folder dialog is known on this system".to_owned())?;
+        let run = Run {
+            // The dialog needs the display and the session of the person: the environment is
+            // the hub's.
+            start: Start::new(
+                format!("{} folder dialog", self.identity.binary),
+                launch.program,
+            )
+            .args(launch.args)
+            .env(Environment::Inherited {
+                set: Vec::new(),
+                remove: Vec::new(),
+            }),
+            stdin: Vec::new(),
+            timeout: PICK_LIMIT,
+            max_stdout: 64 * 1024,
+            // A toolkit complains at length on stderr; nobody reads it.
+            max_stderr: 1024 * 1024,
+            leftovers: Leftovers::End,
+        };
+        match crate::blocking::block_on(|| child::run(run))? {
+            Ok(output) => Ok(picked_folder(&output.stdout, output.code == Some(0))),
+            Err(ProcError::Timeout(_)) => {
+                Err("the folder dialog was open for too long and was closed".to_owned())
+            }
+            Err(_) => Err("the folder dialog could not be started".to_owned()),
+        }
     }
 }
 
@@ -506,12 +543,8 @@ mod tests {
         let zenity = |name: &str| (name == "zenity").then(|| PathBuf::from("/usr/bin/zenity"));
         let kdialog = |name: &str| (name == "kdialog").then(|| PathBuf::from("/usr/bin/kdialog"));
         assert_eq!(
-            pick_plan("windows", &none).unwrap().program,
-            PathBuf::from("powershell.exe")
-        );
-        assert_eq!(
             pick_plan("macos", &none).unwrap().program,
-            PathBuf::from("osascript")
+            PathBuf::from("/usr/bin/osascript")
         );
         assert_eq!(
             pick_plan("linux", &zenity).unwrap().program,
@@ -523,6 +556,57 @@ mod tests {
         );
         assert!(pick_plan("linux", &none).is_none());
         assert!(pick_plan("plan9", &zenity).is_none());
+    }
+
+    /// Windows shows its dialog itself (`folder_dialog`): there is no program to start, whatever
+    /// is installed. A shell with a script in its arguments is what an endpoint protection reads.
+    #[test]
+    fn windows_starts_no_program_for_the_folder_dialog() {
+        let anything = |name: &str| Some(PathBuf::from(format!("C:/Windows/System32/{name}")));
+        assert_eq!(pick_plan("windows", &none), None);
+        assert_eq!(pick_plan("windows", &anything), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn without_a_dialog_program_the_answer_says_so() {
+        let dir = Scratch::new("pick-none");
+        let env = Env::from_pairs([("PATH", dir.to_string_lossy().into_owned())]);
+        let opener = TerminalOpener::new(PathBuf::from("nvim"), env, &ID);
+        assert_eq!(
+            opener.pick_folder().unwrap_err(),
+            "no folder dialog is known on this system"
+        );
+        // The refusal does not leave the dialog marked as open.
+        assert_eq!(
+            opener.pick_folder().unwrap_err(),
+            "no folder dialog is known on this system"
+        );
+    }
+
+    /// A dialog that prints a folder, played by a script named `zenity`: the answer comes back
+    /// through the helper, and the child is in its log by the name of the app.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_dialog_of_linux_answers_through_the_helper() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = Scratch::new("pick-zenity");
+        let zenity = dir.join("zenity");
+        std::fs::write(&zenity, "#!/bin/sh\nprintf '%s\\n' '/home/me/Ordner äöü'\n").unwrap();
+        std::fs::set_permissions(&zenity, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let env = Env::from_pairs([("PATH", dir.to_string_lossy().into_owned())]);
+        let opener = TerminalOpener::new(PathBuf::from("nvim"), env, &ID);
+        // A file that was just written can be busy for a moment when another test starts a
+        // process at the same time.
+        let mut answer = opener.pick_folder();
+        for _ in 0..20 {
+            if answer.is_ok() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            answer = opener.pick_folder();
+        }
+        assert_eq!(answer, Ok(Some(PathBuf::from("/home/me/Ordner äöü"))));
     }
 
     #[test]
