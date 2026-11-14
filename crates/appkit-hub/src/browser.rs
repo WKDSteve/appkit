@@ -4,14 +4,12 @@
 //! address, and never a file a caller names: the one file that is opened is the page of a pairing
 //! code the hub wrote itself ([`open_own_page`], `phone::show_qr`), by its fixed name. On Windows the link
 //! goes to `ShellExecuteW` (verb `open`), no helper program is started; elsewhere the program that
-//! opens links gets exactly one argument, the link, and it is an absolute program.
+//! opens links gets exactly one argument, the link, and it is an absolute program. That program is
+//! not a child of the app (it may become the browser): it is started the way a hub starts a program
+//! of somebody else ([`crate::launch`]), with nothing of the hub and in a process group of its own.
 
 #[cfg(not(windows))]
-use std::ffi::OsString;
-#[cfg(not(windows))]
-use std::path::PathBuf;
-#[cfg(not(windows))]
-use std::process::{Command, Stdio};
+use std::path::{Path, PathBuf};
 
 /// The longest link that is opened.
 const MAX_LEN: usize = 2048;
@@ -67,12 +65,26 @@ fn plain_byte(b: u8) -> bool {
 /// The program and arguments that open `url` (macOS and the rest; Windows asks the shell
 /// directly, see [`shell_open`]).
 #[cfg(not(windows))]
-fn opener(url: &str) -> (PathBuf, Vec<OsString>) {
+fn opener(url: &str) -> (PathBuf, Vec<String>) {
     if cfg!(target_os = "macos") {
-        (PathBuf::from("/usr/bin/open"), vec![url.into()])
+        (PathBuf::from("/usr/bin/open"), vec![url.to_owned()])
     } else {
-        (PathBuf::from("/usr/bin/xdg-open"), vec![url.into()])
+        (PathBuf::from("/usr/bin/xdg-open"), vec![url.to_owned()])
     }
+}
+
+/// Start the program that opens links. It is not the app's: `launch::spawn` gives it the null
+/// device as its streams and a process group of its own, and does not wait for it.
+#[cfg(not(windows))]
+fn start_opener(program: &Path, args: &[String]) -> Result<(), String> {
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let opts = crate::launch::LaunchOpts {
+        cwd: Path::new("/"),
+        window: crate::launch::Window::Default,
+    };
+    crate::launch::spawn(program, &args, &opts)
+        .map(|_pid| ())
+        .map_err(|e| format!("could not start the browser: {e}"))
 }
 
 /// Hand `url` to the shell (`ShellExecuteW`, verb `open`): no helper program is started, so no
@@ -161,17 +173,7 @@ fn hand_over(target: &str) -> Result<(), String> {
     #[cfg(not(windows))]
     {
         let (program, args) = opener(target);
-        let mut child = Command::new(program)
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| format!("could not start the browser: {e}"))?;
-        std::thread::spawn(move || {
-            let _ = child.wait();
-        });
-        Ok(())
+        start_opener(&program, &args)
     }
 }
 
@@ -271,6 +273,49 @@ mod tests {
         let url = "http://127.0.0.1:17610/#pair=ab";
         let (program, args) = opener(url);
         assert!(program.is_absolute(), "{program:?}");
-        assert_eq!(args, vec![OsString::from(url)]);
+        assert_eq!(args, vec![url.to_owned()]);
+    }
+
+    /// The opener is a program of somebody else (it may become the browser): it leads a process
+    /// group of its own, so what ends the group of the hub (a Ctrl-C in the terminal) does not
+    /// reach it.
+    #[cfg(not(windows))]
+    #[test]
+    fn the_opener_is_started_in_a_process_group_of_its_own() {
+        let dir = appkit_scratch::Scratch::new("browser-opener");
+        let out = dir.join("seen");
+        // `$0` is the file, `$1` what the opener was given. Written: the group, the process, the link.
+        let script =
+            r#"{ ps -o pgid= -p $$; echo $$; echo "$1"; } > "$0.part" && mv "$0.part" "$0""#;
+        let url = "http://127.0.0.1:17610/#pair=ab";
+        let args = [
+            "-c".to_owned(),
+            script.to_owned(),
+            out.to_str().unwrap().to_owned(),
+            url.to_owned(),
+        ];
+        start_opener(Path::new("/bin/sh"), &args).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let seen = loop {
+            if let Ok(text) = std::fs::read_to_string(&out) {
+                break text;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the opener wrote nothing"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        let lines: Vec<&str> = seen.lines().map(str::trim).collect();
+        assert_eq!(lines.len(), 3, "{seen}");
+        assert_eq!(lines[0], lines[1], "the opener leads no group of its own");
+        assert_eq!(lines[2], url);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn an_opener_that_is_not_there_is_an_error() {
+        let err = start_opener(Path::new("/nowhere/open"), &[]).unwrap_err();
+        assert!(err.starts_with("could not start the browser"), "{err}");
     }
 }

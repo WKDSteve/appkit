@@ -20,7 +20,7 @@ right, for different programs. What decides is who owns the process:
 |---|---|---|---|---|
 | (a) | **a child of the app**: it does work for the app (an engine call, an engine host, `git`, `gh`) | `appkit_core::child`: `run`, `run_lines`, `spawn` | none: it has nothing to show, its streams are pipes of the app | bound to the app by the system (job object, process group); time and size limits; named in the log |
 | (b) | **a program that is not the app's**: another app, a server in its console, an editor the person works in | `appkit_hub::launch::spawn` | its own, visible; never `CREATE_NO_WINDOW` or `DETACHED_PROCESS` | outlives the app on purpose; nothing of the app is inherited |
-| (c) | **something the system opens**: a link in the default browser | `appkit_hub::browser::open` (`ShellExecuteW`, `open`, `xdg-open`) | the browser's | no process of the app at all |
+| (c) | **something the system opens**: a link in the default browser | `appkit_hub::browser::open`: Windows `ShellExecuteW`, no program is started; macOS and Linux `/usr/bin/open` and `/usr/bin/xdg-open`, started the way (b) starts a program (it may become the browser) | the browser's | no process of the app at all |
 
 So a process without a window is always one that is bound to the app and ends with it, and a
 process that outlives the app always has a window of its own or is the person's own program.
@@ -119,6 +119,11 @@ into a settings file; new code uses `Start::new`.
 
 `appkit_core::proc::run` is the older face of the same code (empty environment, path as given,
 `Leftovers::Keep`, no caller name). It stays for the apps that call it.
+
+`appkit_hub::background::start_from` (`install` brings the hub back from the installed program)
+is such a call: `<installed program> start` is a child while it runs, and the hub it puts in the
+background stays (`Leftovers::Keep`). The log line of the child goes to stderr, so a person who
+runs `install` in a terminal sees it there.
 
 ### Limits
 

@@ -18,6 +18,9 @@
 //! - `leave <file>`: starts `beat <file>` as a process of its own and ends.
 //! - `launch <file>`: as `leave`, but the way a hub starts a program of somebody else
 //!   (`appkit_hub::launch`): it holds no pipe of this program.
+//! - `start`: plays `<hub> start` for `background::start_from` (`tests/start_from.rs`): starts
+//!   `beat $CHILD_PROBE_BEAT` the way `launch` does, prints what a hub prints and whether its
+//!   console has a window, warns on stderr; fails with `CHILD_PROBE_FAIL` set.
 //! - `app <role>...`: plays an app: starts itself with `<role>...` through `child::spawn`,
 //!   prints `started` and sleeps. The test ends it the hard way.
 #![allow(unsafe_code)]
@@ -78,8 +81,29 @@ fn main() {
             launch::spawn(&me, &["beat", &rest[0]], &opts).expect("start the beat");
         }
         "app" => app(rest),
+        "start" => start(),
         other => panic!("unknown role {other}"),
     }
+}
+
+/// Plays `<hub> start`: puts a "hub" (a `beat`) in the background the way `launch` does, says so
+/// on stdout the way a hub does, and warns on stderr.
+fn start() {
+    if let Ok(file) = std::env::var("CHILD_PROBE_BEAT") {
+        let me = std::env::current_exe().expect("the path of this program");
+        let cwd = std::env::current_dir().expect("a working folder");
+        let opts = LaunchOpts {
+            cwd: &cwd,
+            window: Window::Default,
+        };
+        launch::spawn(&me, &["beat", &file], &opts).expect("start the beat");
+    }
+    eprintln!("a warning of the probe");
+    if std::env::var_os("CHILD_PROBE_FAIL").is_some() {
+        std::process::exit(3);
+    }
+    let console = if console_window() { "window" } else { "none" };
+    println!("the hub runs in the background (probe, console {console})");
 }
 
 fn beat(file: &str) {

@@ -5,12 +5,12 @@
 crates/appkit-core/src/child.rs 2 the helper for children of the app
 crates/appkit-hub/src/launch.rs 2 the helper for a program of somebody else (it outlives the hub on purpose)
 
-# Named exceptions that stay (decided 2026-11-14): Neovim as the editor in a visible console of its own, a window the person asked for and works in; a link handed to the system (ShellExecuteW, open, xdg-open) starts no process of the app.
-crates/appkit-hub/src/browser.rs 3 hands a link to the default browser (ShellExecuteW, open, xdg-open)
+# Named exceptions that stay (decided 2026-11-14): Neovim as the editor in a visible console of its own, a window the person asked for and works in; a link handed to the system (ShellExecuteW) starts no process of the app.
+crates/appkit-hub/src/browser.rs 2 hands a link to the default browser (ShellExecuteW; open and xdg-open go through launch)
 crates/appkit-hub/src/editor.rs 5 named exception: Neovim in a visible console; the file manager and the folder dialog move (tasks of their own)
 
 # Named exception that stays: the hub puts itself in the background (a case of its own, not a child of an app). Its calls of reg.exe, taskkill.exe and kill are system tools that are replaced by tasks of their own.
-crates/appkit-hub/src/background.rs 6 named exception: the hub in the background; reg.exe, taskkill.exe, kill are replaced later
+crates/appkit-hub/src/background.rs 5 named exception: the hub in the background; reg.exe, taskkill.exe, kill are replaced later
 crates/appkit-core/src/registry.rs 1 icacls.exe on the secret file, a blocking call that has not moved to the helper yet
 
 # A test program (it plays a child that starts a process of its own).

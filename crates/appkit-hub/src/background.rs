@@ -19,6 +19,7 @@ use std::pin::Pin;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use appkit_core::child::{self, Environment, Leftovers, Run, Start, Stream};
 use appkit_core::identity::AppIdentity;
 
 use crate::env::Env;
@@ -1090,8 +1091,18 @@ fn install_links(
     Ok(made.unwrap_or_else(|e| format!("no link in the Start menu: {e}\n")))
 }
 
+/// How long `<program> start` may take. It waits twenty seconds for its hub itself.
+const START_FROM_LIMIT: Duration = Duration::from_secs(60);
+/// The most `<program> start` may print, per stream: a line or two, and a warning.
+const START_FROM_OUTPUT: usize = 64 * 1024;
+
 /// Run `<program> start` and return what it printed. Its complaint (on
-/// stderr, a warning included) goes to the terminal as it is.
+/// stderr, a warning included) goes to the terminal, line by line as it comes.
+///
+/// The program is a child of this process while it runs (`appkit_core::child`: no console window,
+/// an absolute path, named in the log); the hub it puts in the background is not, and stays
+/// ([`Leftovers::Keep`]). The call blocks, as it always did: it runs on a thread of its own, so
+/// it may be called inside a runtime and outside of one.
 ///
 /// # Errors
 ///
@@ -1102,17 +1113,53 @@ pub fn start_from(program: &Path) -> Result<String, String> {
     // caller) are kept here, as in `spawn_detached`.
     #[cfg(windows)]
     crate::handles::keep_standard_handles();
-    let started = Command::new(program)
-        .arg("start")
-        .stdin(Stdio::null())
-        .stderr(Stdio::inherit())
-        .output()
-        .map_err(|e| format!("the installed program did not start: {e}"))?;
-    if started.status.success() {
-        Ok(String::from_utf8_lossy(&started.stdout).into_owned())
+    let run = Run {
+        start: Start::new(start_from_caller(), program)
+            .arg("start")
+            .env(Environment::Inherited {
+                set: Vec::new(),
+                remove: Vec::new(),
+            }),
+        stdin: Vec::new(),
+        timeout: START_FROM_LIMIT,
+        max_stdout: START_FROM_OUTPUT,
+        max_stderr: START_FROM_OUTPUT,
+        leftovers: Leftovers::Keep,
+    };
+    let call = || -> Result<(Option<i32>, String), String> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("the installed program did not start: {e}"))?;
+        let mut printed = String::new();
+        let code = runtime
+            .block_on(child::run_lines(run, |stream, line| match stream {
+                Stream::Stdout => {
+                    printed.push_str(line);
+                    printed.push('\n');
+                }
+                Stream::Stderr => eprintln!("{line}"),
+            }))
+            .map_err(|e| format!("the installed program did not start: {e}"))?;
+        Ok((code, printed))
+    };
+    let (code, printed) = std::thread::scope(|scope| scope.spawn(call).join())
+        .map_err(|_| "the installed program did not start: the call broke off".to_owned())??;
+    if code == Some(0) {
+        Ok(printed)
     } else {
         Err("the hub did not come back from the installed program (see above)".to_owned())
     }
+}
+
+/// Who asks, for the log of the helper: the name of this program and why.
+fn start_from_caller() -> String {
+    let me = std::env::current_exe().ok();
+    let name = me
+        .as_deref()
+        .and_then(Path::file_stem)
+        .map_or_else(|| "hub".to_owned(), |n| n.to_string_lossy().into_owned());
+    format!("{name} start of the installed hub")
 }
 
 fn autostart_is_on(app: &Background<'_>) -> bool {
