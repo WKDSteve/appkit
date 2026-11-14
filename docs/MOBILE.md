@@ -133,7 +133,9 @@ theme (`qr_terminal`; a pipe or a file gets the plain half blocks), and as a pic
 (`show_qr`: `pair-qr.html` in the settings folder of the app, for the person only, opened with the program the system
 shows a page with). The picture is the one to scan when the terminal's font leaves gaps between the lines. The page
 runs no script and loads nothing, hides the code after the 60 s, and the command removes the file then (`forget_qr`);
-it is the one file the hub ever opens, by its fixed name (`browser::open_own_page`).
+it is the one file the hub ever opens, by its fixed name (`browser::open_own_page`). `present_pairing` is both together for
+a `phone pair` command: it opens the window only when its output is a terminal, waits until the code is over and
+removes the page.
 
 ## Pairing
 

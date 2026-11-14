@@ -216,6 +216,53 @@ pub fn show_qr(dir: &Path, text: &str, caption: &str) -> Result<PathBuf, String>
     Ok(path)
 }
 
+/// What a `phone pair` command shows on its standard output: the QR code of `link` ([`qr_terminal`]), the link and
+/// `hint` (what to do with them). With `window`, and only when the output is a terminal (a test or a script opens
+/// nothing), the code is also opened as a picture ([`show_qr`]); the command then waits until the code is over
+/// ([`PAIR_SECONDS`]) and removes the page. A window that cannot be opened is said and is no error: the terminal has
+/// the code.
+///
+/// # Errors
+///
+/// The link is too long for a QR code, or the standard output cannot be written.
+pub async fn present_pairing(
+    dir: &Path,
+    link: &str,
+    caption: &str,
+    hint: &str,
+    window: bool,
+) -> Result<(), String> {
+    use std::io::{IsTerminal, Write};
+    let qr = qr_terminal(link)?;
+    let shown = (window && std::io::stdout().is_terminal()).then(|| show_qr(dir, link, caption));
+    let note = match &shown {
+        Some(Ok(_)) => format!(
+            "The code is also open as a picture in a window. This command ends when the code is over ({PAIR_SECONDS} s).
+"
+        ),
+        Some(Err(e)) => format!("No window with the code: {e}
+"),
+        None => String::new(),
+    };
+    let text = format!(
+        "{qr}
+{link}
+
+{hint}
+{note}"
+    );
+    let mut out = std::io::stdout().lock();
+    out.write_all(text.as_bytes())
+        .and_then(|()| out.flush())
+        .map_err(|e| format!("cannot write the pairing code: {e}"))?;
+    drop(out);
+    if matches!(shown, Some(Ok(_))) {
+        tokio::time::sleep(std::time::Duration::from_secs(PAIR_SECONDS)).await;
+        forget_qr(dir);
+    }
+    Ok(())
+}
+
 /// Remove the page of a pairing code from the settings folder `dir` ([`show_qr`]); nothing happens when there is none.
 pub fn forget_qr(dir: &Path) {
     let _ = std::fs::remove_file(dir.join(QR_FILE));
@@ -528,5 +575,24 @@ mod tests {
         let folder = dir.path().join("sub");
         std::fs::create_dir_all(folder.join(QR_FILE)).unwrap();
         assert!(crate::browser::open_own_page(&folder.join(QR_FILE)).is_err());
+    }
+
+    #[tokio::test]
+    async fn without_a_terminal_a_pairing_opens_no_window_and_does_not_wait() {
+        // The output of a test is no terminal: the code is written, no page is made and nothing waits for the code
+        // to end, though a window was asked for.
+        let dir = appkit_scratch::Scratch::new("phone-present");
+        let link = pair_link(&PhoneWay::Tunnel, 17618, "testing", CODE);
+        let started = std::time::Instant::now();
+        present_pairing(dir.path(), &link, "Pair a phone", "Scan it.", true)
+            .await
+            .unwrap();
+        assert!(started.elapsed() < std::time::Duration::from_secs(PAIR_SECONDS / 2));
+        assert!(!dir.path().join(QR_FILE).exists());
+        assert!(
+            present_pairing(dir.path(), &"x".repeat(5000), "x", "x", true)
+                .await
+                .is_err()
+        );
     }
 }
