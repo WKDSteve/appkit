@@ -282,6 +282,14 @@ impl FileOpener for TerminalOpener {
     }
 }
 
+/// The folder as the shell of Windows takes it: an app hands over the folder as `canonicalize`
+/// gave it (`\\?\C:\vault`), which the shell does not take everywhere; it gets the plain form
+/// where that names the same folder ([`strip_verbatim`]).
+#[cfg(any(windows, test))]
+fn folder_for_the_shell(dir: &Path) -> PathBuf {
+    strip_verbatim(dir.to_path_buf())
+}
+
 /// Start the program of a [`reveal_plan`] through `launch`; does not wait for it.
 #[cfg(not(windows))]
 fn start_file_manager(launch: &Launch) -> Result<(), String> {
@@ -310,7 +318,7 @@ impl TerminalOpener {
     #[cfg(windows)]
     fn show_folder(&self, dir: &Path) -> Result<(), String> {
         let _ = self;
-        crate::browser::shell_explore(dir)
+        crate::browser::shell_explore(&folder_for_the_shell(dir))
             .map_err(|_| "the file manager could not be started".to_owned())
     }
 
@@ -676,6 +684,18 @@ mod tests {
             args: Vec::new(),
         };
         assert!(start_file_manager(&relative).is_err());
+    }
+
+    #[test]
+    fn the_shell_gets_the_plain_form_of_a_folder() {
+        assert_eq!(
+            folder_for_the_shell(Path::new("\\\\?\\C:\\vault\\area")),
+            PathBuf::from("C:\\vault\\area")
+        );
+        // Where the plain form would name something else, the folder stays as it was given.
+        for kept in ["\\\\?\\UNC\\server\\share\\v", "\\\\?\\C:\\v\\con", "C:\\v"] {
+            assert_eq!(folder_for_the_shell(Path::new(kept)), PathBuf::from(kept));
+        }
     }
 
     /// Windows: only a folder is handed to the shell, so `reveal` cannot run a file.
