@@ -870,6 +870,14 @@ pub async fn a_pairing_code_cannot_be_got_without_the_control_secret(s: &dyn Sub
             vec![("Authorization", wrong.as_str())],
         ),
         ("GET", "/api/control/pair", vec![]),
+        // The hub is asked to end with the control secret only.
+        ("POST", appkit_hub::guard::CONTROL_STOP_PATH, vec![]),
+        (
+            "POST",
+            appkit_hub::guard::CONTROL_STOP_PATH,
+            vec![("Authorization", wrong.as_str())],
+        ),
+        ("GET", appkit_hub::guard::CONTROL_STOP_PATH, vec![]),
         ("GET", "/auth/exchange", vec![]),
         ("POST", pair_in_namespace.as_str(), vec![]),
         ("POST", "/auth/pair", vec![]),
@@ -1998,6 +2006,7 @@ pub async fn the_tailnet_takes_devices_only(s: &dyn Subject, tailnet: &str) {
         "/api/control/pair",
         appkit_hub::guard::CONTROL_DEVICES_PATH,
         appkit_hub::guard::CONTROL_REVOKE_PATH,
+        appkit_hub::guard::CONTROL_STOP_PATH,
     ] {
         let extra = [
             ("Origin", origin.as_str()),

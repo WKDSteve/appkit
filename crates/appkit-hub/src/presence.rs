@@ -6,6 +6,10 @@
 //! the control secret do not count: a program that only asks who runs on the port never keeps a
 //! hub alive. When nobody has been here for the grace time, [`Presence::left_alone`] resolves and
 //! the app ends its hub, unless the person gave it an order to stay.
+//!
+//! The same count carries the one other reason a hub ends by itself: a local program with the
+//! control secret asked it to (`<program> stop`, see [`Presence::ask_to_end`]). An order to stay
+//! does not hold against that: the person at the terminal said so just now.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -25,7 +29,7 @@ struct State {
 
 /// The count of who is here, shared by the server and the app.
 #[derive(Clone)]
-pub struct Presence(Arc<Mutex<State>>);
+pub struct Presence(Arc<Mutex<State>>, Arc<tokio::sync::watch::Sender<bool>>);
 
 impl Default for Presence {
     fn default() -> Self {
@@ -36,10 +40,27 @@ impl Default for Presence {
 impl Presence {
     #[must_use]
     pub fn new() -> Self {
-        Self(Arc::new(Mutex::new(State {
-            here: 0,
-            alone_since: Instant::now(),
-        })))
+        Self(
+            Arc::new(Mutex::new(State {
+                here: 0,
+                alone_since: Instant::now(),
+            })),
+            Arc::new(tokio::sync::watch::Sender::new(false)),
+        )
+    }
+
+    /// A local program with the control secret asked the hub to end (`<program> stop`). The hub
+    /// ends itself in an orderly way; who asked ends it the hard way only when it does not.
+    pub fn ask_to_end(&self) {
+        self.1.send_replace(true);
+    }
+
+    /// Resolves once the hub was asked to end ([`Presence::ask_to_end`]); at once when it was
+    /// asked before.
+    pub async fn asked_to_end(&self) {
+        let mut asked = self.1.subscribe();
+        // The sender lives in `self`, so the wait cannot fail.
+        let _ = asked.wait_for(|asked| *asked).await;
     }
 
     /// The mark of one connection: nobody yet, until the guard accepts a session on it.
@@ -65,10 +86,18 @@ impl Presence {
         state.alone_since = Instant::now();
     }
 
-    /// Resolves once nobody has been here for `grace` and `stay` says there is no order to stay.
-    /// `stay` is asked only then (it may read a file or the login entry), and again after a while
-    /// when it said yes: an order that is taken back ends the wait.
+    /// Resolves once nobody has been here for `grace` and `stay` says there is no order to stay,
+    /// or at once when the hub was asked to end ([`Presence::ask_to_end`]).
+    /// `stay` is asked only when the time is over (it may read a file or the login entry), and
+    /// again after a while when it said yes: an order that is taken back ends the wait.
     pub async fn left_alone<F: Fn() -> bool>(&self, grace: Duration, stay: F) {
+        tokio::select! {
+            () = self.asked_to_end() => {}
+            () = self.nobody_for(grace, stay) => {}
+        }
+    }
+
+    async fn nobody_for<F: Fn() -> bool>(&self, grace: Duration, stay: F) {
         loop {
             let wait = match self.alone_for() {
                 Some(alone) if alone >= grace => {
@@ -169,6 +198,36 @@ mod tests {
         conn.leave();
         let alone = presence.alone_for().expect("alone now");
         assert!(alone < Duration::from_millis(50), "{alone:?}");
+    }
+
+    /// `<program> stop` asks the hub to end: that ends the wait at once, with somebody here and
+    /// with an order to stay, and it is remembered for who asks later.
+    #[tokio::test]
+    async fn a_hub_that_was_asked_to_end_does_not_wait() {
+        let presence = Presence::new();
+        let conn = presence.connection();
+        conn.arrive();
+        let waiting = presence.left_alone(Duration::from_secs(3600), || true);
+        tokio::pin!(waiting);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), waiting.as_mut())
+                .await
+                .is_err(),
+            "nobody asked yet"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), presence.asked_to_end())
+                .await
+                .is_err(),
+            "nobody asked yet"
+        );
+        presence.clone().ask_to_end();
+        tokio::time::timeout(Duration::from_secs(5), waiting)
+            .await
+            .expect("asked to end");
+        tokio::time::timeout(Duration::from_secs(5), presence.asked_to_end())
+            .await
+            .expect("asked before");
     }
 
     #[tokio::test]

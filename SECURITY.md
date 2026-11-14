@@ -83,7 +83,7 @@ percent escapes or a trailing slash is not the list's path and needs a session t
 | pairing code | 128 bits, one use, 60 s by default | `POST /auth/exchange` for a session token |
 | session token | 256 bits, in the memory of the hub only, a limited number open | the routes of the app |
 | device key | ECDSA P-256, made by the page with WebCrypto, non-extractable; the hub keeps the public key in `devices.json` | `POST /auth/device/session`: a session for a signed challenge (only an app that calls `with_devices`) |
-| control secret | 256 bits, in `control.secret` | `POST /api/control/pair`: mint a pairing code; `/api/control/devices` and `/api/control/devices/revoke`: list and revoke devices. Nothing else. |
+| control secret | 256 bits, in `control.secret` | `POST /api/control/pair`: mint a pairing code; `/api/control/devices` and `/api/control/devices/revoke`: list and revoke devices; `POST /api/control/stop`: ask the hub to end itself (`<program> stop`). Nothing else. |
 
 Comparisons are constant time and look at every stored entry. Secrets come from the operating
 system's random source and never print themselves. The answer for an unknown, a spent and an

@@ -5,7 +5,8 @@
 //! does not end with the terminal; its output goes to `hub.log` in the config
 //! folder. A hub is only believed (and only stopped) when the process on its
 //! port says the instance of `hub.json`: a stale file never makes `stop` kill
-//! a process that merely got the same number.
+//! a process that merely got the same number. `stop` asks the hub to end itself
+//! and ends it by a call of the system when it does not; no program is started.
 //!
 //! A hub in the background has no window, so nobody would notice one that is left over. It ends
 //! by itself once no page has been connected for a while ([`left_alone`]), unless the person gave
@@ -26,6 +27,7 @@ use crate::env::Env;
 use crate::instance;
 use crate::loginitems::{self, LoginApp};
 use crate::presence::Presence;
+use crate::process::Process;
 
 /// What the commands need to know about the app: its names and the files it keeps besides the kit's.
 #[derive(Debug, Clone, Copy)]
@@ -98,9 +100,9 @@ pub fn has_order(
         || (env.get(&no_login_sync(app)).is_none() && autostart_is_on(app))
 }
 
-/// Resolves when a hub in the background should end itself: no page has been connected for the
-/// grace time and `stay` (see [`has_order`]) says no. Never resolves for a hub that was not put in
-/// the background by `start`: that one has a terminal, and the person there ends it.
+/// Resolves when a hub should end itself. A hub in the background: no page has been connected for
+/// the grace time and `stay` (see [`has_order`]) says no. Every hub, also one that has a terminal
+/// (which the person there ends otherwise): `<program> stop` asked it to end (see [`stop`]).
 pub async fn left_alone<F: Fn() -> bool>(
     app: &Background<'_>,
     env: &Env,
@@ -108,7 +110,7 @@ pub async fn left_alone<F: Fn() -> bool>(
     stay: F,
 ) {
     if !runs_detached(app, env) {
-        return std::future::pending().await;
+        return presence.asked_to_end().await;
     }
     presence.left_alone(alone_grace(app, env), stay).await;
 }
@@ -232,7 +234,18 @@ fn detach(command: &mut Command) {
 #[cfg(not(any(windows, unix)))]
 fn detach(_command: &mut Command) {}
 
+/// How long a hub that was asked to end may take before it is ended the hard way.
+const END_GRACE: Duration = Duration::from_secs(10);
+/// How long a process that was ended the hard way may take to be gone.
+const KILL_GRACE: Duration = Duration::from_secs(5);
+
 /// Stop the hub that runs (the one `hub.json` names and that answers as it).
+///
+/// The hub is asked to end itself first, over its control route (`/api/control/stop`, with the
+/// control secret only this person can read): it closes what it has open and goes. A hub that
+/// does not know the route (an older one), does not listen for it or takes too long is ended by
+/// the system (`TerminateProcess`, `kill(2)` with `SIGTERM`): exactly the process of `hub.json`
+/// that answered as this hub, and no program is started for it.
 ///
 /// # Errors
 ///
@@ -240,37 +253,79 @@ fn detach(_command: &mut Command) {}
 pub async fn stop(app: &Background<'_>) -> Result<String, String> {
     let env = Env::from_process();
     let dir = instance::config_folder(&env, app.identity())?;
-    let Some(record) = instance::running_hub(&dir, app.identity()).await else {
+    stop_in(app.identity(), &dir, END_GRACE).await
+}
+
+/// [`stop`] for the hub of `identity` whose files are in `dir`; a hub that was asked to end has
+/// `grace` to do so.
+///
+/// # Errors
+///
+/// A text for the person at the terminal.
+pub async fn stop_in(
+    identity: &AppIdentity,
+    dir: &Path,
+    grace: Duration,
+) -> Result<String, String> {
+    let Some(record) = instance::running_hub(dir, identity).await else {
         return Ok("no hub is running\n".to_owned());
     };
-    let pid = record.pid.to_string();
-    let status = if cfg!(windows) {
-        Command::new(system_program("taskkill.exe")?)
-            .args(["/PID", &pid, "/F"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-    } else {
-        Command::new("/bin/kill")
-            .args(["-TERM", &pid])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
+    let process = Process::open(record.pid)?;
+    // The process is held now (Windows: its id is not given away while the handle is open). That
+    // it is the hub is asked once more, so that a process which got the id between the answer
+    // and the opening is never ended.
+    let still = instance::running_hub(dir, identity).await;
+    if still.is_none_or(|now| now.pid != record.pid || now.instance != record.instance) {
+        return Ok("no hub is running\n".to_owned());
     }
-    .map_err(|e| format!("could not stop the hub: {e}"))?;
-    if !status.success() {
-        return Err(format!("the process {pid} could not be stopped"));
+    let pid = process.pid();
+    if ask_to_end(dir, record.port).await {
+        gone_within(&process, grace).await;
     }
-    // The record of a hub that was killed stays behind; take it away.
-    for _ in 0..25 {
-        if instance::running_hub(&dir, app.identity()).await.is_none() {
-            break;
+    if !process.is_gone() {
+        process.end()?;
+        if !gone_within(&process, KILL_GRACE).await {
+            return Err(format!("the process {pid} could not be stopped"));
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    // The record of a hub that was ended the hard way stays behind; take it away.
     let _ = std::fs::remove_file(dir.join("hub.json"));
     let _ = std::fs::remove_file(dir.join("control.secret"));
     Ok(format!("the hub (process {pid}) is stopped\n"))
+}
+
+/// Ask the hub on `port` to end itself. False: it could not be asked (no secret, an older hub
+/// without the route, no answer), so there is nothing to wait for.
+async fn ask_to_end(dir: &Path, port: u16) -> bool {
+    let Ok(Some(secret)) = appkit_core::registry::read_secret(dir) else {
+        return false;
+    };
+    let auth = format!("Bearer {secret}");
+    let headers = [
+        ("Authorization", auth.as_str()),
+        ("Content-Type", "application/json"),
+    ];
+    crate::client::request(
+        port,
+        "POST",
+        crate::guard::CONTROL_STOP_PATH,
+        &headers,
+        "{}",
+    )
+    .await
+    .is_ok_and(|reply| reply.status == 200)
+}
+
+/// Wait until `process` is gone, for `limit` at most. Whether it is.
+async fn gone_within(process: &Process, limit: Duration) -> bool {
+    let end = Instant::now() + limit;
+    while !process.is_gone() {
+        if Instant::now() >= end {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    true
 }
 
 /// An absolute path of a program of the system folder (never one found

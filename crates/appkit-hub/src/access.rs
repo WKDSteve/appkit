@@ -105,6 +105,23 @@ pub async fn control_pair<R: Runtime>(State(st): State<Arc<Core<R>>>) -> Respons
     }
 }
 
+/// `<program> stop` asks the hub to end itself. The answer says that the hub heard it; the app ends
+/// when it waits for [`crate::presence::Presence::left_alone`] (as `background::left_alone` does)
+/// or for `asked_to_end`. Who asked watches the process and ends it the hard way if it stays.
+pub async fn control_stop(here: Option<axum::Extension<Arc<crate::presence::Here>>>) -> Response {
+    match here {
+        Some(axum::Extension(here)) => {
+            here.presence().ask_to_end();
+            axum::Json(json!({ "ending": true })).into_response()
+        }
+        None => error_body(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            "the hub cannot be asked to end",
+        ),
+    }
+}
+
 // ── device keys ─────────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]

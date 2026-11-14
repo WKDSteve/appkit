@@ -27,6 +27,11 @@ path = "src/bin/launch-probe.rs"
 name = "child-probe"
 path = "src/bin/child-probe.rs"
 
+# A hub as a process of its own, for the tests of `background::stop` (tests/stop.rs).
+[[bin]]
+name = "hub-probe"
+path = "src/bin/hub-probe.rs"
+
 [dependencies]
 appkit-core = { path = "../appkit-core" }
 appkit-hub = { path = "../appkit-hub" }

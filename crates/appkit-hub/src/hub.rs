@@ -312,6 +312,10 @@ fn router<R: Runtime>(core: &Arc<Core<R>>, app: Router<Arc<Core<R>>>) -> Router 
             "/api/control/pair",
             post(control_pair::<R>).layer(DefaultBodyLimit::max(small)),
         )
+        .route(
+            crate::guard::CONTROL_STOP_PATH,
+            post(crate::access::control_stop).layer(DefaultBodyLimit::max(small)),
+        )
         .merge(device_routes(core))
         .merge(app)
         .fallback(not_found)

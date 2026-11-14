@@ -90,18 +90,43 @@ fn start_opener(program: &Path, args: &[String]) -> Result<(), String> {
 /// Hand `url` to the shell (`ShellExecuteW`, verb `open`): no helper program is started, so no
 /// `rundll32` (a known living-off-the-land binary that endpoint protection watches for).
 #[cfg(windows)]
-#[allow(unsafe_code)]
 fn shell_open(url: &str) -> Result<(), String> {
+    shell("open", std::ffi::OsStr::new(url))
+        .map_err(|code| format!("could not start the browser: the shell answered {code}"))
+}
+
+/// Show the folder `dir` in the file manager (`ShellExecuteW`, verb `explore`): no
+/// `explorer.exe` is started by the hub. The verb exists for folders only, and `dir` must be one:
+/// a file is never handed over, so nothing can be run this way.
+///
+/// # Errors
+///
+/// `dir` is not a folder, or the shell refused.
+#[cfg(windows)]
+pub(crate) fn shell_explore(dir: &std::path::Path) -> Result<(), String> {
+    if !dir.is_absolute() || !dir.is_dir() {
+        return Err("not a folder: not shown".to_owned());
+    }
+    crate::handles::keep_standard_handles();
+    shell("explore", dir.as_os_str())
+        .map_err(|code| format!("the file manager could not be started: the shell answered {code}"))
+}
+
+/// Ask the shell to do `verb` with `target`. The error is the code of the shell.
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn shell(verb: &str, target: &std::ffi::OsStr) -> Result<(), usize> {
     use std::os::windows::ffi::OsStrExt;
 
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
-    let verb: Vec<u16> = "open\0".encode_utf16().collect();
-    let target: Vec<u16> = std::ffi::OsStr::new(url)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
+    let verb: Vec<u16> = verb.encode_utf16().chain(std::iter::once(0)).collect();
+    let target: Vec<u16> = target.encode_wide().chain(std::iter::once(0)).collect();
+    // A NUL inside would cut the text short: what is handed over is what was checked.
+    if verb[..verb.len() - 1].contains(&0) || target[..target.len() - 1].contains(&0) {
+        return Err(0);
+    }
     // SAFETY: `verb` and `target` are NUL-terminated and live for the call; the other pointers
     // are documented as optional (null). The call opens the link and keeps no pointer.
     let result = unsafe {
@@ -118,10 +143,7 @@ fn shell_open(url: &str) -> Result<(), String> {
     if result as usize > 32 {
         Ok(())
     } else {
-        Err(format!(
-            "could not start the browser: the shell answered {}",
-            result as usize
-        ))
+        Err(result as usize)
     }
 }
 
@@ -257,6 +279,27 @@ mod tests {
     fn open_refuses_before_it_starts_anything() {
         let err = open("file:///C:/Windows/notepad.exe", PORTS).unwrap_err();
         assert!(err.contains("not opened"), "{err}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn only_a_folder_is_shown_in_the_file_manager() {
+        let dir = appkit_scratch::Scratch::new("browser-explore");
+        let file = dir.join("run.cmd");
+        std::fs::write(&file, "exit 1").unwrap();
+        for not_a_folder in [file.as_path(), &dir.join("gone"), std::path::Path::new(".")] {
+            let err = shell_explore(not_a_folder).unwrap_err();
+            assert_eq!(err, "not a folder: not shown", "{not_a_folder:?}");
+        }
+        assert_eq!(shell("open", std::ffi::OsStr::new("a\0b")), Err(0));
+    }
+
+    /// By hand: opens a window of the file manager (`cargo test -p appkit-hub -- --ignored shows_a_real`).
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "opens a window of the file manager"]
+    fn shows_a_real_folder_in_the_file_manager() {
+        shell_explore(&std::env::current_dir().unwrap()).unwrap();
     }
 
     /// By hand: starts the real default browser (`cargo test -p appkit-hub -- --ignored opens_the_real`).

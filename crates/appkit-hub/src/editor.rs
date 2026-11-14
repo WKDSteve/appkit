@@ -102,13 +102,16 @@ pub fn plan(
     }
 }
 
-/// How to show a folder in the file manager on `os`, or `None` when no way is known. `find` looks a
-/// program up.
+/// The program that shows a folder in the file manager on `os`, or `None` when there is none.
+/// `find` looks a program up.
+///
+/// Windows has none on purpose: the folder is handed to the shell (`ShellExecuteW`), which shows
+/// it; the hub starts no `explorer.exe`. Elsewhere the program that opens things is started the
+/// way a hub starts a program of somebody else (`launch`), as for a link.
 #[must_use]
 pub fn reveal_plan(dir: &Path, os: &str, find: &dyn Fn(&str) -> Option<PathBuf>) -> Option<Launch> {
     let program = match os {
-        "windows" => Some(PathBuf::from("explorer.exe")),
-        "macos" => Some(PathBuf::from("open")),
+        "macos" => Some(PathBuf::from("/usr/bin/open")),
         "linux" => find("xdg-open"),
         _ => None,
     };
@@ -256,20 +259,7 @@ impl FileOpener for TerminalOpener {
         if let Some(seam) = self.logged(&format!("reveal {}", dir.display())) {
             return seam;
         }
-        let find = |name: &str| on_path(&self.env, name);
-        let launch = reveal_plan(dir, std::env::consts::OS, &find)
-            .ok_or_else(|| "no file manager is known on this system".to_owned())?;
-        let mut child = std::process::Command::new(&launch.program)
-            .args(&launch.args)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .map_err(|_| "the file manager could not be started".to_owned())?;
-        std::thread::spawn(move || {
-            let _ = child.wait();
-        });
-        Ok(())
+        self.show_folder(dir)
     }
 
     fn pick_folder(&self) -> Result<Option<PathBuf>, String> {
@@ -292,11 +282,48 @@ impl FileOpener for TerminalOpener {
     }
 }
 
+/// Start the program of a [`reveal_plan`] through `launch`; does not wait for it.
+#[cfg(not(windows))]
+fn start_file_manager(launch: &Launch) -> Result<(), String> {
+    let failed = || "the file manager could not be started".to_owned();
+    let args: Vec<&str> = launch
+        .args
+        .iter()
+        .map(|a| a.to_str())
+        .collect::<Option<_>>()
+        .ok_or_else(failed)?;
+    let opts = crate::launch::LaunchOpts {
+        cwd: Path::new("/"),
+        window: crate::launch::Window::Default,
+    };
+    crate::launch::spawn(&launch.program, &args, &opts)
+        .map(|_pid| ())
+        .map_err(|_| failed())
+}
+
 /// How long a folder dialog may stay open before it is closed: a person who walked away.
 #[cfg(not(windows))]
 const PICK_LIMIT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
 impl TerminalOpener {
+    /// The shell of Windows shows the folder: no program is started by the hub.
+    #[cfg(windows)]
+    fn show_folder(&self, dir: &Path) -> Result<(), String> {
+        let _ = self;
+        crate::browser::shell_explore(dir)
+            .map_err(|_| "the file manager could not be started".to_owned())
+    }
+
+    /// The program of the system that opens things, started as a program of somebody else (it
+    /// may become the file manager): nothing of the hub, a process group of its own.
+    #[cfg(not(windows))]
+    fn show_folder(&self, dir: &Path) -> Result<(), String> {
+        let find = |name: &str| on_path(&self.env, name);
+        let launch = reveal_plan(dir, std::env::consts::OS, &find)
+            .ok_or_else(|| "no file manager is known on this system".to_owned())?;
+        start_file_manager(&launch)
+    }
+
     /// The dialog of Windows, shown by this process: no program is started.
     #[cfg(windows)]
     fn ask_for_folder(&self) -> Result<Option<PathBuf>, String> {
@@ -523,13 +550,13 @@ mod tests {
     fn a_folder_is_shown_by_the_file_manager_of_the_system() {
         let dir = Path::new("/v");
         let xdg = |name: &str| (name == "xdg-open").then(|| PathBuf::from("/usr/bin/xdg-open"));
-        let win = reveal_plan(dir, "windows", &none).unwrap();
-        assert_eq!(win.program, PathBuf::from("explorer.exe"));
-        assert_eq!(win.args, vec![dir.as_os_str().to_owned()]);
-        assert_eq!(
-            reveal_plan(dir, "macos", &none).unwrap().program,
-            PathBuf::from("open")
-        );
+        // Windows hands the folder to the shell: there is no program to start, whatever is there.
+        let anything = |name: &str| Some(PathBuf::from(format!("C:/Windows/{name}")));
+        assert_eq!(reveal_plan(dir, "windows", &none), None);
+        assert_eq!(reveal_plan(dir, "windows", &anything), None);
+        let mac = reveal_plan(dir, "macos", &none).unwrap();
+        assert_eq!(mac.program, PathBuf::from("/usr/bin/open"));
+        assert_eq!(mac.args, vec![dir.as_os_str().to_owned()]);
         assert_eq!(
             reveal_plan(dir, "linux", &xdg).unwrap().program,
             PathBuf::from("/usr/bin/xdg-open")
@@ -607,6 +634,63 @@ mod tests {
             answer = opener.pick_folder();
         }
         assert_eq!(answer, Ok(Some(PathBuf::from("/home/me/Ordner äöü"))));
+    }
+
+    /// The program that shows a folder is not the hub's: it is started in a process group of its
+    /// own (as the opener of a link), with the folder as its one argument.
+    #[cfg(not(windows))]
+    #[test]
+    fn the_file_manager_is_started_in_a_process_group_of_its_own() {
+        let dir = Scratch::new("reveal-group");
+        let out = dir.join("seen");
+        let script =
+            r#"{ ps -o pgid= -p $$; echo $$; echo "$1"; } > "$0.part" && mv "$0.part" "$0""#;
+        let launch = Launch {
+            program: PathBuf::from("/bin/sh"),
+            args: vec![
+                "-c".into(),
+                script.into(),
+                out.as_os_str().to_owned(),
+                "/home/me/Ordner äöü".into(),
+            ],
+        };
+        start_file_manager(&launch).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let seen = loop {
+            if let Ok(text) = std::fs::read_to_string(&out) {
+                break text;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the program wrote nothing"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        let lines: Vec<&str> = seen.lines().map(str::trim).collect();
+        assert_eq!(lines.len(), 3, "{seen}");
+        assert_eq!(lines[0], lines[1], "no process group of its own");
+        assert_eq!(lines[2], "/home/me/Ordner äöü");
+
+        let relative = Launch {
+            program: PathBuf::from("xdg-open"),
+            args: Vec::new(),
+        };
+        assert!(start_file_manager(&relative).is_err());
+    }
+
+    /// Windows: only a folder is handed to the shell, so `reveal` cannot run a file.
+    #[cfg(windows)]
+    #[test]
+    fn windows_shows_a_folder_only_and_starts_no_program_for_it() {
+        let dir = Scratch::new("reveal-file");
+        let file = dir.join("run.cmd");
+        std::fs::write(&file, "exit 1").unwrap();
+        let opener = TerminalOpener::new(PathBuf::from("nvim"), Env::from_pairs([("A", "b")]), &ID);
+        assert_eq!(
+            opener.reveal(&file).unwrap_err(),
+            "the file manager could not be started"
+        );
+        assert!(opener.reveal(&dir.join("gone")).is_err());
     }
 
     #[test]

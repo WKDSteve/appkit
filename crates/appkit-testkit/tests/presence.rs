@@ -198,6 +198,70 @@ async fn what_anybody_can_send_is_nobody() {
     server.shutdown().await;
 }
 
+/// `<program> stop` asks the hub to end over its control route. Only the control secret does
+/// that: a session of a page does not, and nobody without a credential.
+#[tokio::test]
+async fn the_hub_is_asked_to_end_with_the_control_secret_only() {
+    let (server, control) = start().await;
+    let addr = server.addr();
+    let token = session(addr, &control).await;
+    let host = host(addr);
+    let origin = format!("http://{host}");
+    let stop = appkit_hub::guard::CONTROL_STOP_PATH;
+    let asked = |server: &RunningServer| {
+        let presence = server.presence();
+        async move {
+            tokio::time::timeout(Duration::from_millis(200), presence.asked_to_end())
+                .await
+                .is_ok()
+        }
+    };
+    let post = |auth: Option<String>, with_origin: bool| {
+        let mut headers = vec![
+            ("Host", host.clone()),
+            ("Content-Type", "application/json".to_owned()),
+            ("Content-Length", "2".to_owned()),
+        ];
+        if let Some(auth) = auth {
+            headers.push(("Authorization", auth));
+        }
+        if with_origin {
+            headers.push(("Origin", origin.clone()));
+        }
+        async move {
+            let headers: Vec<(&str, &str)> =
+                headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
+            send(addr, request("POST", stop, &headers, b"{}")).await
+        }
+    };
+
+    for (auth, with_origin) in [
+        (None, false),
+        (Some(format!("Bearer {token}")), true),
+        (Some(format!("Bearer {token}")), false),
+        (Some(format!("Bearer {}", "0".repeat(control.len()))), false),
+    ] {
+        let reply = post(auth.clone(), with_origin).await;
+        assert_eq!(reply.status, 401, "{auth:?}: {reply:?}");
+    }
+    assert!(!asked(&server).await, "somebody without the secret asked");
+
+    let reply = post(Some(format!("Bearer {control}")), false).await;
+    assert_eq!(reply.status, 200, "{reply:?}");
+    assert_eq!(reply.json()["ending"], true);
+    assert!(asked(&server).await);
+    // The app ends by the same wait it ends by when it is left alone, whatever the order to stay.
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        server
+            .presence()
+            .left_alone(Duration::from_secs(3600), || true),
+    )
+    .await
+    .expect("left_alone resolves for a hub that was asked to end");
+    server.shutdown().await;
+}
+
 #[tokio::test]
 async fn a_hub_without_devices_has_none_paired() {
     let (server, _control) = start().await;

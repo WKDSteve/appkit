@@ -149,6 +149,20 @@ Linux have no such call without a toolkit of windows in the hub, so there the di
 the system stays (`/usr/bin/osascript`; `zenity` or `kdialog` from `PATH`), as a child of the hub
 through `child::run`: bound to the hub, named in the log, closed after thirty minutes.
 
+### No program for what the system does itself
+
+A program of the system is not started where the system has a call for the same thing:
+
+- **Stopping the hub** (`background::stop`): the hub is asked to end itself over its control
+  route (`POST /api/control/stop`, with the control secret); an app that waits for
+  `background::left_alone` ends by that, also a hub in a terminal. A hub that does not end
+  within ten seconds, or that cannot be asked (an older version), is ended by the system:
+  `OpenProcess` and `TerminateProcess` on Windows, `kill(2)` with `SIGTERM` elsewhere, on exactly
+  the process of `hub.json` that answered as this hub. No `taskkill.exe`, no `/bin/kill`.
+- **Showing a folder** (`FileOpener::reveal`): Windows hands the folder to the shell
+  (`ShellExecuteW`, verb `explore`, a folder only), no `explorer.exe` is started by the hub.
+  macOS and Linux start `/usr/bin/open` and `xdg-open` the way (b) starts a program.
+
 ## A program of somebody else (`appkit_hub::launch`)
 
 A hub that starts another app does not own it: the other app stays when the hub ends. Such a
@@ -176,7 +190,7 @@ A file that may start processes itself is listed in `tools/process-starts.allow`
 fail, and so does an entry for a file without any, so the list can neither hide a new start nor
 keep an exception that is gone. In this repository the list holds the two helpers, the named
 exceptions above, the link handed to the browser, and the calls of system tools (`icacls`,
-`reg`, `taskkill`, the file manager) that are being replaced.
+`reg`) that are being replaced.
 
 The script knows no repository. An app copies it into its own `tools/`, starts with an allow
 file that lists what it has today, and removes the entries as the starts move to the helpers:

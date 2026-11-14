@@ -68,6 +68,7 @@ dependencies = [
  "hkdf",
  "hyper",
  "hyper-util",
+ "libc",
  "notify",
  "p256",
  "qrcode",

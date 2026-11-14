@@ -59,6 +59,8 @@ pub const CONTROL_DEVICES_PATH: &str = "/api/control/devices";
 pub const CONTROL_REVOKE_PATH: &str = "/api/control/devices/revoke";
 /// The route of the PC that sets the level of a device, with the control secret.
 pub const CONTROL_LEVEL_PATH: &str = "/api/control/devices/level";
+/// The route of the PC that asks the hub to end itself (`<program> stop`), with the control secret.
+pub const CONTROL_STOP_PATH: &str = "/api/control/stop";
 /// The header of a trigger: `<challenge>.<signature>` of the device's confirmation key over `confirm_message`.
 pub const CONFIRM_HEADER: &str = "x-device-confirm";
 
@@ -101,7 +103,7 @@ fn plain_policy_name(name: &str) -> bool {
 }
 
 /// The routes of the core itself: an app cannot name one of them as its own.
-const CORE_PATHS: [&str; 13] = [
+const CORE_PATHS: [&str; 14] = [
     crate::push::PUSH_KEY_PATH,
     crate::push::PUSH_SUBSCRIBE_PATH,
     crate::push::PUSH_UNSUBSCRIBE_PATH,
@@ -109,6 +111,7 @@ const CORE_PATHS: [&str; 13] = [
     CONTROL_DEVICES_PATH,
     CONTROL_REVOKE_PATH,
     CONTROL_LEVEL_PATH,
+    CONTROL_STOP_PATH,
     "/api/vaults",
     "/api/vaults/add",
     "/api/vaults/remove",
@@ -510,9 +513,8 @@ pub fn classify(path: &str, rules: &GuardRules) -> Class {
         {
             Class::Exchange
         }
-        "/api/control/pair" | CONTROL_DEVICES_PATH | CONTROL_REVOKE_PATH | CONTROL_LEVEL_PATH => {
-            Class::ControlPair
-        }
+        "/api/control/pair" | CONTROL_DEVICES_PATH | CONTROL_REVOKE_PATH | CONTROL_LEVEL_PATH
+        | CONTROL_STOP_PATH => Class::ControlPair,
         p if p.starts_with("/api/") => Class::Api,
         _ => Class::Other,
     }
@@ -754,7 +756,10 @@ pub async fn judge<R: Runtime>(st: &Core<R>, class: Class, req: Request, next: N
                 );
             }
             // A local program asks for a pairing code: a page is on its way (see `presence`).
-            if let Some(here) = parts.extensions.get::<Arc<crate::presence::Here>>() {
+            // Not when it asks the hub to end.
+            if parts.uri.path() != CONTROL_STOP_PATH
+                && let Some(here) = parts.extensions.get::<Arc<crate::presence::Here>>()
+            {
                 here.presence().expect_somebody();
             }
         }
@@ -1296,6 +1301,10 @@ mod tests {
         let r = rules();
         assert!(matches!(classify("/ops", &r), Class::Other));
         assert!(matches!(classify("/auth/exchange", &r), Class::Exchange));
+        assert!(matches!(
+            classify(CONTROL_STOP_PATH, &r),
+            Class::ControlPair
+        ));
         assert!(matches!(
             classify("/api/control/pair", &r),
             Class::ControlPair
