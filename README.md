@@ -166,10 +166,14 @@ MIT, see [LICENSE](LICENSE).
 
 **Used by**
 
+- [docmap-desktop](https://github.com/WKDSteve/docmap-desktop): The web form of docmap-desktop is assembled and checked with the page kit `appkit-web` (`pack`, `e2e`). ([picture](assets/graphs/pair/docmap-desktop--appkit.png))
 - [hub-desktop](https://github.com/WKDSteve/hub-desktop): hub-desktop is built on appkit: guard, pairing and install (`appkit-core`, `appkit-hub`) and the page kit (`appkit-ui`, `appkit-web`). ([picture](assets/graphs/pair/hub-desktop--appkit.png))
 - [pult](https://github.com/WKDSteve/pult): The hub of pult is built on appkit: guard, pairing and install (`appkit-core`, `appkit-hub`). ([picture](assets/graphs/pair/pult--appkit.png))
 - [rules-desktop](https://github.com/WKDSteve/rules-desktop): rules-desktop is built on appkit: guard, pairing and install (`appkit-core`, `appkit-hub`) and the page kit (`appkit-ui`). ([picture](assets/graphs/pair/rules-desktop--appkit.png))
+- [streamtap](https://github.com/WKDSteve/streamtap): The sink of streamtap pairs phones over the tailnet with the one-time code of `appkit-core` and keeps them in the device list of `appkit-hub`. ([picture](assets/graphs/pair/streamtap--appkit.png))
 - [tasks-desktop](https://github.com/WKDSteve/tasks-desktop): tasks-desktop is built on appkit: guard, pairing and install (`appkit-core`, `appkit-hub`), the page kit (`appkit-ui`, `appkit-web`) and the phone side (`appkit-mobile`). ([picture](assets/graphs/pair/tasks-desktop--appkit.png))
 - [tasks-mobile](https://github.com/WKDSteve/tasks-mobile): The phone page of tasks-mobile uses the page kit of appkit (`appkit-ui`): its tokens, the hub client and the pairing code. ([picture](assets/graphs/pair/tasks-mobile--appkit.png))
+- [tasks.nvim](https://github.com/WKDSteve/tasks.nvim): `tasks intent` takes a `wkd-intent/1` (its schema lives in appkit) and checks it as untrusted input before it creates or shows a task. ([picture](assets/graphs/pair/tasks.nvim--appkit.png))
 - [testing-desktop](https://github.com/WKDSteve/testing-desktop): testing-desktop is built on appkit: guard, pairing and install (`appkit-core`, `appkit-hub`) and the page kit (`appkit-ui`, `appkit-web`). ([picture](assets/graphs/pair/testing-desktop--appkit.png))
+- [testing.nvim](https://github.com/WKDSteve/testing.nvim): The desktop steps of a test sheet go to `sheet-driver` of appkit, which drives the window of a program by accessible name (`testing-sheet-driver/1`). ([picture](assets/graphs/pair/testing.nvim--appkit.png))
 <!-- connections:end -->
