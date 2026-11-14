@@ -127,8 +127,15 @@ async fn somebody_is_here_while_a_connection_with_a_session_is_open() {
     let (server, control) = start().await;
     let addr = server.addr();
     let token = session(addr, &control).await;
-    // Pairing itself is nobody: the control secret and the exchange carry no session.
+    // Pairing itself is nobody: the control secret and the exchange carry no session. But a pairing code is a
+    // page on its way, so the time alone began again with it.
     assert!(alone_within(&server, Duration::from_secs(5)).await);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let before = server.presence().alone_for().expect("nobody is here");
+    assert!(before >= Duration::from_millis(300), "{before:?}");
+    let _again = session(addr, &control).await;
+    let after = server.presence().alone_for().expect("nobody is here");
+    assert!(after < before, "{after:?} is not less than {before:?}");
 
     let mut page = TcpStream::connect(addr).await.expect("connect");
     let reply = keep_alive_get(&mut page, addr, "/api/vaults", &format!("Bearer {token}")).await;

@@ -918,9 +918,10 @@ async fn install_steps_beside(
         out.push_str(&entry_and_links(app, &target, opts, &env, reg)?);
     } else {
         // It may be registered for another copy: then it is pointed here.
-        let was_on = env.get(&no_login_sync(app)).is_none() && autostart_is_on(app);
+        let sync = env.get(&no_login_sync(app)).is_none();
+        let was_on = (opts.autostart || sync) && autostart_is_on(app);
         let entry = |what| autostart_for(app, what, &target);
-        let entry_made = login_entry_step(opts, was_on, entry, out)?;
+        let entry_made = login_entry_step(opts, was_on, sync, entry, out)?;
         if opts.shortcut {
             let made = shortcut(
                 app,
@@ -942,14 +943,17 @@ async fn install_steps_beside(
 
 /// The login entry of `install`: made when asked for, pointed at the installed copy when it was on for another
 /// one. Returns whether this install made an entry that was not there before (the one to take back when a later
-/// step fails). `was_on` is asked before anything is written.
+/// step fails). `was_on` is asked before anything is written, and it is what was really there: an entry of the
+/// person is never this install's to take back, whether or not it may be pointed here (`sync`: not for the tests of
+/// the program, `NO_LOGIN_SYNC`).
 fn login_entry_step(
     opts: InstallOptions,
     was_on: bool,
+    sync: bool,
     entry: impl Fn(Autostart) -> Result<String, String>,
     out: &mut String,
 ) -> Result<bool, String> {
-    if opts.autostart || was_on {
+    if opts.autostart || (sync && was_on) {
         out.push_str(&entry(Autostart::On)?);
     }
     Ok(opts.autostart && !was_on)
@@ -994,7 +998,8 @@ fn entry_and_links(
         // It may be registered for another copy: then it is pointed here.
         entry_made = login_entry_step(
             opts,
-            sync && was_on,
+            was_on,
+            sync,
             |what| run_key_for(app, what, target, asked),
             &mut out,
         )?;
@@ -2140,18 +2145,45 @@ mod tests {
         let calls = std::cell::RefCell::new(Vec::new());
         let mut out = String::new();
         // Asked for and not there before: made here.
-        assert!(login_entry_step(with, false, entry(&calls), &mut out).unwrap());
+        assert!(login_entry_step(with, false, true, entry(&calls), &mut out).unwrap());
         // There before (for another copy): pointed here, and not this install's to take back.
-        assert!(!login_entry_step(with, true, entry(&calls), &mut out).unwrap());
-        assert!(
-            !login_entry_step(InstallOptions::default(), true, entry(&calls), &mut out).unwrap()
-        );
+        assert!(!login_entry_step(with, true, true, entry(&calls), &mut out).unwrap());
+        assert!(!login_entry_step(
+            InstallOptions::default(),
+            true,
+            true,
+            entry(&calls),
+            &mut out
+        )
+        .unwrap());
         assert_eq!(calls.borrow().len(), 3);
         // Not asked for and not there: nothing is written.
-        assert!(
-            !login_entry_step(InstallOptions::default(), false, entry(&calls), &mut out).unwrap()
-        );
+        assert!(!login_entry_step(
+            InstallOptions::default(),
+            false,
+            true,
+            entry(&calls),
+            &mut out
+        )
+        .unwrap());
         assert_eq!(calls.borrow().len(), 3);
+
+        // The tests of the program (no sync): an entry that is there is not pointed here, and is still not made here.
+        assert!(!login_entry_step(with, true, false, entry(&calls), &mut out).unwrap());
+        assert_eq!(
+            calls.borrow().len(),
+            4,
+            "--autostart writes it all the same"
+        );
+        assert!(!login_entry_step(
+            InstallOptions::default(),
+            true,
+            false,
+            entry(&calls),
+            &mut out
+        )
+        .unwrap());
+        assert_eq!(calls.borrow().len(), 4);
 
         calls.borrow_mut().clear();
         let failed = undo_entry_on_failure(Err("no link".to_owned()), true, entry(&calls));
@@ -2200,6 +2232,29 @@ mod tests {
             reg.value.borrow().as_deref(),
             Some(run_command(target).as_str())
         );
+    }
+
+    /// With `NO_LOGIN_SYNC` too: the value that was there before a failed install is still there after it.
+    #[cfg(windows)]
+    #[test]
+    fn a_failed_install_never_removes_a_run_value_that_was_there_before() {
+        let opts = InstallOptions {
+            autostart: true,
+            shortcut: true,
+            ..InstallOptions::default()
+        };
+        let env = Env::from_pairs([("RULES_DESKTOP_NO_LOGIN_SYNC", "1")]);
+        let reg = FakeRegistry::new(Some("\"C:\\old\\rules-hub.exe\" start"));
+        let failed = entry_and_links(
+            &APP,
+            Path::new(r"C:\apps\rules-hub.exe"),
+            opts,
+            &env,
+            Ok(&reg),
+        );
+        let why = failed.expect_err("no folder for the link");
+        assert!(!why.contains("taken back"), "{why}");
+        assert!(reg.value.borrow().is_some(), "{:?}", reg.calls());
     }
 
     /// Without `--autostart` a registry that cannot be asked stops nothing: there is no entry to point here.

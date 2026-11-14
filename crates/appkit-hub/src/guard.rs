@@ -753,6 +753,10 @@ pub async fn judge<R: Runtime>(st: &Core<R>, class: Class, req: Request, next: N
                     "credential required",
                 );
             }
+            // A local program asks for a pairing code: a page is on its way (see `presence`).
+            if let Some(here) = parts.extensions.get::<Arc<crate::presence::Here>>() {
+                here.presence().expect_somebody();
+            }
         }
         Class::Api => {
             let token = bearer(headers);

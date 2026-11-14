@@ -11,8 +11,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-/// How long a hub that was told to stay waits before it asks again whether that still holds.
-const ASK_AGAIN: Duration = Duration::from_secs(60);
+/// How long a hub that was told to stay waits before it asks again whether that still holds. Long: the answer may
+/// cost a look at the login entry of the system, and a hidden program that asks for it every few minutes is what an
+/// endpoint protection reads as an attack.
+const ASK_AGAIN: Duration = Duration::from_secs(60 * 60);
 
 struct State {
     here: usize,
@@ -56,6 +58,13 @@ impl Presence {
         (state.here == 0).then(|| state.alone_since.elapsed())
     }
 
+    /// Somebody is on the way: a local program got a pairing code for a page it is about to open. Nobody is here
+    /// yet, but the time alone starts again, so a hub at the end of its grace does not end under that page.
+    pub fn expect_somebody(&self) {
+        let mut state = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        state.alone_since = Instant::now();
+    }
+
     /// Resolves once nobody has been here for `grace` and `stay` says there is no order to stay.
     /// `stay` is asked only then (it may read a file or the login entry), and again after a while
     /// when it said yes: an order that is taken back ends the wait.
@@ -93,6 +102,12 @@ impl Here {
                 .unwrap_or_else(PoisonError::into_inner);
             state.here += 1;
         }
+    }
+
+    /// The count this connection belongs to.
+    #[must_use]
+    pub fn presence(&self) -> &Presence {
+        &self.presence
     }
 
     /// The connection ended. Called by the server; a mark that is merely dropped leaves as well.
@@ -176,6 +191,15 @@ mod tests {
             .await
             .expect("alone for the grace time");
         assert!(left.elapsed() >= grace, "{:?}", left.elapsed());
+    }
+
+    #[tokio::test]
+    async fn a_page_on_its_way_starts_the_time_alone_again_and_is_nobody_yet() {
+        let presence = Presence::new();
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        presence.expect_somebody();
+        let alone = presence.alone_for().expect("nobody is here yet");
+        assert!(alone < Duration::from_millis(60), "{alone:?}");
     }
 
     #[tokio::test]
