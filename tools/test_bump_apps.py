@@ -21,7 +21,8 @@ SPEC.loader.exec_module(bump)
 OLD_SHA = "2d0f4a6921d11848bbb579e2760614e88723e42d"
 NEW_SHA = "0123456789abcdef0123456789abcdef01234567"
 WORKFLOW = (
-    "jobs:\n  a:\n    steps:\n"
+    "jobs:\n  a:\n    permissions:\n      contents: write\n      id-token: write\n      attestations: write\n"
+    "    steps:\n"
     f"      - uses: WKDSteve/appkit/release-kit/prepare@{OLD_SHA} # v0.23.1\n"
     f"      - uses: WKDSteve/appkit/release-kit/publish@{OLD_SHA} # v0.23.1\n"
     "      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)\n"
@@ -158,6 +159,58 @@ class PlanTest(unittest.TestCase):
         (app / ".github" / "workflows" / "rolling.yml").write_text("jobs: {}\n", encoding="utf-8")
         _, problems = bump.plan(app, "kit", "v0.23.2", NEW_SHA)
         self.assertTrue(any("no workflow takes an action" in p for p in problems), problems)
+
+
+    def test_a_publish_job_that_may_not_attest_is_a_problem_and_nothing_is_written(self) -> None:
+        app = make_app(self.tmp, "testing-desktop", full=True)
+        wf = app / ".github" / "workflows" / "rolling.yml"
+        wf.write_text(WORKFLOW.replace("      id-token: write\n", ""), encoding="utf-8")
+        _, problems = bump.plan(app, "full", "v0.23.2", NEW_SHA)
+        self.assertTrue(any("job 'a'" in p and "id-token: write" in p for p in problems), problems)
+
+
+PUBLISH = f"      - uses: WKDSteve/appkit/release-kit/publish@{OLD_SHA} # v0.50.0\n"
+
+
+class AttestPermissionsTest(unittest.TestCase):
+    def check(self, text: str) -> list[str]:
+        return bump.jobs_that_cannot_attest(text)
+
+    def test_a_publish_job_needs_both_scopes(self) -> None:
+        only_contents = "jobs:\n  publish:\n    permissions:\n      contents: write\n    steps:\n" + PUBLISH
+        self.assertEqual(self.check(only_contents), ["publish"])
+        one = only_contents.replace("contents: write\n", "contents: write\n      id-token: write\n")
+        self.assertEqual(self.check(one), ["publish"])
+        both = one.replace("id-token: write\n", "id-token: write   # attest\n      attestations: write\n")
+        self.assertEqual(self.check(both), [])
+
+    def test_the_workflow_grants_them_when_the_job_has_no_block_of_its_own(self) -> None:
+        top = "permissions:\n  id-token: write\n  attestations: write\n"
+        self.assertEqual(self.check(top + "jobs:\n  publish:\n    steps:\n" + PUBLISH), [])
+        # A block of the job replaces the workflow's wholly (GitHub's rule).
+        own = top + "jobs:\n  publish:\n    permissions:\n      contents: write\n    steps:\n" + PUBLISH
+        self.assertEqual(self.check(own), ["publish"])
+        self.assertEqual(self.check("jobs:\n  publish:\n    steps:\n" + PUBLISH), ["publish"])
+
+    def test_write_all_and_an_inline_mapping_count_read_all_does_not(self) -> None:
+        job = "jobs:\n  publish:\n    permissions: {}\n    steps:\n" + PUBLISH
+        self.assertEqual(self.check(job.replace("{}", "write-all")), [])
+        inline = job.replace("{}", "{ contents: write, id-token: write, attestations: write }")
+        self.assertEqual(self.check(inline), [])
+        self.assertEqual(self.check(job.replace("{}", "read-all")), ["publish"])
+
+    def test_attest_false_needs_neither_and_other_jobs_are_not_asked(self) -> None:
+        off = "jobs:\n  publish:\n    steps:\n" + PUBLISH + "        with:\n          attest: false\n"
+        self.assertEqual(self.check(off), [])
+        prepare = PUBLISH.replace("publish@", "prepare@")
+        self.assertEqual(self.check("jobs:\n  prepare:\n    steps:\n" + prepare), [])
+
+    def test_only_the_jobs_that_publish_are_named_and_a_nested_key_is_no_job(self) -> None:
+        text = (
+            "on:\n  push:\njobs:\n  build:\n    steps:\n      - run: echo\n"
+            "  publish:\n    needs: [build]\n    steps:\n" + PUBLISH + "        with:\n          tag: latest\n"
+        )
+        self.assertEqual(self.check(text), ["publish"])
 
 
 class DirtyTest(unittest.TestCase):

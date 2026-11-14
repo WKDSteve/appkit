@@ -37,6 +37,11 @@ in the bump's Cargo.lock; pnpm runs with --lockfile-only there). The commit is m
 fast-forward; when the clone's own uncommitted changes touch the same files, or its branch moved meanwhile, the commit
 stays on the branch bump/appkit-<tag> and the app counts as not done (merge it once that work is committed).
 
+A job whose step `release-kit/publish` attests (the default since v0.48) needs `id-token: write` and
+`attestations: write` in its permissions (or the workflow's, when the job has none): without them every rolling and
+release run fails, and nothing in the app's CI notices. Such a job is a problem: the app is skipped, nothing written,
+until its workflow grants them (or the step says `attest: false`).
+
 For work on appkit and an app at the same time, do not bump: use a `[patch]` in an uncommitted
 .cargo/config.toml (see the CLAUDE.md of tasks-desktop).
 
@@ -111,6 +116,80 @@ def nested_pinned(app: Path) -> list[str]:
     return found
 
 
+TOP_JOBS = re.compile(r"^jobs:\s*(?:#.*)?$")
+JOB_KEY = re.compile(r"^(\s+)([A-Za-z0-9_-]+):\s*(?:#.*)?$")
+PERMISSIONS = re.compile(r"^(\s*)permissions:\s*([^#]*?)\s*(?:#.*)?$")
+ATTEST_OFF = re.compile(r"""^\s+attest:\s*['"]?false['"]?\s*(?:#.*)?$""")
+ATTEST_NEEDS = ("id-token", "attestations")
+
+
+def indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def granted(block: list[str]) -> set[str] | None:
+    """The scopes a `permissions:` block grants `write` (all of them for write-all); None when there is no block.
+    `block` is the lines of the job (or of the top of the workflow) the block may sit in, at its own indentation."""
+    if not block:
+        return None
+    level = min((indent(line) for line in block if line.strip() and not line.lstrip().startswith("#")), default=0)
+    for i, line in enumerate(block):
+        m = PERMISSIONS.match(line)
+        if not m or len(m.group(1)) != level:
+            continue
+        value = m.group(2)
+        if value == "write-all":
+            return set(ATTEST_NEEDS)
+        if value.startswith("{"):
+            pairs = (part.split(":", 1) for part in value.strip("{}").split(",") if ":" in part)
+            return {k.strip() for k, v in pairs if v.strip() == "write"}
+        if value:
+            return set()  # read-all, or anything else that grants no write
+        scopes = set()
+        for inner in block[i + 1:]:
+            if inner.strip() and indent(inner) <= level:
+                break
+            key, _, val = inner.strip().partition(":")
+            if val.split("#", 1)[0].strip() == "write":
+                scopes.add(key.strip())
+        return scopes
+    return None
+
+
+def jobs_that_cannot_attest(text: str) -> list[str]:
+    """The jobs of a workflow whose step `release-kit/publish` attests (since appkit v0.48, unless `attest: false`)
+    but whose token may not: without `id-token: write` and `attestations: write` (of the job, else of the workflow)
+    publish stops with "this job has no OIDC token" and nothing is put on the release."""
+    lines = text.splitlines()
+    start = next((i for i, line in enumerate(lines) if TOP_JOBS.match(line)), None)
+    if start is None:
+        return []
+    top = lines[:start]
+    jobs: list[tuple[str, list[str]]] = []
+    job_level: int | None = None
+    for line in lines[start + 1:]:
+        if line.strip() and indent(line) == 0 and not line.startswith("#"):
+            break  # the next key of the top
+        m = JOB_KEY.match(line)
+        if m and (job_level is None or len(m.group(1)) == job_level):
+            job_level = len(m.group(1))
+            jobs.append((m.group(2), []))
+        elif jobs:
+            jobs[-1][1].append(line)
+    missing = []
+    for name, body in jobs:
+        if not any("release-kit/publish@" in line for line in body):
+            continue
+        if any(ATTEST_OFF.match(line) for line in body):
+            continue
+        scopes = granted(body)
+        if scopes is None:
+            scopes = granted(top) or set()
+        if not set(ATTEST_NEEDS) <= scopes:
+            missing.append(name)
+    return missing
+
+
 def appkit_packages(lock_text: str) -> list[str]:
     """The names of the packages a Cargo.lock takes from appkit's repository, in the order of the lock."""
     names: list[str] = []
@@ -151,6 +230,12 @@ def plan(app: Path, mode: str, tag: str, sha: str) -> tuple[dict[Path, str], lis
         apply(wf, bump_workflow, required=False)
     if not any(USES.search(read_exact(wf)) for wf in workflows):
         problems.append(f"{app}: no workflow takes an action of the release-kit")
+    for wf in workflows:
+        for job in jobs_that_cannot_attest(changes.get(wf, read_exact(wf))):
+            problems.append(
+                f"{wf}: job '{job}' publishes with the release-kit, which attests, but may not: give the job "
+                "'id-token: write' and 'attestations: write' (or set attest: false on the step)"
+            )
     apply(app / "tools" / "release-kit.pin", bump_pin, required=(mode == "kit"))
     if mode in ("full", "cargo"):
         apply(app / "Cargo.toml", bump_cargo, required=True)
