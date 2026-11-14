@@ -40,6 +40,7 @@ import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSArray
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
+import com.google.zxing.client.android.Intents
 import com.journeyapps.barcodescanner.ScanIntentResult
 import com.journeyapps.barcodescanner.ScanOptions
 import org.unifiedpush.android.connector.UnifiedPush
@@ -251,7 +252,10 @@ class AppkitPlugin(private val activity: Activity) : Plugin(activity) {
 
     @Command
     fun scanQr(invoke: Invoke) {
+        // The hub draws the code with block characters in the terminal's text colour: on a dark terminal it is light
+        // on dark (inverted). MIXED_SCAN reads both polarities, alternating frame by frame.
         val intent = ScanOptions()
+            .addExtra(Intents.Scan.SCAN_TYPE, Intents.Scan.MIXED_SCAN)
             .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
             .setBeepEnabled(false)
             .setOrientationLocked(false)

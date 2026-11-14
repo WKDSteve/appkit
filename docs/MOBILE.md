@@ -36,7 +36,8 @@ page (Svelte)  --ipcFetch-->  shell (Rust, appkit-mobile)  --HTTPS or tunnel--> 
   versioned, written atomically, removed wholly on unpairing).
 - `tauri-plugin-appkit` (`mobile-plugin/`, Rust and Kotlin, a Cargo project of its own): the Android side. The device
   keys in the Android Keystore (a login key, and a trigger key that signs only after the biometrics or the screen lock,
-  bound by a `CryptoObject`, `AND-05`), the QR code of a pairing (ZXing: no network, no analytics, unlike ML Kit), the
+  bound by a `CryptoObject`, `AND-05`), the QR code of a pairing (ZXing: no network, no analytics, unlike ML Kit; it reads
+  dark on light and light on dark alike, since a dark terminal shows the hub's code inverted), the
   folder of a cloned vault (Storage Access Framework, read only, bounded), and UnifiedPush (the endpoint of a distributor
   app, a notice with the words the app gave, never the content of a message). The page reaches none of it: the shell
   calls it from Rust.
