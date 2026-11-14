@@ -66,6 +66,7 @@ pub mod launch;
 pub mod limits;
 pub mod loginitems;
 pub mod phone;
+pub mod presence;
 pub mod push;
 #[cfg(feature = "push-net")]
 pub mod push_net;
@@ -82,6 +83,7 @@ pub use self::guard::{bearer, error_body, single, too_many, GuardRules};
 pub use self::http::{etag_matches, json_response, no_query, not_modified, parse_query};
 pub use self::hub::{serve, BuildRuntime, Core, Page, Pages, RunningServer, Runtime, ServeParts};
 pub use self::limits::{HubStatus, Limits};
+pub use self::presence::Presence;
 pub use self::vaults::{
     vault_request, vault_text, vaults_unavailable, BoxFuture, VaultAdmin, VaultInfo, VaultList,
 };

@@ -131,6 +131,28 @@ folder and the kind of window are always named. It never hides a window (`CREATE
 `DETACHED_PROCESS`). `browser::open(url, ports)` opens a link in the default browser only when
 it is `http://127.0.0.1:<port>/…` with a port from the list and plain characters after it.
 
+## A hub in the background ends itself
+
+`background::start` puts `serve` in the background, without a window. Such a hub must not stay
+behind when nobody uses it (an install that was cancelled, a tab closed days ago), so the kit
+gives the app what it needs to end it:
+
+- `RunningServer::presence()` counts who is here: a connection counts from the request on which
+  the guard accepted a session until it ends. `hello`, the page shell, the control secret and a
+  refused request are nobody.
+- `background::left_alone(&APP, &env, &presence, stay)` resolves when the hub was put in the
+  background by `start` (it sets `<APP>_DETACHED` for it), nobody has been here for ten minutes
+  (`<APP>_ALONE_SECS`: another time) and `stay` says no. It never resolves for a hub in a
+  terminal. The app waits for it beside Ctrl-C and shuts down the same way.
+- `background::has_order(&APP, &env, keep_running, server.paired_devices())` is the usual
+  `stay`: `keep_running` of `config.json` (a key of every hub), a paired device, or the start
+  with the login.
+- `background::started_now(text)` tells a start that started a hub from one that found it
+  running: who started a hub for a page stops it again when the page cannot be opened.
+
+`install --autostart` takes its login entry back when a later step fails, and `uninstall` also
+removes the `start-hub.vbs` an old version left in the config folder.
+
 ## Ports
 
 The default ports of the apps that run side by side are listed in

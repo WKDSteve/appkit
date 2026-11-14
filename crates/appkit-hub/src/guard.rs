@@ -834,6 +834,10 @@ pub async fn judge<R: Runtime>(st: &Core<R>, class: Class, req: Request, next: N
 
     let mut parts = parts;
     if let Some(caller) = caller {
+        // A session was accepted: on this connection somebody is here (see `presence`).
+        if let Some(here) = parts.extensions.get::<Arc<crate::presence::Here>>() {
+            here.arrive();
+        }
         parts.extensions.insert(caller);
     }
     let req = Request::from_parts(parts, body);

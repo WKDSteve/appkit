@@ -140,6 +140,8 @@ pub struct RunningServer {
     stop: watch::Sender<bool>,
     task: JoinHandle<()>,
     stop_runtime: Arc<dyn Fn() + Send + Sync>,
+    presence: Presence,
+    paired: Arc<dyn Fn() -> usize + Send + Sync>,
 }
 
 impl Drop for RunningServer {
@@ -159,6 +161,20 @@ impl RunningServer {
     #[must_use]
     pub fn instance(&self) -> &str {
         &self.instance
+    }
+
+    /// Who is here: the connections a session was accepted on (see [`Presence`]). A hub in the
+    /// background ends itself when this says it was left alone.
+    #[must_use]
+    pub fn presence(&self) -> Presence {
+        self.presence.clone()
+    }
+
+    /// How many devices are paired with a key of their own right now (none in an app that keeps
+    /// no devices). A paired phone is an order to stay: it reaches the hub when no page is open.
+    #[must_use]
+    pub fn paired_devices(&self) -> usize {
+        (self.paired)()
     }
 
     /// Stop accepting, let open requests end, wait for the accept loop.
@@ -236,14 +252,24 @@ where
 
     let app = router(&core, routes(&core));
     let (stop, stop_rx) = watch::channel(false);
-    let task = tokio::spawn(accept_loop(listener, app, limits, stop_rx));
+    let presence = Presence::new();
+    let task = tokio::spawn(accept_loop(
+        listener,
+        app,
+        limits,
+        stop_rx,
+        presence.clone(),
+    ));
     let for_stop = Arc::clone(&core);
+    let for_devices = Arc::clone(&core);
     Ok(RunningServer {
         addr,
         instance,
         stop,
         task,
         stop_runtime: Arc::new(move || for_stop.rt().stop()),
+        presence,
+        paired: Arc::new(move || for_devices.devices.as_ref().map_or(0, |d| d.list().len())),
     })
 }
 
@@ -358,6 +384,7 @@ async fn accept_loop(
     app: Router,
     limits: Limits,
     mut stop: watch::Receiver<bool>,
+    presence: Presence,
 ) {
     let slots = Arc::new(Semaphore::new(limits.max_connections));
     loop {
@@ -379,7 +406,16 @@ async fn accept_loop(
             continue;
         };
         let _ = stream.set_nodelay(true);
-        let service = TowerToHyperService::new(app.clone());
+        // Every request of the connection carries its mark: the guard says on it that a session
+        // was accepted, and from then until the connection ends somebody is here.
+        let here = presence.connection();
+        let mark = Arc::clone(&here);
+        let inner = TowerToHyperService::new(app.clone());
+        let service =
+            hyper::service::service_fn(move |mut req: hyper::Request<hyper::body::Incoming>| {
+                req.extensions_mut().insert(Arc::clone(&mark));
+                hyper::service::Service::call(&inner, req)
+            });
         let mut conn_stop = stop.clone();
         let head_bytes = limits.max_head_bytes.max(8 * 1024);
         let header_timeout = limits.header_timeout;
@@ -399,6 +435,7 @@ async fn accept_loop(
                     let _ = tokio::time::timeout(Duration::from_secs(5), conn).await;
                 }
             }
+            here.leave();
         });
     }
 }

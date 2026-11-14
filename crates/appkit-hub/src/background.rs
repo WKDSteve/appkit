@@ -6,6 +6,11 @@
 //! folder. A hub is only believed (and only stopped) when the process on its
 //! port says the instance of `hub.json`: a stale file never makes `stop` kill
 //! a process that merely got the same number.
+//!
+//! A hub in the background has no window, so nobody would notice one that is left over. It ends
+//! by itself once no page has been connected for a while ([`left_alone`]), unless the person gave
+//! it an order to stay ([`has_order`]): the start with the login, `keep_running` in the settings,
+//! or a paired phone. A hub that runs in a terminal (`serve`) ends with Ctrl-C as it always did.
 
 use std::ffi::{OsStr, OsString};
 use std::future::Future;
@@ -19,6 +24,7 @@ use appkit_core::identity::AppIdentity;
 use crate::env::Env;
 use crate::instance;
 use crate::loginitems::{self, LoginApp};
+use crate::presence::Presence;
 
 /// What the commands need to know about the app: its names and the files it keeps besides the kit's.
 #[derive(Debug, Clone, Copy)]
@@ -48,6 +54,70 @@ impl Background<'_> {
 const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
 /// The log is cut at the start when it is larger than this.
 const LOG_LIMIT: u64 = 256 * 1024;
+/// How long a hub in the background stays when no page is connected and it has no order to stay.
+const ALONE_GRACE: Duration = Duration::from_secs(10 * 60);
+/// What `start` prints first when it started a hub (and not when it found one running).
+const STARTED: &str = "the hub runs in the background";
+
+/// The variable `start` sets for the hub it puts in the background: that hub has no terminal and
+/// no window, so it ends itself when it is left alone.
+fn detached_var(app: &Background<'_>) -> String {
+    app.identity().var("DETACHED")
+}
+
+/// Whether this process is a hub that `start` put in the background.
+#[must_use]
+pub fn runs_detached(app: &Background<'_>, env: &Env) -> bool {
+    env.get(&detached_var(app)).is_some()
+}
+
+/// How long a hub in the background stays without a page: ten minutes, or the seconds the variable
+/// `<APP>_ALONE_SECS` names (1 to 86400; anything else is ignored).
+#[must_use]
+pub fn alone_grace(app: &Background<'_>, env: &Env) -> Duration {
+    env.get(&app.identity().var("ALONE_SECS"))
+        .and_then(|v| v.to_str()?.trim().parse::<u64>().ok())
+        .filter(|secs| (1..=86_400).contains(secs))
+        .map_or(ALONE_GRACE, Duration::from_secs)
+}
+
+/// Whether the person gave the hub an order to run without a page: `keep_running` of the settings,
+/// a paired device (a phone reaches the hub when no page is open on the PC), or the start with the
+/// login. The login entry of the machine is not asked when the tests of the program say it is not
+/// theirs (`NO_LOGIN_SYNC`).
+#[must_use]
+pub fn has_order(
+    app: &Background<'_>,
+    env: &Env,
+    keep_running: bool,
+    paired_devices: usize,
+) -> bool {
+    keep_running
+        || paired_devices > 0
+        || (env.get(&no_login_sync(app)).is_none() && autostart_is_on(app))
+}
+
+/// Resolves when a hub in the background should end itself: no page has been connected for the
+/// grace time and `stay` (see [`has_order`]) says no. Never resolves for a hub that was not put in
+/// the background by `start`: that one has a terminal, and the person there ends it.
+pub async fn left_alone<F: Fn() -> bool>(
+    app: &Background<'_>,
+    env: &Env,
+    presence: &Presence,
+    stay: F,
+) {
+    if !runs_detached(app, env) {
+        return std::future::pending().await;
+    }
+    presence.left_alone(alone_grace(app, env), stay).await;
+}
+
+/// Whether what `start` (or [`start_from`]) printed says that it started a hub now, as opposed to
+/// finding one that ran already. Who started a hub for a window ends it when the window never opens.
+#[must_use]
+pub fn started_now(printed: &str) -> bool {
+    printed.starts_with(STARTED)
+}
 
 /// `autostart on | off | status`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,16 +164,15 @@ pub async fn start(app: &Background<'_>) -> Result<String, String> {
         eprintln!("{warning}");
     }
     let exe = std::env::current_exe().map_err(|e| format!("own program not found: {e}"))?;
-    // A script of an older version that started the hub through the script host.
-    let _ = std::fs::remove_file(dir.join("start-hub.vbs"));
-    spawn_detached(&exe, &dir)?;
+    remove_old_start_script(&dir);
+    spawn_detached(app, &exe, &dir)?;
 
     // The hub says it is there by its record and its answer.
     let deadline = Instant::now() + Duration::from_secs(20);
     while Instant::now() < deadline {
         if let Some(record) = instance::running_hub(&dir, app.identity()).await {
             return Ok(format!(
-                "the hub runs in the background (port {}, process {})\n",
+                "{STARTED} (port {}, process {})\n",
                 record.port, record.pid
             ));
         }
@@ -120,7 +189,7 @@ pub async fn start(app: &Background<'_>) -> Result<String, String> {
 /// hub does not hold the pipe of a caller (`<program> start | ...`) open (see `handles`). It is
 /// started directly, not through the script host: an endpoint protection stops a program that
 /// starts `wscript.exe`.
-fn spawn_detached(exe: &Path, dir: &Path) -> Result<(), String> {
+fn spawn_detached(app: &Background<'_>, exe: &Path, dir: &Path) -> Result<(), String> {
     #[cfg(windows)]
     crate::handles::keep_standard_handles();
     let log = log_file(dir)?;
@@ -130,6 +199,7 @@ fn spawn_detached(exe: &Path, dir: &Path) -> Result<(), String> {
     let mut command = Command::new(exe);
     command
         .arg("serve")
+        .env(detached_var(app), "1")
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(err));
@@ -839,27 +909,28 @@ async fn install_steps_beside(
         out.push_str(&start_from(&target)?);
     }
 
-    if opts.autostart {
-        out.push_str(&autostart_for(app, Autostart::On, &target)?);
-    } else if env.get(&no_login_sync(app)).is_none() && autostart_is_on(app) {
-        // It was registered for another copy: point it here.
-        out.push_str(&autostart_for(app, Autostart::On, &target)?);
-    }
     if cfg!(windows) {
         let reg = system_program("reg.exe").map(RegExe);
         let reg = reg
             .as_ref()
             .map(|r| r as &dyn Registry)
             .map_err(Clone::clone);
-        out.push_str(&install_links(app, &target, opts, &env, reg)?);
-    } else if opts.shortcut {
-        out.push_str(&shortcut(
-            app,
-            &target,
-            opts.link_name,
-            opts.link_start,
-            &LinkPlace::ALL,
-        )?);
+        out.push_str(&entry_and_links(app, &target, opts, &env, reg)?);
+    } else {
+        // It may be registered for another copy: then it is pointed here.
+        let was_on = env.get(&no_login_sync(app)).is_none() && autostart_is_on(app);
+        let entry = |what| autostart_for(app, what, &target);
+        let entry_made = login_entry_step(opts, was_on, entry, out)?;
+        if opts.shortcut {
+            let made = shortcut(
+                app,
+                &target,
+                opts.link_name,
+                opts.link_start,
+                &LinkPlace::ALL,
+            );
+            out.push_str(&undo_entry_on_failure(made, entry_made, entry)?);
+        }
     }
     out.push_str(&how_to_start(
         app,
@@ -867,6 +938,72 @@ async fn install_steps_beside(
         env.get("PATH").map(OsString::as_os_str),
     ));
     Ok(())
+}
+
+/// The login entry of `install`: made when asked for, pointed at the installed copy when it was on for another
+/// one. Returns whether this install made an entry that was not there before (the one to take back when a later
+/// step fails). `was_on` is asked before anything is written.
+fn login_entry_step(
+    opts: InstallOptions,
+    was_on: bool,
+    entry: impl Fn(Autostart) -> Result<String, String>,
+    out: &mut String,
+) -> Result<bool, String> {
+    if opts.autostart || was_on {
+        out.push_str(&entry(Autostart::On)?);
+    }
+    Ok(opts.autostart && !was_on)
+}
+
+/// A step after the login entry failed: an entry this install made goes away again, so that an install which
+/// did not finish leaves nothing behind that starts a program at the next login. The error says which it was.
+fn undo_entry_on_failure(
+    step: Result<String, String>,
+    entry_made: bool,
+    entry: impl Fn(Autostart) -> Result<String, String>,
+) -> Result<String, String> {
+    match step {
+        Err(e) if entry_made => Err(match entry(Autostart::Off) {
+            Ok(_) => format!("{e}; the login entry this install made is taken back"),
+            Err(left) => format!("{e}; the login entry this install made is still there: {left}"),
+        }),
+        other => other,
+    }
+}
+
+/// The login entry and the links of `install` on Windows, through `reg` (or why it cannot be asked).
+fn entry_and_links(
+    app: &Background<'_>,
+    target: &Path,
+    opts: InstallOptions,
+    env: &Env,
+    reg: Result<&dyn Registry, String>,
+) -> Result<String, String> {
+    let mut out = String::new();
+    // The tests of the program: an entry of the machine is not theirs to point somewhere else.
+    let sync = env.get(&no_login_sync(app)).is_none();
+    let mut entry_made = false;
+    // A registry that cannot be asked is an error only when an entry is wanted; else there is none to point here.
+    let asked = if opts.autostart {
+        Some(reg.clone()?)
+    } else {
+        reg.clone().ok().filter(|_| sync)
+    };
+    if let Some(asked) = asked {
+        let was_on = login_value_present(app.run_value(), asked).unwrap_or(false);
+        // It may be registered for another copy: then it is pointed here.
+        entry_made = login_entry_step(
+            opts,
+            sync && was_on,
+            |what| run_key_for(app, what, target, asked),
+            &mut out,
+        )?;
+    }
+    let links = install_links(app, target, opts, env, reg.clone());
+    out.push_str(&undo_entry_on_failure(links, entry_made, |what| {
+        run_key_for(app, what, target, reg.clone()?)
+    })?);
+    Ok(out)
 }
 
 /// The last lines of `install`: the whole call that starts the installed program, and whether its folder is on
@@ -1056,6 +1193,9 @@ async fn uninstall_steps(app: &Background<'_>, opts: UninstallOptions) -> Result
     };
 
     step(stop(app).await, &mut out);
+    if let Ok(dir) = instance::config_folder(&env, app.identity()) {
+        remove_old_start_script(&dir);
+    }
     let exe = std::env::current_exe().map_err(|e| format!("own program not found: {e}"))?;
     if env.get(&no_login_sync(app)).is_some() {
         // The tests of the program: the login entry and the link of the machine are not theirs.
@@ -1082,6 +1222,13 @@ async fn uninstall_steps(app: &Background<'_>, opts: UninstallOptions) -> Result
         print!("{out}");
         Err(failed.join("; "))
     }
+}
+
+/// The script an older version started the hub through (the script host): nothing reads it any more, and a script
+/// in a settings folder is what an endpoint protection looks for. `start` removes it too; a hub that is never
+/// started again would keep it.
+fn remove_old_start_script(dir: &Path) {
+    let _ = std::fs::remove_file(dir.join("start-hub.vbs"));
 }
 
 /// What `uninstall` says about the program file it leaves, and who deletes it.
@@ -1901,6 +2048,184 @@ mod tests {
             std::fs::read_to_string(dir.join("notes.txt")).unwrap(),
             "mine"
         );
+    }
+
+    #[test]
+    fn a_hub_in_the_background_is_told_so_and_one_in_a_terminal_is_not() {
+        assert_eq!(detached_var(&APP), "RULES_DESKTOP_DETACHED");
+        assert!(!runs_detached(&APP, &Env::default()));
+        assert!(runs_detached(
+            &APP,
+            &Env::from_pairs([("RULES_DESKTOP_DETACHED", "1")])
+        ));
+    }
+
+    #[test]
+    fn the_time_alone_is_ten_minutes_unless_a_sane_number_of_seconds_is_named() {
+        let grace =
+            |v: &str| alone_grace(&APP, &Env::from_pairs([("RULES_DESKTOP_ALONE_SECS", v)]));
+        assert_eq!(alone_grace(&APP, &Env::default()), Duration::from_secs(600));
+        assert_eq!(grace("2"), Duration::from_secs(2));
+        assert_eq!(grace(" 86400 "), Duration::from_secs(86_400));
+        for ignored in ["0", "86401", "-1", "soon", ""] {
+            assert_eq!(grace(ignored), Duration::from_secs(600), "{ignored:?}");
+        }
+    }
+
+    /// What the person switched on is an order; the login entry of the machine the tests run on is not asked.
+    #[test]
+    fn the_setting_and_a_paired_device_are_orders_to_stay() {
+        let env = Env::from_pairs([("RULES_DESKTOP_NO_LOGIN_SYNC", "1")]);
+        assert!(!has_order(&APP, &env, false, 0));
+        assert!(has_order(&APP, &env, true, 0));
+        assert!(has_order(&APP, &env, false, 1));
+    }
+
+    #[test]
+    fn only_a_start_that_started_a_hub_says_so() {
+        assert!(started_now(
+            "the hub runs in the background (port 1, process 2)\n"
+        ));
+        assert!(!started_now(
+            "a hub is already running (port 1, process 2)\n"
+        ));
+        assert!(!started_now(""));
+    }
+
+    #[tokio::test]
+    async fn a_hub_in_a_terminal_is_never_left_alone() {
+        let presence = Presence::new();
+        let env = Env::from_pairs([("RULES_DESKTOP_ALONE_SECS", "1")]);
+        let waiting = left_alone(&APP, &env, &presence, || false);
+        assert!(tokio::time::timeout(Duration::from_millis(1500), waiting)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn a_hub_in_the_background_is_left_alone_after_the_grace_unless_it_has_an_order() {
+        let env = Env::from_pairs([
+            ("RULES_DESKTOP_DETACHED", "1"),
+            ("RULES_DESKTOP_ALONE_SECS", "1"),
+        ]);
+        let presence = Presence::new();
+        let began = Instant::now();
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            left_alone(&APP, &env, &presence, || false),
+        )
+        .await
+        .expect("nobody came");
+        assert!(began.elapsed() >= Duration::from_secs(1));
+        let staying = left_alone(&APP, &env, &presence, || true);
+        assert!(tokio::time::timeout(Duration::from_millis(1500), staying)
+            .await
+            .is_err());
+    }
+
+    #[test]
+    fn install_takes_back_only_an_entry_it_made() {
+        fn entry(
+            calls: &std::cell::RefCell<Vec<Autostart>>,
+        ) -> impl Fn(Autostart) -> Result<String, String> + '_ {
+            move |what: Autostart| {
+                calls.borrow_mut().push(what);
+                Ok("entry\n".to_owned())
+            }
+        }
+        let with = InstallOptions {
+            autostart: true,
+            ..InstallOptions::default()
+        };
+        let calls = std::cell::RefCell::new(Vec::new());
+        let mut out = String::new();
+        // Asked for and not there before: made here.
+        assert!(login_entry_step(with, false, entry(&calls), &mut out).unwrap());
+        // There before (for another copy): pointed here, and not this install's to take back.
+        assert!(!login_entry_step(with, true, entry(&calls), &mut out).unwrap());
+        assert!(
+            !login_entry_step(InstallOptions::default(), true, entry(&calls), &mut out).unwrap()
+        );
+        assert_eq!(calls.borrow().len(), 3);
+        // Not asked for and not there: nothing is written.
+        assert!(
+            !login_entry_step(InstallOptions::default(), false, entry(&calls), &mut out).unwrap()
+        );
+        assert_eq!(calls.borrow().len(), 3);
+
+        calls.borrow_mut().clear();
+        let failed = undo_entry_on_failure(Err("no link".to_owned()), true, entry(&calls));
+        assert_eq!(*calls.borrow(), [Autostart::Off]);
+        assert!(failed.unwrap_err().contains("taken back"));
+        calls.borrow_mut().clear();
+        assert_eq!(
+            undo_entry_on_failure(Err("no link".to_owned()), false, entry(&calls)),
+            Err("no link".to_owned())
+        );
+        assert_eq!(
+            undo_entry_on_failure(Ok("link\n".to_owned()), true, entry(&calls)),
+            Ok("link\n".to_owned())
+        );
+        assert!(
+            calls.borrow().is_empty(),
+            "nothing failed, nothing is undone"
+        );
+    }
+
+    /// `install --autostart --shortcut` where the link cannot be made (no folder for it): the install fails, and
+    /// the `Run` value it wrote a moment before is gone again.
+    #[cfg(windows)]
+    #[test]
+    fn an_install_that_fails_after_the_login_entry_leaves_no_run_value() {
+        let opts = InstallOptions {
+            autostart: true,
+            shortcut: true,
+            ..InstallOptions::default()
+        };
+        let target = Path::new(r"C:\apps\rules-hub.exe");
+        let reg = FakeRegistry::new(None);
+        let failed = entry_and_links(&APP, target, opts, &Env::default(), Ok(&reg));
+        let why = failed.expect_err("no folder for the link");
+        assert!(why.contains("taken back"), "{why}");
+        assert_eq!(*reg.value.borrow(), None, "{:?}", reg.calls());
+        assert!(
+            reg.calls().iter().any(|c| c[0] == "add"),
+            "it was written first"
+        );
+
+        // An entry that was there before the install stays: it is the person's.
+        let reg = FakeRegistry::new(Some("\"C:\\old\\rules-hub.exe\" start"));
+        assert!(entry_and_links(&APP, target, opts, &Env::default(), Ok(&reg)).is_err());
+        assert_eq!(
+            reg.value.borrow().as_deref(),
+            Some(run_command(target).as_str())
+        );
+    }
+
+    /// Without `--autostart` a registry that cannot be asked stops nothing: there is no entry to point here.
+    #[cfg(windows)]
+    #[test]
+    fn an_install_without_a_login_entry_does_not_need_the_registry() {
+        let said = entry_and_links(
+            &APP,
+            Path::new(r"C:\apps\rules-hub.exe"),
+            InstallOptions::default(),
+            &Env::default(),
+            Err("no Windows folder found".to_owned()),
+        )
+        .expect("the install goes on");
+        assert!(said.contains("no link in the Start menu"), "{said}");
+    }
+
+    #[test]
+    fn the_start_script_of_an_older_version_goes_with_the_uninstall() {
+        let dir = appkit_scratch::Scratch::new("old-start-script");
+        std::fs::write(dir.join("start-hub.vbs"), "x").unwrap();
+        std::fs::write(dir.join("config.json"), "{}").unwrap();
+        remove_old_start_script(&dir);
+        assert!(!dir.join("start-hub.vbs").exists());
+        assert!(dir.join("config.json").is_file());
+        remove_old_start_script(&dir);
     }
 
     /// A registry that holds one value in memory and says what it was asked.

@@ -103,6 +103,10 @@ pub struct FileConfig<A = NoSettings> {
     /// The port the hub tries first (it is part of the origin).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
+    /// `true`: a hub in the background keeps running when no page is connected. Without it such a
+    /// hub ends itself after a while (see `background::left_alone`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keep_running: Option<bool>,
 }
 
 /// The keys of the kit. `deny_unknown_fields` cannot be used together with `flatten`, so the
@@ -119,9 +123,18 @@ struct Core {
     nvim: Option<PathBuf>,
     engine_dir: Option<PathBuf>,
     port: Option<u16>,
+    keep_running: Option<bool>,
 }
 
-const CORE_KEYS: [&str; 6] = ["vault", "vaults", "active", "nvim", "engine_dir", "port"];
+const CORE_KEYS: [&str; 7] = [
+    "vault",
+    "vaults",
+    "active",
+    "nvim",
+    "engine_dir",
+    "port",
+    "keep_running",
+];
 
 /// The top level of the file as text per key, in file order. A key that is there twice is an
 /// error, as it is for a derived struct; a value stays text (JSON), so that what is nested in it
@@ -190,6 +203,7 @@ impl<'de, A: AppSettings> Deserialize<'de> for FileConfig<A> {
             nvim: core.nvim,
             engine_dir: core.engine_dir,
             port: core.port,
+            keep_running: core.keep_running,
             app,
         })
     }
@@ -575,6 +589,21 @@ mod tests {
                 "{entries:?} {active:?} was accepted"
             );
         }
+    }
+
+    /// The order to stay in the background is a key of the kit: written last, absent unless set.
+    #[test]
+    fn keep_running_is_a_key_of_every_hub() {
+        let on: FileConfig = serde_json::from_str(r#"{"keep_running":true,"port":20000}"#).unwrap();
+        assert_eq!(on.keep_running, Some(true));
+        assert_eq!(
+            serde_json::to_string(&on).unwrap(),
+            r#"{"port":20000,"keep_running":true}"#
+        );
+        let unset: FileConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(unset.keep_running, None);
+        assert_eq!(serde_json::to_string(&unset).unwrap(), "{}");
+        assert!(serde_json::from_str::<FileConfig>(r#"{"keep_running":"yes"}"#).is_err());
     }
 
     #[test]
