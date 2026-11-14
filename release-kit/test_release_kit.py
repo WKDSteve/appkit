@@ -15,6 +15,7 @@ import http.server
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -988,6 +989,28 @@ class InstallPs1Test(unittest.TestCase):
                                  capture_output=True, text=True)
             self.assertIn("caught: install.ps1:", res.stdout, res.stderr)
             self.assertIn("after: Continue mine mine mine", res.stdout)
+
+
+class InstallLineTest(unittest.TestCase):
+    """The line the documents of the kit tell a person to type."""
+
+    # A new powershell.exe whose command line switches the execution policy off and pipes a download into
+    # Invoke-Expression is reported by Microsoft Defender as Trojan:Win32/Commando.B!ml (2026-11-14: a verdict on
+    # the command line alone), and the script then reaches Invoke-Expression line by line. The line is typed into
+    # a session instead (README, "The install scripts").
+    WRAPPED = re.compile(r"(?i)-(?:ExecutionPolicy|ep|ex)\s+Bypass[^\n]*\|\s*(?:iex|Invoke-Expression)\b")
+
+    def test_no_document_wraps_the_download_in_a_bypass_command_line(self) -> None:
+        for path in (KIT / "README.md", PS1):
+            with self.subTest(path=path.name):
+                found = self.WRAPPED.search(path.read_text(encoding="utf-8"))
+                self.assertIsNone(found, found and found.group(0))
+
+    def test_the_pattern_finds_the_reported_line(self) -> None:
+        reported = 'powershell -ExecutionPolicy Bypass -c "irm https://github.com/OWNER/NAME/releases/download/latest/install.ps1 | iex"'
+        self.assertIsNotNone(self.WRAPPED.search(reported))
+        self.assertIsNone(self.WRAPPED.search("irm https://github.com/OWNER/NAME/releases/download/latest/install.ps1 | iex"))
+        self.assertIsNone(self.WRAPPED.search(r"powershell -ExecutionPolicy Bypass -File .\install.ps1"))
 
 
 FAKE_GH = r"""#!/usr/bin/env bash

@@ -63,10 +63,12 @@ with it, instead of reading the release API of each app:
 
 Each release carries `install.ps1` (and `install.sh` where there is a Linux or macOS build). The copy
 on a release is **stamped**: it knows its repository, its app and its channel. The script of
-`v1.2.0` installs v1.2.0, the script of `latest` installs the rolling build, both without options:
+`v1.2.0` installs v1.2.0, the script of `latest` installs the rolling build, both without options.
+The first line is typed into a PowerShell session (Windows PowerShell 5.1 or PowerShell 7), the second
+into a POSIX shell:
 
 ```
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/OWNER/NAME/releases/download/latest/install.ps1 | iex"
+irm https://github.com/OWNER/NAME/releases/download/latest/install.ps1 | iex
 curl -fsSL https://github.com/OWNER/NAME/releases/download/latest/install.sh | sh
 ```
 
@@ -86,9 +88,22 @@ internet (Mark-of-the-Web), and SmartScreen stops an unsigned setup with that ma
 workstation it may not be run at all. A file the script downloads carries no mark. What the script
 checks is that the file is the one `SHA256SUMS` of the same release lists, and it runs nothing when
 it does not match. That proves the file is whole and belongs to that release, not who made the
-release: it is no signature, and it replaces none. `-ExecutionPolicy Bypass` and `| iex` are needed
-because a script downloaded by the browser is marked as well. Neither helps against AppLocker or
-WDAC: what those forbid stays forbidden.
+release: it is no signature, and it replaces none. `| iex` is used because a script downloaded by the
+browser is marked as well; text handed to `iex` is no script file, so the execution policy does not
+apply to it (tried under `Restricted`). It does not help against AppLocker or WDAC: what those forbid
+stays forbidden.
+
+**Do not wrap the line in a new PowerShell.** Until 2026-11-14 this page gave it as
+`powershell -ExecutionPolicy Bypass -c "<the line>"`. Microsoft Defender reports that command line as
+`Trojan:Win32/Commando.B!ml`: a verdict of its cloud model on the command line alone (a new
+`powershell.exe` with the bypass switch and a download piped into `Invoke-Expression`), not on the
+script and not on the setup, which both scan clean. Nothing is installed then, and what the person sees
+is a misleading parser error ("the multi-line comment is missing its terminator `#>`"): after the
+report the script reaches `Invoke-Expression` line by line, and its first line is `<#`. Typed into a
+session there is no such command line. From `cmd.exe` or the Run dialog, the same line without the
+bypass switch (`powershell -c "<the line>"`) was not reported on that day; a model's verdict can change,
+so the session is the way this page names. `test_release_kit.py` fails when the wrapped form comes back
+into this page or the script.
 
 The scripts install **for the current user, without administrator rights**, and refuse an elevated
 session (`-AllowElevated` / `--allow-root` for a build machine): elevated, the app would be installed

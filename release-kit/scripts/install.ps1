@@ -18,12 +18,14 @@ release.)
 
 The copy attached to a release is stamped by the release workflow: it knows its repository, its app
 and its channel (the release it came with, or the rolling build `latest`) and runs without
-parameters, also through Invoke-Expression:
+parameters, also through Invoke-Expression, typed into a PowerShell session:
 
-  powershell -ExecutionPolicy Bypass -c "irm https://github.com/OWNER/NAME/releases/download/latest/install.ps1 | iex"
+  irm https://github.com/OWNER/NAME/releases/download/latest/install.ps1 | iex
 
 Run it in your own PowerShell, not elevated: the apps install for one user, and an elevated session
-belongs to the administrator account, whose profile would get the app.
+belongs to the administrator account, whose profile would get the app. Type the line into the session
+as it is: started as a new powershell.exe with the execution policy switched off, Microsoft Defender
+reports the command line as a trojan (release-kit README, "The install scripts").
 
 Parameters (all optional):
 
