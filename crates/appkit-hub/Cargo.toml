@@ -33,16 +33,17 @@ hkdf = "0.13"
 aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
 # The HTTP client of push-net: rustls with the Mozilla roots and the ring provider, the version appkit-mobile uses.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2"], optional = true }
-# The QR code of a phone's pairing link on the terminal (src/phone.rs): the encoder only, no image or SVG.
+# The QR code of a phone's pairing link (src/phone.rs): the encoder only; the terminal text and the page are drawn
+# there from its modules.
 qrcode = { version = "0.14", default-features = false }
 notify = { version = "8.2", default-features = false, features = ["macos_fsevent"] }
 serde ={ version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 tokio = { version = "1", default-features = false, features = ["sync", "rt", "rt-multi-thread", "net", "time", "macros", "io-util", "process"] }
 
-# The direct calls of the system (src/handles.rs, src/browser.rs): the version tokio already brings through mio.
+# The direct calls of the system (src/handles.rs, src/browser.rs, src/phone.rs): the version tokio already brings through mio.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
 appkit-scratch = { path = "../appkit-scratch" }

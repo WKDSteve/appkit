@@ -1,7 +1,8 @@
 //! Open a page of a local hub in the default browser.
 //!
-//! Only `http://127.0.0.1:<port>/…` with a port the app names. Never `file://`, never a name
-//! other than the loopback address, and never through the file association. On Windows the link
+//! Only `http://127.0.0.1:<port>/…` with a port the app names. Never a name other than the loopback
+//! address, and never a file a caller names: the one file that is opened is the page of a pairing
+//! code the hub wrote itself ([`open_own_page`], `phone::show_qr`), by its fixed name. On Windows the link
 //! goes to `ShellExecuteW` (verb `open`), no helper program is started; elsewhere the program that
 //! opens links gets exactly one argument, the link, and it is an absolute program.
 
@@ -121,14 +122,45 @@ pub fn open(url: &str, ports: &[u16]) -> Result<(), String> {
     if !is_allowed(url, ports) {
         return Err("the link is not one this app opens: not opened".to_owned());
     }
+    hand_over(url)
+}
+
+/// Is `path` the page of a pairing code as the hub writes it: absolute, the fixed name
+/// ([`crate::phone::QR_FILE`]), and a file that is there (no link to follow)?
+#[must_use]
+pub(crate) fn is_own_page(path: &std::path::Path) -> bool {
+    path.is_absolute()
+        && path.file_name().and_then(|n| n.to_str()) == Some(crate::phone::QR_FILE)
+        && std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file())
+}
+
+/// Open the page of a pairing code the hub wrote itself, with the program the system opens a page
+/// with. The one file this module opens: its name is fixed and its content is the hub's own, so no
+/// caller chooses what is started.
+///
+/// # Errors
+///
+/// `path` is not that page, or the system could not open it.
+pub(crate) fn open_own_page(path: &std::path::Path) -> Result<(), String> {
+    if !is_own_page(path) {
+        return Err("not the page of a pairing code: not opened".to_owned());
+    }
+    let text = path
+        .to_str()
+        .ok_or("the settings folder has a name that is no text: not opened")?;
+    hand_over(text)
+}
+
+/// Hand a checked link or page to the system.
+fn hand_over(target: &str) -> Result<(), String> {
     #[cfg(windows)]
     {
         crate::handles::keep_standard_handles();
-        shell_open(url)
+        shell_open(target)
     }
     #[cfg(not(windows))]
     {
-        let (program, args) = opener(url);
+        let (program, args) = opener(target);
         let mut child = Command::new(program)
             .args(args)
             .stdin(Stdio::null())

@@ -128,6 +128,13 @@ An app's hub offers (with `appkit-hub::phone`):
 
 Without `--tailnet` the link names the loopback port, for a phone behind an SSH tunnel.
 
+The QR code is shown twice (`appkit-hub::phone`): in the terminal, black on white by escape sequences whatever the
+theme (`qr_terminal`; a pipe or a file gets the plain half blocks), and as a picture on a page of its own
+(`show_qr`: `pair-qr.html` in the settings folder of the app, for the person only, opened with the program the system
+shows a page with). The picture is the one to scan when the terminal's font leaves gaps between the lines. The page
+runs no script and loads nothing, hides the code after the 60 s, and the command removes the file then (`forget_qr`);
+it is the one file the hub ever opens, by its fixed name (`browser::open_own_page`).
+
 ## Pairing
 
 The PC shows a pairing link, as a QR code or as text:
