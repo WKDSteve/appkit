@@ -251,11 +251,14 @@ pub async fn present_pairing(
 {hint}
 {note}"
     );
-    let mut out = std::io::stdout().lock();
-    out.write_all(text.as_bytes())
-        .and_then(|()| out.flush())
-        .map_err(|e| format!("cannot write the pairing code: {e}"))?;
-    drop(out);
+    // In a block of its own: the lock of the standard output must not live across the wait below, or the future could
+    // not be handed to another thread (`tokio::spawn`).
+    {
+        let mut out = std::io::stdout().lock();
+        out.write_all(text.as_bytes())
+            .and_then(|()| out.flush())
+            .map_err(|e| format!("cannot write the pairing code: {e}"))?;
+    }
     if matches!(shown, Some(Ok(_))) {
         tokio::time::sleep(std::time::Duration::from_secs(PAIR_SECONDS)).await;
         forget_qr(dir);
@@ -575,6 +578,21 @@ mod tests {
         let folder = dir.path().join("sub");
         std::fs::create_dir_all(folder.join(QR_FILE)).unwrap();
         assert!(crate::browser::open_own_page(&folder.join(QR_FILE)).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_pairing_can_be_shown_from_a_task_of_the_runtime() {
+        // An app runs it with `tokio::spawn` (the main thread of Windows has a small stack): the future has to be
+        // `Send`, which it was not while it held the lock of the standard output across its wait.
+        let dir = appkit_scratch::Scratch::new("phone-present-task");
+        let folder = dir.path().to_path_buf();
+        let link = pair_link(&PhoneWay::Tunnel, 17618, "testing", CODE);
+        tokio::spawn(async move {
+            present_pairing(&folder, &link, "Pair a phone", "Scan it.", false).await
+        })
+        .await
+        .unwrap()
+        .unwrap();
     }
 
     #[tokio::test]
