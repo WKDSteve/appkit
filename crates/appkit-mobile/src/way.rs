@@ -90,11 +90,29 @@ fn plain_host(name: &str) -> bool {
             .is_some_and(|tld| tld.bytes().any(|b| b.is_ascii_lowercase()))
 }
 
+/// Is `name` a tailnet name as the hub's guard takes it: a plain host name, with an optional `:<port>` (plain digits,
+/// no leading zero, 1 to 65535, not 443) for Serve on another HTTPS port. The same rule as
+/// `appkit_core::authn::tailnet_name_ok` (this crate stays without the core for the phone; a test holds both equal).
+fn tailnet_name(name: &str) -> bool {
+    match name.split_once(':') {
+        None => plain_host(name),
+        Some((host, port)) => {
+            plain_host(host)
+                && (1..=5).contains(&port.len())
+                && port.bytes().all(|b| b.is_ascii_digit())
+                && !port.starts_with('0')
+                && port.parse::<u16>().is_ok_and(|p| p != 443)
+        }
+    }
+}
+
 impl HubAddress {
-    /// The hub behind Tailscale Serve on `name` (`pc.example.ts.net`). `None` when it is not a plain host name.
+    /// The hub behind Tailscale Serve on `name` (`pc.example.ts.net`, or `pc.example.ts.net:8443` when Serve forwards
+    /// another HTTPS port than 443 to it). `None` when it is not a plain host name with an optional port other than
+    /// 443 (the rule of the hub's guard).
     #[must_use]
     pub fn tailnet(name: &str) -> Option<Self> {
-        plain_host(name).then(|| Self {
+        tailnet_name(name).then(|| Self {
             way: Way::Tailnet,
             base: format!("https://{name}"),
         })
@@ -229,6 +247,42 @@ mod tests {
             "user@pc.ts.net",
         ] {
             assert!(HubAddress::tailnet(bad).is_none(), "{bad:?}");
+        }
+        // A second hub of the same PC on another port of Serve.
+        let p = HubAddress::tailnet("pc.example.ts.net:8443").unwrap();
+        assert_eq!(p.base(), "https://pc.example.ts.net:8443");
+        assert_eq!(p.clone().checked(), Some(p.clone()));
+        let link = pair_link(&p, "testing", CODE);
+        assert_eq!(parse_pair_link(&link).unwrap().address, p);
+        for bad in [
+            "pc.example.ts.net:0",
+            "pc.example.ts.net:08443",
+            "pc.example.ts.net:65536",
+        ] {
+            assert!(HubAddress::tailnet(bad).is_none(), "{bad:?}");
+            assert!(
+                parse_pair_link(&format!("https://{bad}/#{PAIR_MARK}&app=x&code={CODE}")).is_none()
+            );
+        }
+        // The phone takes exactly the names the guard of the hub takes.
+        for name in [
+            "pc.example.ts.net",
+            "pc.example.ts.net:8443",
+            "pc.ts.net:65535",
+            "pc.example.ts.net:443",
+            "pc.example.ts.net:0",
+            "pc.example.ts.net:",
+            "pc.example.ts.net:+1",
+            "pc.example.ts.net:1:2",
+            ":8443",
+            "10.0.0.1:8443",
+            "PC.example.ts.net:8443",
+        ] {
+            assert_eq!(
+                tailnet_name(name),
+                appkit_core::authn::tailnet_name_ok(name),
+                "{name:?}"
+            );
         }
         let t = HubAddress::tunnel(17618).unwrap();
         assert_eq!(t.base(), "http://127.0.0.1:17618");

@@ -204,8 +204,10 @@ impl HostPolicy {
     }
 
     /// Also answer to `name`, the name of this machine in the tailnet, as Tailscale Serve forwards it: the `Host`
-    /// `name` exactly (no port: Serve speaks on 443) and the `Origin` `https://name`. The server still binds
-    /// loopback only; a request with this host came through the tunnel, and the guard holds it to what a device may.
+    /// `name` exactly and the `Origin` `https://name`. `name` is a plain host name for Serve on 443, or
+    /// `host:port` for Serve on another HTTPS port ([`tailnet_name_ok`]): browsers send that port in both headers.
+    /// The server still binds loopback only; a request with this host came through the tunnel, and the guard holds
+    /// it to what a device may.
     #[must_use]
     pub fn with_remote(mut self, name: &str) -> Self {
         self.hosts.push(name.to_owned());
@@ -230,6 +232,45 @@ impl HostPolicy {
     #[must_use]
     pub fn origin_ok(&self, origin: &str) -> bool {
         self.origins.iter().any(|o| o == origin)
+    }
+}
+
+/// Is `name` a plain host name: lower-case labels of letters, digits and `-`, at least two, each 1 to 63
+/// characters, none with a `-` at an end, the last one not all digits (that would be an address)? At most 253
+/// characters.
+#[must_use]
+pub fn plain_host_name(name: &str) -> bool {
+    let labels: Vec<&str> = name.split('.').collect();
+    name.len() <= 253
+        && labels.len() >= 2
+        && labels.iter().all(|l| {
+            (1..=63).contains(&l.len())
+                && !l.starts_with('-')
+                && !l.ends_with('-')
+                && l.bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        })
+        && labels
+            .last()
+            .is_some_and(|tld| tld.bytes().any(|b| b.is_ascii_lowercase()))
+}
+
+/// Is `name` the name of this machine in the tailnet as Tailscale Serve answers it: a plain host name
+/// ([`plain_host_name`], Serve on 443), or one with `:<port>` for Serve on another HTTPS port (so that two hubs of
+/// one machine can each have a port, `tailscale serve --https=<port>`)? The port is 1 to 65535 in plain digits, no
+/// leading zero, and never 443: a browser leaves the default port out of `Host` and `Origin`, so `name:443` would
+/// never match.
+#[must_use]
+pub fn tailnet_name_ok(name: &str) -> bool {
+    match name.split_once(':') {
+        None => plain_host_name(name),
+        Some((host, port)) => {
+            plain_host_name(host)
+                && (1..=5).contains(&port.len())
+                && port.bytes().all(|b| b.is_ascii_digit())
+                && !port.starts_with('0')
+                && port.parse::<u16>().is_ok_and(|p| p != 443)
+        }
     }
 }
 
@@ -496,6 +537,56 @@ mod tests {
             assert!(!p.origin_ok(bad), "{bad:?}");
         }
         assert!(!HostPolicy::loopback(17615).is_remote("pc.example.ts.net"));
+    }
+
+    #[test]
+    fn a_tailnet_name_with_a_port_is_its_own_exact_host_and_origin() {
+        // Two hubs of one machine: one on Serve's 443, the other on another HTTPS port.
+        let p = HostPolicy::loopback(17618).with_remote("pc.example.ts.net:8443");
+        assert!(p.host_ok("pc.example.ts.net:8443") && p.is_remote("pc.example.ts.net:8443"));
+        assert!(p.origin_ok("https://pc.example.ts.net:8443"));
+        for bad in [
+            "pc.example.ts.net",
+            "pc.example.ts.net:443",
+            "pc.example.ts.net:84430",
+        ] {
+            assert!(!p.host_ok(bad) && !p.is_remote(bad), "{bad:?}");
+        }
+        assert!(!p.origin_ok("https://pc.example.ts.net"));
+    }
+
+    #[test]
+    fn a_tailnet_name_is_a_plain_host_with_an_optional_port_other_than_443() {
+        for good in [
+            "pc.example.ts.net",
+            "pc.example.ts.net:8443",
+            "a-b.c1.ts.net:1",
+            "pc.ts.net:65535",
+        ] {
+            assert!(tailnet_name_ok(good), "{good:?}");
+        }
+        for bad in [
+            "",
+            "pc",
+            "PC.example.ts.net",
+            "pc.example.ts.net:443",
+            "pc.example.ts.net:",
+            "pc.example.ts.net:0",
+            "pc.example.ts.net:08443",
+            "pc.example.ts.net:65536",
+            "pc.example.ts.net:+8443",
+            "pc.example.ts.net:84 3",
+            "pc.example.ts.net:8443:1",
+            ":8443",
+            "10.0.0.1:8443",
+            "https://pc.example.ts.net",
+            "pc.example.ts.net/",
+            "user@pc.ts.net",
+            "pc..ts.net",
+            "-pc.ts.net",
+        ] {
+            assert!(!tailnet_name_ok(bad), "{bad:?}");
+        }
     }
 
     #[test]

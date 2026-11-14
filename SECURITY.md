@@ -141,7 +141,9 @@ The hub binds loopback only, also for phones. A phone reaches it one of two ways
   origin `https://<pc>.<tailnet>.ts.net`. A request with that host is held to what a device does: the routes of the
   control secret and `/auth/exchange` (a session for a pairing code) are refused (`not_on_tailnet`), and a route below
   `/api/` needs a session of a paired device (`device_required`); a session of a code, made on the PC, does not count
-  there. `tailscale funnel` (public) is never the way.
+  there. `tailscale funnel` (public) is never the way. Two hubs of one PC each take a port of Serve: the one on
+  443 names `<pc>.<tailnet>.ts.net`, the other `<pc>.<tailnet>.ts.net:<port>` (`tailscale serve --https=<port>`),
+  and its `Host` and origin carry that port, exactly; `:443` is no name (a browser leaves the default port out).
 - **An SSH tunnel** from an SSH client on the phone to the same loopback port on the PC (`-L <port>:127.0.0.1:<port>`):
   the hub sees a loopback host, as from the PC itself; the SSH client checks the host key of the PC.
 

@@ -15,6 +15,9 @@ the ruleset `mobile` of the maintainer's rules (`MOB-*`, `MSEC-*`, `AND-*`); thi
 - The hub stays on loopback in every way (`SRV-01`): no LAN address, no port forward on the router, no Funnel.
 - Tailscale Serve gives a real certificate for the tailnet name, so the phone speaks HTTPS. The name is in public
   Certificate Transparency logs: give the PC a neutral name.
+- Two hubs on one PC: one on Serve's 443 (`<pc>.<tailnet>.ts.net`), the other on another HTTPS port
+  (`tailscale serve --bg --https=8443 http://127.0.0.1:<its port>`), named with it: `<pc>.<tailnet>.ts.net:8443` as
+  its tailnet name, in its pairing link and on the phone. Never `:443` (a browser leaves the default port out).
 - The SSH tunnel is plain HTTP to the phone's own loopback, carried by SSH; the SSH client checks the host key. Use the
   hub's own port on both ends: the guard takes `127.0.0.1:<its port>` as the host.
 - A cloned vault is read only. The hub is not involved, so the data classes are the clone's: a vault (or an export)

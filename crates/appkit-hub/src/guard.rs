@@ -307,16 +307,19 @@ impl GuardRules {
     /// no route of the control secret, and every route below `/api/` only with a session of a paired device.
     /// Pairing a device (`/auth/device/*`) is what this host is for. Needs `with_devices`.
     ///
+    /// `name` may carry a port (`pc.example.ts.net:8443`) when Serve forwards another HTTPS port than 443 to this
+    /// hub, so that two hubs of one machine each have one (`appkit_core::authn::tailnet_name_ok`).
+    ///
     /// # Panics
     ///
     /// When `name` is not a plain host name (lower-case labels of letters, digits and `-`, at least two, the last
-    /// not all digits; no port, no scheme), or when the app keeps no devices.
+    /// not all digits; no scheme) with an optional port other than 443, or when the app keeps no devices.
     #[must_use]
     pub fn with_tailnet_name(mut self, name: impl Into<String>) -> Self {
         let name = name.into();
         assert!(
-            !name.contains(':') && plain_https_origin(&format!("https://{name}")),
-            "the tailnet name must be a plain host name like pc.example.ts.net, not {name:?}"
+            appkit_core::authn::tailnet_name_ok(&name),
+            "the tailnet name must be a plain host name like pc.example.ts.net (or pc.example.ts.net:8443), not {name:?}"
         );
         assert!(
             self.devices.is_some(),
@@ -1309,6 +1312,30 @@ mod tests {
         assert!(!rules.is_upload("/api/x/upload/"));
         assert!(!rules.is_upload("/api/x/other"));
         assert!(!GuardRules::new("/api/x/hello", Vec::new()).is_upload("/api/x/upload"));
+    }
+
+    #[test]
+    fn a_tailnet_name_may_carry_a_port_but_not_443() {
+        let rules = |name: &str| {
+            let name = name.to_owned();
+            std::panic::catch_unwind(move || {
+                GuardRules::new("/api/x/hello", Vec::new())
+                    .with_devices("devices.json")
+                    .with_tailnet_name(name)
+            })
+        };
+        assert_eq!(
+            rules("pc.example.ts.net:8443").unwrap().tailnet_name(),
+            Some("pc.example.ts.net:8443")
+        );
+        assert!(rules("pc.example.ts.net").is_ok());
+        for bad in [
+            "pc.example.ts.net:443",
+            "pc.example.ts.net:0",
+            "https://pc.example.ts.net",
+        ] {
+            assert!(rules(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]
