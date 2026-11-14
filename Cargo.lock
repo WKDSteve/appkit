@@ -49,6 +49,7 @@ version = "0.0.0"
 dependencies = [
  "appkit-scratch",
  "getrandom 0.4.3",
+ "libc",
  "serde",
  "serde_json",
  "tokio",

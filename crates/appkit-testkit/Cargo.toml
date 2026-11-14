@@ -22,6 +22,11 @@ path = "src/bin/fake-engine.rs"
 name = "launch-probe"
 path = "src/bin/launch-probe.rs"
 
+# The child of the tests of `appkit_core::child` (tests/child.rs).
+[[bin]]
+name = "child-probe"
+path = "src/bin/child-probe.rs"
+
 [dependencies]
 appkit-core = { path = "../appkit-core" }
 appkit-hub = { path = "../appkit-hub" }

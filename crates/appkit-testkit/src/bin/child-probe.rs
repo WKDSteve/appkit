@@ -1,0 +1,132 @@
+//! A program to be started by `appkit_core::child` in a test (`tests/child.rs`). The first
+//! argument says what it plays:
+//!
+//! - `args <a>...`: prints each argument on a line of its own.
+//! - `env <NAME>`: prints the value of the variable, or `(unset)`.
+//! - `cat`: copies stdin to stdout.
+//! - `flood`: writes to stdout without end.
+//! - `sleep`: does nothing for a minute.
+//! - `console`: prints `window` when its console has a window, else `none` (Windows; elsewhere
+//!   `none`).
+//! - `beat <file>`: appends a byte to `<file>` every 50 ms, for half a minute at most or until
+//!   `<file>.stop` exists. A test sees a process live by the file growing.
+//! - `tree <file>`: starts `beat <file>` as a process of its own and then sleeps.
+//! - `leave <file>`: starts `beat <file>` as a process of its own and ends.
+//! - `launch <file>`: as `leave`, but the way a hub starts a program of somebody else
+//!   (`appkit_hub::launch`): it holds no pipe of this program.
+//! - `app <role>...`: plays an app: starts itself with `<role>...` through `child::spawn`,
+//!   prints `started` and sleeps. The test ends it the hard way.
+#![allow(unsafe_code)]
+
+use std::io::{Read, Write};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+use appkit_core::child::{self, Environment, Start};
+use appkit_hub::launch::{self, LaunchOpts, Window};
+
+fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let (role, rest) = args.split_first().expect("the first argument is the role");
+    match role.as_str() {
+        "args" => {
+            for arg in rest {
+                println!("{arg}");
+            }
+        }
+        "env" => {
+            let value = std::env::var(&rest[0]).unwrap_or_else(|_| "(unset)".to_owned());
+            println!("{value}");
+        }
+        "cat" => {
+            let mut text = Vec::new();
+            std::io::stdin().read_to_end(&mut text).expect("read stdin");
+            std::io::stdout().write_all(&text).expect("write stdout");
+        }
+        "flood" => {
+            let block = [b'x'; 4096];
+            let mut out = std::io::stdout();
+            while out.write_all(&block).is_ok() {}
+        }
+        "sleep" => std::thread::sleep(Duration::from_secs(60)),
+        "console" => println!("{}", if console_window() { "window" } else { "none" }),
+        "beat" => beat(&rest[0]),
+        "tree" => {
+            start_beat(&rest[0]);
+            std::thread::sleep(Duration::from_secs(60));
+        }
+        "leave" => start_beat(&rest[0]),
+        "launch" => {
+            let me = std::env::current_exe().expect("the path of this program");
+            let cwd = std::env::current_dir().expect("a working folder");
+            let opts = LaunchOpts {
+                cwd: &cwd,
+                window: Window::Default,
+            };
+            launch::spawn(&me, &["beat", &rest[0]], &opts).expect("start the beat");
+        }
+        "app" => app(rest),
+        other => panic!("unknown role {other}"),
+    }
+}
+
+fn beat(file: &str) {
+    let end = Instant::now() + Duration::from_secs(30);
+    let stop = format!("{file}.stop");
+    while Instant::now() < end && !std::path::Path::new(&stop).exists() {
+        let written = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(file)
+            .and_then(|mut f| f.write_all(b"."));
+        // The folder of the test is gone: so is the reason to live.
+        if written.is_err() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// A process of its own, in the group and the job of this one. Nobody waits for it: this
+/// program ends or sleeps.
+#[allow(clippy::zombie_processes)]
+fn start_beat(file: &str) {
+    Command::new(std::env::current_exe().expect("the path of this program"))
+        .args(["beat", file])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start the beat");
+}
+
+fn app(role: &[String]) {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime");
+    runtime.block_on(async {
+        let me = std::env::current_exe().expect("the path of this program");
+        let start = Start::new("child-probe app", me)
+            .args(role)
+            .env(Environment::Inherited {
+                set: Vec::new(),
+                remove: Vec::new(),
+            });
+        let _child = child::spawn(&start).expect("start the child");
+        println!("started");
+        tokio::time::sleep(Duration::from_secs(60)).await;
+    });
+}
+
+/// Whether the console of this process has a window.
+#[cfg(windows)]
+fn console_window() -> bool {
+    // SAFETY: no arguments; the answer is only compared with null.
+    !unsafe { windows_sys::Win32::System::Console::GetConsoleWindow() }.is_null()
+}
+
+#[cfg(not(windows))]
+fn console_window() -> bool {
+    false
+}

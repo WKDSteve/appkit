@@ -22,3 +22,7 @@ appkit-scratch = { path = "../appkit-scratch" }
 # The one direct call of the system (src/job.rs): the version the rest of the kit uses.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_JobObjects"] }
+
+# The process group and the parent-death signal of a child (src/child/unix.rs): the version tokio already brings.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

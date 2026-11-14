@@ -23,6 +23,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use appkit_core::child::{self, Environment, Leftovers, Start};
 use appkit_core::proc::{self, ProcError};
 use serde::Deserialize;
 use serde_json::Value;
@@ -249,16 +250,14 @@ impl Inner {
                 }
             }
         }
-        let spec = proc::Spec {
-            program: self.cfg.nvim.clone(),
-            args: self.args(method, stdin.is_some()),
-            env: child_env(&self.cfg.env, Some(&vars)),
-            cwd: self
-                .cfg
-                .script
-                .parent()
-                .and_then(Path::parent)
-                .map(Path::to_path_buf),
+        let mut start = Start::as_given("appkit-hub engine call", &self.cfg.nvim)
+            .args(self.args(method, stdin.is_some()))
+            .env(Environment::Only(child_env(&self.cfg.env, Some(&vars))));
+        if let Some(cwd) = self.cfg.script.parent().and_then(Path::parent) {
+            start = start.cwd(cwd);
+        }
+        let run = child::Run {
+            start,
             stdin: stdin.map(String::into_bytes).unwrap_or_default(),
             timeout: if aside {
                 self.cfg.timeout * CHECK_TIMEOUT_FACTOR
@@ -267,8 +266,10 @@ impl Inner {
             },
             max_stdout: self.cfg.max_reply_bytes,
             max_stderr: 64 * 1024,
+            // What an engine call started on purpose stays, as before.
+            leftovers: Leftovers::Keep,
         };
-        let result = proc::run(spec).await;
+        let result = child::run(run).await;
         drop(permit);
 
         let out = result.map_err(|e| match e {

@@ -27,19 +27,17 @@ use std::collections::hash_map::DefaultHasher;
 use std::ffi::OsString;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
-use std::process::Stdio;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
+use appkit_core::child::{self, Environment, Owned, Start};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
+use tokio::process::{ChildStderr, ChildStdin, ChildStdout};
 
 /// The protocol version this hub speaks (the number after `ready`).
 const PROTOCOL: &str = "1";
 /// How long a host may take to say `ready`.
 const READY_TIMEOUT: Duration = Duration::from_secs(15);
-/// How long a killed host may take to be reaped.
-const REAP_GRACE: Duration = Duration::from_secs(2);
 /// Failures in a row after which the host is left alone for a while.
 const MAX_FAILURES: u32 = 3;
 /// How long it is left alone.
@@ -82,9 +80,8 @@ pub enum Failure {
 }
 
 struct Running {
-    child: Child,
-    /// Ends the host's own children with it.
-    _tree: Option<appkit_core::job::Job>,
+    /// The host; what it started ends with it, and both end with the hub (`appkit_core::child`).
+    child: Owned,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
     next_id: u64,
@@ -165,8 +162,7 @@ impl Host {
             if self.fingerprint().await != state.fingerprint {
                 eprintln!("engine host: the engine's files changed, starting it again");
                 if let Some(mut old) = state.running.take() {
-                    let _ = old.child.start_kill();
-                    let _ = tokio::time::timeout(REAP_GRACE, old.child.wait()).await;
+                    old.child.end().await;
                 }
             }
         }
@@ -206,8 +202,7 @@ impl Host {
                 // trusted to be in step.
                 if let Some(mut dead) = state.running.take() {
                     let tail = dead.stderr.lock().map(|s| s.clone()).unwrap_or_default();
-                    let _ = dead.child.start_kill();
-                    let _ = tokio::time::timeout(REAP_GRACE, dead.child.wait()).await;
+                    dead.child.end().await;
                     drop(dead);
                     failure = match failure {
                         Failure::Died(why) if !tail.is_empty() => {
@@ -250,42 +245,29 @@ impl Host {
     pub async fn stop(&self) {
         let mut state = self.state.lock().await;
         if let Some(mut running) = state.running.take() {
-            let _ = running.child.start_kill();
-            let _ = tokio::time::timeout(REAP_GRACE, running.child.wait()).await;
+            running.child.end().await;
         }
     }
 
     async fn start(&self) -> Result<Running, String> {
-        let mut command = Command::new(&self.spec.program);
-        command
+        // The path of Neovim is the one the settings or the search gave: taken as it is.
+        let mut start = Start::as_given("appkit-hub engine host", &self.spec.program)
             .args(&self.spec.args)
-            .env_clear()
-            .envs(self.spec.env.iter().map(|(k, v)| (k, v)))
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
+            .env(Environment::Only(self.spec.env.clone()));
         if let Some(cwd) = &self.spec.cwd {
-            command.current_dir(cwd);
+            start = start.cwd(cwd);
         }
-        #[cfg(windows)]
-        {
-            // CREATE_NO_WINDOW: no console window for a console program.
-            command.creation_flags(0x0800_0000);
-        }
-        let mut child = command
-            .spawn()
-            .map_err(|e| format!("could not start the host: {e}"))?;
+        let mut child =
+            child::spawn(&start).map_err(|e| format!("could not start the host: {e}"))?;
         let (Some(stdin), Some(stdout), Some(stderr)) =
-            (child.stdin.take(), child.stdout.take(), child.stderr.take())
+            (child.take_stdin(), child.take_stdout(), child.take_stderr())
         else {
-            let _ = child.start_kill();
+            child.end().await;
             return Err("a pipe of the host is missing".to_owned());
         };
         let kept = Arc::new(StdMutex::new(String::new()));
         tokio::spawn(keep_tail(stderr, Arc::clone(&kept)));
         let mut running = Running {
-            _tree: appkit_core::job::Job::adopt(&child),
             child,
             stdin,
             stdout: BufReader::new(stdout),
@@ -305,8 +287,7 @@ impl Host {
             return Ok(running);
         }
         let tail = running.stderr.lock().map(|s| s.clone()).unwrap_or_default();
-        let _ = running.child.start_kill();
-        let _ = tokio::time::timeout(REAP_GRACE, running.child.wait()).await;
+        running.child.end().await;
         Err(match ready {
             Err(_) => "the host did not say ready in time".to_owned(),
             Ok(_) if text.is_empty() => format!("the host ended before it was ready: {tail}"),

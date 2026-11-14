@@ -8,6 +8,7 @@
 //! `sse` and `pathguard` follow.
 
 pub mod authn;
+pub mod child;
 pub mod classes;
 pub mod identity;
 pub mod job;

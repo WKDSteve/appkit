@@ -14,7 +14,7 @@ and the same tests. It knows no app: an app brings its names, its routes and its
 
 | Crate | What it is |
 |---|---|
-| `appkit-core` | Building blocks without a server: the names of an app (`AppIdentity`), the data classes and who asks (`DataClass`, `Caller`), pairing and sessions, safe process runs and reads, `hub.json`, `control.secret`. |
+| `appkit-core` | Building blocks without a server: the names of an app (`AppIdentity`), the data classes and who asks (`DataClass`, `Caller`), pairing and sessions, the one way to start a child process (`child`: no window, ends with the app, limits, logged) and safe reads, `hub.json`, `control.secret`. |
 | `appkit-hub` | The hub without the app: the guard (eight steps, in a fixed order), pairing, the page, `hello`, the list of vaults, the accept loop, the seam of the engine (one process per call, or a persistent host), the snapshot store, the file watcher, the full-text search, the event streams (count per session, the `text/event-stream` body), opening a file in Neovim, showing a folder and the folder dialog (`editor`), the phones of an app on the PC (`phone`: the pairing link and its QR code, the list, levels and revoking), Web Push to paired devices (`push`, VAPID without a push account; the sending behind the feature `push-net`), the settings file, the search for Neovim and the engine, installing, autostart and the first-start questions, and for hubs that start other programs: `launch` (argv only, stdio null, nothing inherited) and `browser` (opens only `http://127.0.0.1:<port>/…` for the ports an app names). |
 | `appkit-mobile` | The phone side of a hub, for the shell of a phone app (Tauri): the three ways to the data (Tailscale Serve, an SSH tunnel, a vault cloned on the phone), the pairing link, pairing and the device login with a key the phone keeps, the check that the hub is the one paired with, every request with a time and a byte limit and only to the app's routes, the kept pairing and the kept copy of the answers. See [docs/MOBILE.md](docs/MOBILE.md). |
 | `tauri-plugin-appkit` (`mobile-plugin/`) | The Android side of a phone app (Tauri 2, Kotlin): device keys in the Keystore with the trigger key behind the biometrics, the QR code of a pairing, the folder of a cloned vault, UnifiedPush. Its own Cargo project; an app depends on it by the tag. See [docs/MOBILE.md](docs/MOBILE.md). |
@@ -123,6 +123,14 @@ REPOS_DIR=D:\code                       # finds D:\code\rules.nvim and D:\code\l
 
 ## Starting programs and opening pages
 
+An app starts a process for its own work through `appkit_core::child` and never by hand: the
+child has no console window, is tied to the app (a job object on Windows; a process group
+elsewhere, on Linux with the parent-death signal) so that it ends with the app, gets its
+arguments as an argv, runs under its own name, and its start is in the log. `child::run` is a
+call with a time limit and a size limit, `child::spawn` a child that stays.
+`tools/check-process-starts.py` fails on a start written by hand. See
+[docs/PROCESSES.md](docs/PROCESSES.md).
+
 `launch::spawn(program, args, &LaunchOpts { cwd, window })` starts a program of somebody else:
 the program is an absolute path to a file, the arguments an argv (never a shell string), stdin,
 stdout and stderr are the null device, the standard handles of this process are made not
@@ -168,6 +176,7 @@ cargo test --workspace --all-features --locked
 cargo deny check
 cargo audit
 python3 tools/check-lock-age.py --min-days 7
+python3 tools/check-process-starts.py
 python3 -m unittest discover -s release-kit -p "test_*.py"
 pnpm -C ui-kit install --frozen-lockfile && pnpm -C ui-kit check && pnpm -C ui-kit test
 pnpm -C web-kit test

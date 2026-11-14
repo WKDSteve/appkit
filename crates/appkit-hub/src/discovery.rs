@@ -7,12 +7,11 @@
 //! can list what was tried. No script of the user's own Neovim
 //! configuration is ever loaded: the engine runs with `-u NONE`.
 
-use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use appkit_core::proc;
+use appkit_core::child::{self, Environment, Leftovers, Start};
 
 use crate::config::{AppSettings, Env, FileConfig, Resolved, Source};
 use crate::engine::child_env;
@@ -379,17 +378,18 @@ fn resolve_lib(
 
 /// Ask Neovim for its version, with the same empty environment as the engine.
 async fn probe_nvim(nvim: &Path, env: &Env) -> Result<(u32, u32, u32), SetupProblem> {
-    let spec = proc::Spec {
-        program: nvim.to_path_buf(),
-        args: vec![OsString::from("--version")],
-        env: child_env(env, None),
-        cwd: None,
+    let run = child::Run {
+        // The path the settings or the search gave: taken as it is.
+        start: Start::as_given("appkit-hub nvim version probe", nvim)
+            .arg("--version")
+            .env(Environment::Only(child_env(env, None))),
         stdin: Vec::new(),
         timeout: Duration::from_secs(10),
         max_stdout: 64 * 1024,
         max_stderr: 64 * 1024,
+        leftovers: Leftovers::End,
     };
-    let out = proc::run(spec)
+    let out = child::run(run)
         .await
         .map_err(|e| SetupProblem::NvimProbeFailed(e.to_string()))?;
     let text = String::from_utf8_lossy(&out.stdout);

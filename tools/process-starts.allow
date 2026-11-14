@@ -1,0 +1,17 @@
+# Files that start a process themselves (tools/check-process-starts.py, docs/PROCESSES.md):
+# <path> <count of lines found> <reason>
+
+# The two helpers.
+crates/appkit-core/src/child.rs 2 the helper for children of the app
+crates/appkit-hub/src/launch.rs 2 the helper for a program of somebody else (it outlives the hub on purpose)
+
+# Programs the person sees, handed over and not owned: the default browser, Neovim in a console of its own, the file manager, the folder dialog.
+crates/appkit-hub/src/browser.rs 3 hands a link to the default browser (ShellExecuteW, open, xdg-open)
+crates/appkit-hub/src/editor.rs 5 opens Neovim in a visible console, the file manager and the folder dialog
+
+# Not children of a running app: the hub puts itself in the background and stops another hub. Its calls of reg.exe, taskkill.exe and kill are short system tools that have not moved to the helper yet.
+crates/appkit-hub/src/background.rs 6 starts the hub itself in the background; reg.exe, taskkill.exe, kill not moved yet
+crates/appkit-core/src/registry.rs 1 icacls.exe on the secret file, a blocking call that has not moved to the helper yet
+
+# A test program (it plays a child that starts a process of its own).
+crates/appkit-testkit/src/bin/child-probe.rs 1 the probe of the child tests

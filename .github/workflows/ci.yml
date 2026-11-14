@@ -113,7 +113,8 @@ jobs:
       - run: cargo deny --manifest-path mobile-plugin/Cargo.toml check
       - run: python tools/check-lock-age.py --min-days 7 --lock mobile-plugin/Cargo.lock
 
-  # The tools test themselves; no control character in a tracked file, no colour in the CSS of the kit outside its tokens.
+  # The tools test themselves; no control character in a tracked file, no process started by hand, no colour in the CSS of
+  # the kit outside its tokens.
   hygiene:
     runs-on: [self-hosted, windows]
     timeout-minutes: 10
@@ -123,6 +124,8 @@ jobs:
           persist-credentials: false
       - run: python -m unittest discover tools
       - run: python tools/check-control-chars.py
+      # No process is started by hand: only through appkit_core::child and appkit_hub::launch (docs/PROCESSES.md).
+      - run: python tools/check-process-starts.py
       - run: python tools/check-color-literals.py --root ui-kit/src --tokens ui-kit/src/tokens.css
 
   # The release kit (release-kit): stamping, install.sh with Git Bash, install.ps1 with pwsh and
