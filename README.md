@@ -1,3 +1,5 @@
+![appkit](assets/icons/appkit/png/appkit-128.png)
+
 # appkit
 
 The shared foundation of the local desktop hubs of
