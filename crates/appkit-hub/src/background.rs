@@ -85,9 +85,10 @@ pub fn alone_grace(app: &Background<'_>, env: &Env) -> Duration {
 }
 
 /// Whether the person gave the hub an order to run without a page: `keep_running` of the settings,
-/// a paired device (a phone reaches the hub when no page is open on the PC), or the start with the
-/// login. The login entry of the machine is not asked when the tests of the program say it is not
-/// theirs (`NO_LOGIN_SYNC`).
+/// a paired device (a phone reaches the hub when no page is open on the PC), the start with the
+/// login, or the starter said so ([`stay_var`]: hub-desktop for the hubs it starts with itself). The
+/// login entries of the machine are not asked when the tests of the program say they are not theirs
+/// (`NO_LOGIN_SYNC`).
 #[must_use]
 pub fn has_order(
     app: &Background<'_>,
@@ -97,7 +98,18 @@ pub fn has_order(
 ) -> bool {
     keep_running
         || paired_devices > 0
-        || (env.get(&no_login_sync(app)).is_none() && autostart_is_on(app))
+        || env.get(&stay_var(app.identity())).is_some()
+        || (env.get(&no_login_sync(app)).is_none()
+            && crate::loginstate::is_on(app.identity(), env, &crate::loginstate::SystemLogin)
+                == Some(true))
+}
+
+/// The variable a starter sets for `<program> start` when the hub it puts in the background is to
+/// stay without a page (`<APP>_STAY`, any value): hub-desktop does for the hubs of `start_with_hub`.
+/// `start` passes its environment on to the hub, so the hub sees it in [`has_order`].
+#[must_use]
+pub fn stay_var(identity: &AppIdentity) -> String {
+    identity.var("STAY")
 }
 
 /// Resolves when a hub should end itself. A hub in the background: no page has been connected for
@@ -408,8 +420,12 @@ fn system_program(name: &str) -> Result<PathBuf, String> {
 /// # Errors
 ///
 /// A text for the person at the terminal.
+///
+/// The start with the login is one state, which hub-desktop shows and switches too
+/// ([`crate::loginstate`]): for an app that hub-desktop takes over, `on` puts it into the list of
+/// hub-desktop while hub-desktop starts with the login, `off` takes it out of that list as well, and
+/// `status` says which of the two starts it.
 pub fn autostart(app: &Background<'_>, what: Autostart) -> Result<String, String> {
-    let exe = std::env::current_exe().map_err(|e| format!("own program not found: {e}"))?;
     let env = Env::from_process();
     // The login entry is in the registry, which a packaged app redirects whatever
     // the config folder is; the folder of AppData always exists to be probed.
@@ -419,7 +435,50 @@ pub fn autostart(app: &Background<'_>, what: Autostart) -> Result<String, String
     {
         eprintln!("{warning}");
     }
-    autostart_for(app, what, &exe)
+    let own_program = || std::env::current_exe().map_err(|e| format!("own program not found: {e}"));
+    let said = autostart_with(
+        app,
+        what,
+        own_program,
+        &env,
+        &crate::loginstate::SystemLogin,
+    )?;
+    // The own entry as the system shows it (the command it runs).
+    if what == Autostart::Status
+        && said.starts_with("on: its own")
+        && let Ok(exe) = own_program()
+        && let Ok(own) = autostart_for(app, Autostart::Status, &exe)
+    {
+        return Ok(own);
+    }
+    Ok(said)
+}
+
+/// [`autostart`] with the program the own entry starts, the environment and the login entries given.
+///
+/// # Errors
+///
+/// A text for the person at the terminal.
+pub fn autostart_with(
+    app: &Background<'_>,
+    what: Autostart,
+    program: impl FnOnce() -> Result<PathBuf, String>,
+    env: &Env,
+    login: &dyn crate::loginstate::LoginEntries,
+) -> Result<String, String> {
+    use crate::loginstate::{self, Via};
+    match what {
+        Autostart::On => loginstate::set(app.identity(), true, program, env, login),
+        Autostart::Off => loginstate::set(app.identity(), false, program, env, login),
+        Autostart::Status => match loginstate::state(app.identity(), env, login) {
+            Some(Some(Via::Own)) => Ok("on: its own login entry\n".to_owned()),
+            Some(Some(Via::HubDesktop)) => {
+                Ok("on: hub-desktop starts it with your login (start_with_hub)\n".to_owned())
+            }
+            Some(None) => Ok("off\n".to_owned()),
+            None => Err("the login entries of this system cannot be read".to_owned()),
+        },
+    }
 }
 
 /// [`autostart`] for the program at `exe` (what `install` registers).
@@ -2295,6 +2354,18 @@ mod tests {
         assert!(!has_order(&APP, &env, false, 0));
         assert!(has_order(&APP, &env, true, 0));
         assert!(has_order(&APP, &env, false, 1));
+    }
+
+    /// A hub that hub-desktop starts with itself is told to stay by the variable of its starter, which
+    /// `start` passes on (the login entries are not asked here either).
+    #[test]
+    fn the_word_of_the_starter_is_an_order_to_stay() {
+        assert_eq!(stay_var(APP.identity()), "RULES_DESKTOP_STAY");
+        let env = Env::from_pairs([
+            ("RULES_DESKTOP_NO_LOGIN_SYNC", "1"),
+            ("RULES_DESKTOP_STAY", "1"),
+        ]);
+        assert!(has_order(&APP, &env, false, 0));
     }
 
     #[test]

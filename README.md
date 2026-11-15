@@ -156,8 +156,21 @@ gives the app what it needs to end it:
   (`<APP>_ALONE_SECS`: another time) and `stay` says no. It never resolves for a hub in a
   terminal. The app waits for it beside Ctrl-C and shuts down the same way.
 - `background::has_order(&APP, &env, keep_running, server.paired_devices())` is the usual
-  `stay`: `keep_running` of `config.json` (a key of every hub), a paired device, or the start
-  with the login.
+  `stay`: `keep_running` of `config.json` (a key of every hub), a paired device, the start
+  with the login, or `<APP>_STAY` from the starter (hub-desktop sets it for the hubs it starts
+  with itself; `start` passes it on).
+
+## The start with the login is one state
+
+Whether an app starts with the login is read and switched by the app (`<program> autostart
+on|off|status`, `background::autostart`, and the switch of its page) and by hub-desktop (the
+switch of its tile) through the same functions, `loginstate::state`, `is_on` and `set`. The state
+is the app's own login entry, or, for an app hub-desktop takes over (`loginstate::TAKEN_OVER`:
+tasks, rules, testing), its id in `start_with_hub` of hub-desktop's `config.json` while hub-desktop
+itself starts with the login. On goes into that list while hub-desktop starts with the login and
+into the own entry otherwise; off takes it out of both. Nothing keeps a copy, so a change on one
+side is what the other side shows. The tests pass a fake `LoginEntries` and their own
+`HUB_DESKTOP_CONFIG_DIR`, never the login of the machine.
 - `background::started_now(text)` tells a start that started a hub from one that found it
   running: who started a hub for a page stops it again when the page cannot be opened.
 

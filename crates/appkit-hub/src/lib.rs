@@ -68,6 +68,7 @@ pub mod instance;
 pub mod launch;
 pub mod limits;
 pub mod loginitems;
+pub mod loginstate;
 pub mod phone;
 pub mod presence;
 mod process;
