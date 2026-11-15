@@ -1,4 +1,5 @@
-//! The folder dialog of Windows, shown by this process (`IFileOpenDialog` with `FOS_PICKFOLDERS`).
+//! The folder dialog of Windows, shown by this process (`IFileOpenDialog` with `FOS_PICKFOLDERS`), and the same
+//! dialog asking for one program file by its name (`nvim.exe`).
 //!
 //! No program is started for it: the dialog is an object of the system that lives in this
 //! process. It wants a thread with a single-threaded apartment and a message loop of its own,
@@ -20,7 +21,8 @@ use windows_sys::Win32::System::Com::{
     COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
 };
 use windows_sys::Win32::UI::Shell::{
-    FileOpenDialog, FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS, SIGDN_FILESYSPATH,
+    FileOpenDialog, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_PATHMUSTEXIST, FOS_PICKFOLDERS,
+    SIGDN_FILESYSPATH,
 };
 
 /// `IFileOpenDialog`.
@@ -30,6 +32,7 @@ const IID_FILE_OPEN_DIALOG: GUID = GUID::from_u128(0xd57c7288_d4ad_4768_be02_9d9
 // `IFileDialog` the next twenty-three; `IShellItem` follows `IUnknown` directly.
 const RELEASE: usize = 2;
 const DIALOG_SHOW: usize = 3;
+const DIALOG_SET_FILE_TYPES: usize = 4;
 const DIALOG_SET_OPTIONS: usize = 9;
 const DIALOG_GET_OPTIONS: usize = 10;
 #[cfg(test)]
@@ -104,12 +107,37 @@ fn failed(what: &str, code: HRESULT) -> String {
     format!("{what} (the system answered {:#010x})", code as u32)
 }
 
-/// The dialog, made and set to ask for a folder of the file system. Lives on the thread that made
-/// it, inside an [`Apartment`].
-struct Dialog(Object);
+/// `COMDLG_FILTERSPEC`: the name of a file type and its pattern, as the dialog shows them.
+#[repr(C)]
+struct FilterSpec {
+    name: *const u16,
+    spec: *const u16,
+}
+
+/// What the dialog asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ask<'a> {
+    /// A folder of the file system.
+    Folder,
+    /// One existing file of the file system with exactly this name (`nvim.exe`); the dialog lists no other.
+    File(&'a str),
+}
+
+/// The dialog, made and set to ask for a folder (or a file) of the file system. Lives on the thread
+/// that made it, inside an [`Apartment`]. The texts of its filter are kept with it: the system does not say
+/// that it copies them.
+struct Dialog(Object, Vec<Vec<u16>>);
+
+fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain([0]).collect()
+}
 
 impl Dialog {
     fn new() -> Result<Self, String> {
+        Self::asking(Ask::Folder)
+    }
+
+    fn asking(ask: Ask<'_>) -> Result<Self, String> {
         let mut raw: *mut c_void = std::ptr::null_mut();
         // SAFETY: the ids are constants, no outer object, `raw` receives the reference.
         let made = unsafe {
@@ -124,13 +152,35 @@ impl Dialog {
         if made != S_OK || raw.is_null() {
             return Err(failed("the folder dialog could not be made", made));
         }
-        let dialog = Self(Object(raw));
-        let options = dialog.options()? | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM;
+        let mut dialog = Self(Object(raw), Vec::new());
+        let options = dialog.options()?
+            | FOS_FORCEFILESYSTEM
+            | match ask {
+                Ask::Folder => FOS_PICKFOLDERS,
+                Ask::File(_) => FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST,
+            };
         type SetOptions = unsafe extern "system" fn(*mut c_void, u32) -> HRESULT;
         // SAFETY: `IFileDialog::SetOptions(FILEOPENDIALOGOPTIONS)` at its place in the table.
         let set = unsafe { dialog.0.method::<SetOptions>(DIALOG_SET_OPTIONS)(raw, options) };
         if set != S_OK {
             return Err(failed("the folder dialog could not be set up", set));
+        }
+        if let Ask::File(name) = ask {
+            dialog.1 = vec![wide(name), wide(name)];
+            let filter = [FilterSpec {
+                name: dialog.1[0].as_ptr(),
+                spec: dialog.1[1].as_ptr(),
+            }];
+            type SetFileTypes =
+                unsafe extern "system" fn(*mut c_void, u32, *const FilterSpec) -> HRESULT;
+            // SAFETY: `IFileDialog::SetFileTypes(UINT, const COMDLG_FILTERSPEC*)` at its place; one entry whose
+            // strings are NUL-terminated and live as long as the dialog.
+            let typed = unsafe {
+                dialog.0.method::<SetFileTypes>(DIALOG_SET_FILE_TYPES)(raw, 1, filter.as_ptr())
+            };
+            if typed != S_OK {
+                return Err(failed("the file dialog could not be set up", typed));
+            }
         }
         Ok(dialog)
     }
@@ -254,6 +304,17 @@ pub fn pick_folder() -> Result<Option<PathBuf>, String> {
     on_own_thread(|| Dialog::new()?.ask())
 }
 
+/// Ask the person for one existing file named `name` (`nvim.exe`) and wait for the answer. `Ok(None)`:
+/// the dialog was closed without a choice. The caller checks what the file is before it uses it: the
+/// filter of the dialog is a help for the person, not a check (a typed name passes it).
+///
+/// # Errors
+///
+/// The system could not make or show the dialog.
+pub fn pick_file(name: &str) -> Result<Option<PathBuf>, String> {
+    on_own_thread(|| Dialog::asking(Ask::File(name))?.ask())
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicIsize, Ordering};
@@ -279,6 +340,15 @@ mod tests {
     fn the_dialog_is_made_in_this_process_and_asks_for_a_folder() {
         let options = on_own_thread(|| Dialog::new()?.options()).unwrap();
         assert_ne!(options & FOS_PICKFOLDERS, 0, "{options:#x}");
+        assert_ne!(options & FOS_FORCEFILESYSTEM, 0, "{options:#x}");
+    }
+
+    /// Asked for a program, the dialog wants one file that exists, not a folder.
+    #[test]
+    fn the_dialog_for_a_program_asks_for_a_file_that_exists() {
+        let options = on_own_thread(|| Dialog::asking(Ask::File("nvim.exe"))?.options()).unwrap();
+        assert_eq!(options & FOS_PICKFOLDERS, 0, "{options:#x}");
+        assert_ne!(options & FOS_FILEMUSTEXIST, 0, "{options:#x}");
         assert_ne!(options & FOS_FORCEFILESYSTEM, 0, "{options:#x}");
     }
 

@@ -1,15 +1,24 @@
-//! The first start by a double click: where the vault is, and whether to install the program.
+//! The first start: where the vault is, where Neovim is, and whether to install the program.
 //!
-//! Asked in a console, one question at a time, each only once: what was answered (or declined) is
-//! remembered in `setup.json` in the config folder, so a second click asks nothing. A console program
-//! asks in the console the double click opened, or in the terminal it was started from. A window program
-//! (the release build of a hub on Windows, see `appkit_core::console`) has no console after a double
-//! click, and the shell of a terminal does not wait for it: [`Console`] opens a console window of its
-//! own for the questions, only when there is something to ask, and closes it afterwards. Without a person
-//! (a pipe, a script, a service) nothing is asked and nothing is installed: [`interactive`] is false and
-//! the program only starts the hub. The questions change no file
-//! but the settings of the app, the install folder of the user and, when it is said yes to, the login entry
-//! and the desktop link (everything `<program> install` does, which this calls).
+//! **In the page** after a double click: the hub starts without asking anything, and its page shows what
+//! is missing (the vault, Neovim) and offers the installation. The page names no path: the folder and the
+//! program are chosen in the dialog of the system that the hub shows ([`crate::editor::pick_program`],
+//! the folder dialog of the opener), and the hub checks what was chosen ([`checked_vault`],
+//! [`checked_nvim`]) before it keeps it. The installation runs as `<program> install` of its own
+//! ([`start_install`]): it stops this hub, copies the program and starts the hub again from the copy.
+//!
+//! **In the terminal** as the second way: a console program started from a terminal (both ends at it;
+//! the debug build, every program on macOS and Linux) asks as before, and `<program> setup` asks
+//! always. A window program (the release build of a hub on Windows, see `appkit_core::console`) shares
+//! the terminal with a shell that does not wait for it: for `setup` [`Console`] opens a console window
+//! of its own, only when there is something to ask, and closes it afterwards. A double click never gets
+//! a console window: [`interactive`] is false for it, as for a start without a person (a pipe, a
+//! script, a service).
+//!
+//! Each question is asked only once: what was answered (or declined) is remembered in `setup.json` in
+//! the config folder, so a second start asks nothing. The questions change no file but the settings of
+//! the app, the install folder of the user and, when it is said yes to, the login entry and the desktop
+//! link (everything `<program> install` does, which this calls).
 
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -123,7 +132,6 @@ pub fn interactive(app: &SetupApp<'_>, env: &Env) -> bool {
         || person_present(
             console::attach_parent(),
             std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
-            console::started_without_streams(),
         )
 }
 
@@ -138,13 +146,14 @@ fn needs_window(console: console::Console, without_streams: bool) -> bool {
     }
 }
 
-/// Whether a person started the program, by what it got: with a console, both ends at a terminal (with
-/// the output in a file or a pipe the questions would go where nobody reads them); without one, no
-/// streams at all (a double click, a link; a script or a service gives at least the null device).
-fn person_present(console: console::Console, terminal: bool, without_streams: bool) -> bool {
+/// Whether the questions are asked in a console without being asked for (`<program> setup`): only in a console
+/// of the program's own with both ends at a terminal (with the output in a file or a pipe the questions would go
+/// where nobody reads them). A window program in the terminal's console shares it with the shell, and a double
+/// click (no console, no streams) gets the page: neither opens a console window for the questions.
+fn person_present(console: console::Console, terminal: bool) -> bool {
     match console {
-        console::Console::Own | console::Console::Parent => terminal,
-        console::Console::None => without_streams,
+        console::Console::Own => terminal,
+        console::Console::Parent | console::Console::None => false,
     }
 }
 
@@ -212,22 +221,18 @@ fn ask_vault<A: AppSettings>(
         if answer.is_empty() {
             return Ok(());
         }
-        // Looked at before anything touches it: opening a network share (`\\host\share`) makes Windows sign in to that host.
-        if config::is_remote_path(answer) {
-            io.say("A network folder is not accepted: use a drive or a mounted folder.");
-            continue;
-        }
         // The console's folder means something to the person, the hub's does not: keep the whole path.
-        let typed = PathBuf::from(answer);
-        let path = if typed.is_absolute() {
-            typed
-        } else {
-            std::env::current_dir().map_or(typed.clone(), |cwd| cwd.join(&typed))
+        let path = match checked_vault(answer, std::env::current_dir().ok().as_deref()) {
+            Ok(path) => path,
+            Err(VaultRefusal::NotAFolder(path)) => {
+                io.say(&format!("{} is not a folder.", path.display()));
+                continue;
+            }
+            Err(refused) => {
+                io.say(&format!("{}.", capitalised(refused.for_page())));
+                continue;
+            }
         };
-        if !path.is_dir() {
-            io.say(&format!("{} is not a folder.", path.display()));
-            continue;
-        }
         file.vault = Some(path.clone());
         config::save_file(dir, &file)?;
         io.say(&format!(
@@ -241,6 +246,253 @@ fn ask_vault<A: AppSettings>(
         app.vault_var
     ));
     Ok(())
+}
+
+/// The text with its first letter in upper case (a text of the page said in the console).
+fn capitalised(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
+}
+
+/// Why a folder is not taken as the vault.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VaultRefusal {
+    /// A network folder (`\\host\share`): not looked at, since opening it makes Windows sign in to that host.
+    Remote,
+    /// A relative path with no folder to take it from.
+    Relative,
+    /// Nothing, or a file, at this path.
+    NotAFolder(PathBuf),
+}
+
+impl VaultRefusal {
+    /// A short text for the page: no path.
+    #[must_use]
+    pub fn for_page(&self) -> &'static str {
+        match self {
+            Self::Remote => "a network folder is not accepted: use a drive or a mounted folder",
+            Self::Relative => "the folder must be given with its whole path",
+            Self::NotAFolder(_) => "there is no such folder",
+        }
+    }
+}
+
+/// The folder `answer` names as the vault, checked: not a network folder (looked at before anything touches
+/// it), a folder that is there, with its whole path. A relative answer is taken from `base` (the folder of the
+/// console); without one it is refused (the page always names a whole path).
+///
+/// # Errors
+///
+/// Why the folder is not taken.
+pub fn checked_vault(answer: &str, base: Option<&Path>) -> Result<PathBuf, VaultRefusal> {
+    if config::is_remote_path(answer) {
+        return Err(VaultRefusal::Remote);
+    }
+    let typed = PathBuf::from(answer);
+    let path = if typed.is_absolute() {
+        typed
+    } else {
+        base.ok_or(VaultRefusal::Relative)?.join(&typed)
+    };
+    if config::is_remote_path(&path.to_string_lossy()) {
+        return Err(VaultRefusal::Remote);
+    }
+    if !path.is_dir() {
+        return Err(VaultRefusal::NotAFolder(path));
+    }
+    Ok(path)
+}
+
+/// Whether the file is the program of Neovim by its name (`nvim`, `nvim.exe`; case does not count on Windows).
+fn named_like_nvim(path: &Path) -> bool {
+    let wanted = crate::editor::nvim_file_name();
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| {
+            if cfg!(windows) {
+                name.eq_ignore_ascii_case(wanted)
+            } else {
+                name == wanted
+            }
+        })
+}
+
+/// Check a Neovim the person chose in the dialog before it is kept: a file named as the program of Neovim
+/// (nothing else is started to ask its version), not on a network folder, that answers `--version` with a
+/// version the engine supports. Returns that version.
+///
+/// # Errors
+///
+/// A short text for the page, no path: what is wrong with the choice.
+pub async fn checked_nvim(path: &Path, env: &Env) -> Result<(u32, u32, u32), String> {
+    if config::is_remote_path(&path.to_string_lossy()) {
+        return Err("a program on a network folder is not accepted".to_owned());
+    }
+    if !named_like_nvim(path) {
+        return Err(format!(
+            "choose the program {} of Neovim",
+            crate::editor::nvim_file_name()
+        ));
+    }
+    crate::discovery::check_nvim(path, env)
+        .await
+        .map_err(|problem| match problem {
+            crate::discovery::SetupProblem::NvimTooOld { found: (a, b, c) } => {
+                let (x, y, z) = crate::discovery::MIN_NVIM;
+                format!("this Neovim is {a}.{b}.{c}; {x}.{y}.{z} or newer is needed")
+            }
+            crate::discovery::SetupProblem::NvimNotFound { .. } => {
+                "there is no such program".to_owned()
+            }
+            _ => "this program did not answer as Neovim does".to_owned(),
+        })
+}
+
+/// What the page offers about the installation of the program.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstallOffer {
+    /// The hub runs from the installed copy, or from a file with the same bytes: nothing to offer.
+    Installed,
+    /// Nothing is installed: install (with the link and the login entry, when chosen).
+    Install,
+    /// Another version is installed: replace it with this one.
+    Replace,
+    /// The person said no once: the page does not offer it again by itself.
+    Declined,
+}
+
+/// The state of the installation, from where this program runs and what the install folder holds.
+fn install_state(
+    app: &SetupApp<'_>,
+    env: &Env,
+    asked: &Asked,
+) -> Result<(InstallOffer, PathBuf), String> {
+    let target = background::installed_program(app.background, env)?;
+    let from = std::env::current_exe().map_err(|e| format!("own program not found: {e}"))?;
+    if matches!(
+        (std::fs::canonicalize(&from), std::fs::canonicalize(&target)),
+        (Ok(a), Ok(b)) if a == b
+    ) || (target.is_file() && same_bytes(&from, &target))
+    {
+        return Ok((InstallOffer::Installed, target));
+    }
+    if asked.install_declined {
+        return Ok((InstallOffer::Declined, target));
+    }
+    let offer = if target.is_file() {
+        InstallOffer::Replace
+    } else {
+        InstallOffer::Install
+    };
+    Ok((offer, target))
+}
+
+/// What the page offers about the installation now.
+///
+/// # Errors
+///
+/// No install folder, or the own program is not found.
+pub fn install_offer(app: &SetupApp<'_>, env: &Env) -> Result<InstallOffer, String> {
+    let dir = instance::config_folder(env, app.identity())?;
+    install_state(app, env, &load_asked(&dir)).map(|(offer, _)| offer)
+}
+
+/// The person said no to the installation in the page: it is not offered again (nor asked in the console).
+///
+/// # Errors
+///
+/// The note cannot be written.
+pub fn decline_install(app: &SetupApp<'_>, env: &Env) -> Result<(), String> {
+    let dir = instance::config_folder(env, app.identity())?;
+    let mut asked = load_asked(&dir);
+    asked.install_declined = true;
+    save_asked(&dir, &asked)
+}
+
+/// The vault was chosen (in the page): the console does not ask for it again.
+///
+/// # Errors
+///
+/// The note cannot be written.
+pub fn note_vault_chosen(app: &SetupApp<'_>, env: &Env) -> Result<(), String> {
+    let dir = instance::config_folder(env, app.identity())?;
+    let mut asked = load_asked(&dir);
+    asked.vault = true;
+    save_asked(&dir, &asked)
+}
+
+/// Forget what was asked and declined, so that `<program> setup` asks again.
+///
+/// # Errors
+///
+/// The note cannot be removed.
+pub fn forget_asked(app: &SetupApp<'_>, env: &Env) -> Result<(), String> {
+    let dir = instance::config_folder(env, app.identity())?;
+    match std::fs::remove_file(asked_path(&dir)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("cannot remove the setup notes: {e}")),
+    }
+}
+
+/// The arguments of `<program> install` for what the person chose in the page.
+#[must_use]
+pub fn install_args(autostart: bool, shortcut: bool) -> Vec<&'static str> {
+    let mut args = vec!["install"];
+    if autostart {
+        args.push("--autostart");
+    }
+    if shortcut {
+        args.push("--shortcut");
+    }
+    args
+}
+
+/// Start `<program> install` as a process of its own, from the program this hub runs from: it stops this hub,
+/// copies the program to the install folder and starts the hub again from there (what it does in a terminal).
+/// It is not a child of the hub: it outlives it. `<PREFIX>_INSTALL_LOG` (a file) is the seam of the tests: the
+/// arguments are written there instead.
+///
+/// # Errors
+///
+/// The program could not be started (or the log not written).
+pub fn start_install(
+    app: &SetupApp<'_>,
+    env: &Env,
+    autostart: bool,
+    shortcut: bool,
+) -> Result<(), String> {
+    let args = install_args(autostart, shortcut);
+    if let Some(log) = env.path(&app.identity().var("INSTALL_LOG")) {
+        let line = format!(
+            "{}
+",
+            args.join(" ")
+        );
+        return std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log)
+            .and_then(|mut out| out.write_all(line.as_bytes()))
+            .map_err(|_| "the test log cannot be written".to_owned());
+    }
+    let program = std::env::current_exe().map_err(|e| format!("own program not found: {e}"))?;
+    let cwd = program
+        .parent()
+        .ok_or_else(|| "the program has no folder".to_owned())?
+        .to_path_buf();
+    crate::launch::spawn(
+        &program,
+        &args,
+        &crate::launch::LaunchOpts {
+            cwd: &cwd,
+            window: crate::launch::Window::Default,
+        },
+    )
+    .map(|_pid| ())
 }
 
 /// Whether two files hold the same bytes.
@@ -268,7 +520,7 @@ async fn ask_install(
         .parent()
         .map_or_else(String::new, |p| p.display().to_string());
     if target.is_file() {
-        if same_bytes(&from, &target) {
+        if install_state(app, env, asked)?.0 == InstallOffer::Installed {
             return Ok(Some(target));
         }
         if asked.install_declined
@@ -484,25 +736,150 @@ mod tests {
         }
     }
 
-    /// A window program without a console asks only after a double click or a link (no streams at all);
-    /// with a console (its own or the terminal's) only with both ends at the terminal.
+    /// Only a console of the program's own with both ends at the terminal is asked in without `setup`: a double
+    /// click (no console, no streams) and a window program in the terminal's console get the page, so no console
+    /// window is opened for them.
     #[test]
-    fn a_person_is_assumed_by_the_console_and_the_streams_the_program_got() {
+    fn only_a_console_of_its_own_at_a_terminal_is_asked_in_and_a_double_click_gets_the_page() {
         use appkit_core::console::Console as C;
-        for (console, terminal, without_streams, expected) in [
-            (C::Own, true, false, true),
-            (C::Own, false, false, false),
-            (C::Parent, true, false, true),
-            (C::Parent, false, false, false),
-            (C::None, false, true, true),
-            (C::None, false, false, false),
+        for (console, terminal, expected) in [
+            (C::Own, true, true),
+            (C::Own, false, false),
+            (C::Parent, true, false),
+            (C::Parent, false, false),
+            (C::None, false, false),
         ] {
             assert_eq!(
-                person_present(console, terminal, without_streams),
+                person_present(console, terminal),
                 expected,
-                "{console:?} terminal={terminal} without_streams={without_streams}"
+                "{console:?} terminal={terminal}"
             );
         }
+    }
+
+    #[test]
+    fn a_folder_for_the_vault_is_checked_before_it_is_kept() {
+        let vault = temp("checked-vault");
+        assert_eq!(
+            checked_vault(&vault.display().to_string(), None),
+            Ok(vault.to_path_buf())
+        );
+        // The page names whole paths only; the console takes a relative one from its folder.
+        assert_eq!(checked_vault("sub", None), Err(VaultRefusal::Relative));
+        std::fs::create_dir(vault.join("sub")).unwrap();
+        assert_eq!(checked_vault("sub", Some(&vault)), Ok(vault.join("sub")));
+        let share = format!("{0}{0}no-such-host{0}share", '\\');
+        assert_eq!(checked_vault(&share, None), Err(VaultRefusal::Remote));
+        let gone = vault.join("gone");
+        assert_eq!(
+            checked_vault(&gone.display().to_string(), None),
+            Err(VaultRefusal::NotAFolder(gone))
+        );
+        let file = vault.join("a.md");
+        std::fs::write(&file, "x").unwrap();
+        assert!(checked_vault(&file.display().to_string(), None).is_err());
+        // The texts for the page name no path.
+        for refused in [
+            VaultRefusal::Remote,
+            VaultRefusal::Relative,
+            VaultRefusal::NotAFolder(file),
+        ] {
+            assert!(!refused.for_page().contains(&*vault.display().to_string()));
+        }
+    }
+
+    /// Only a file named as the program of Neovim is started to ask its version: a program the person chose by
+    /// mistake (or that a page would like to run) is refused before it runs.
+    #[tokio::test]
+    async fn a_chosen_neovim_is_refused_unless_it_is_named_so_and_there() {
+        let dir = temp("checked-nvim");
+        let other = dir.join(if cfg!(windows) { "calc.exe" } else { "calc" });
+        std::fs::write(&other, "not run").unwrap();
+        let env = Env::from_pairs([("A", "b")]);
+        let refused = checked_nvim(&other, &env).await.unwrap_err();
+        assert!(
+            refused.contains(crate::editor::nvim_file_name()),
+            "{refused}"
+        );
+        let missing = dir.join(crate::editor::nvim_file_name());
+        assert_eq!(
+            checked_nvim(&missing, &env).await.unwrap_err(),
+            "there is no such program"
+        );
+        let share = format!("{0}{0}no-such-host{0}share{0}nvim.exe", '\\');
+        assert!(checked_nvim(Path::new(&share), &env)
+            .await
+            .unwrap_err()
+            .contains("network"));
+        // A file of that name that is no program does not answer as Neovim does.
+        std::fs::write(&missing, "not a program").unwrap();
+        let broken = checked_nvim(&missing, &env).await.unwrap_err();
+        assert_eq!(broken, "this program did not answer as Neovim does");
+        assert!(named_like_nvim(Path::new(if cfg!(windows) {
+            "C:/x/NVIM.EXE"
+        } else {
+            "/x/nvim"
+        })));
+    }
+
+    #[test]
+    fn the_installation_is_offered_until_it_is_done_or_declined() {
+        let (env, config, bin) = run_env("offer");
+        assert_eq!(install_offer(&APP, &env).unwrap(), InstallOffer::Install);
+        std::fs::write(bin.join(IDENTITY.program_file()), "an older program").unwrap();
+        assert_eq!(install_offer(&APP, &env).unwrap(), InstallOffer::Replace);
+        // The same bytes as this program: installed.
+        std::fs::copy(
+            std::env::current_exe().unwrap(),
+            bin.join(IDENTITY.program_file()),
+        )
+        .unwrap();
+        assert_eq!(install_offer(&APP, &env).unwrap(), InstallOffer::Installed);
+        std::fs::remove_file(bin.join(IDENTITY.program_file())).unwrap();
+
+        decline_install(&APP, &env).unwrap();
+        assert_eq!(install_offer(&APP, &env).unwrap(), InstallOffer::Declined);
+        assert!(
+            load_asked(&config).install_declined,
+            "the console does not ask either"
+        );
+        note_vault_chosen(&APP, &env).unwrap();
+        let asked = load_asked(&config);
+        assert!(asked.vault && asked.install_declined);
+        // `setup` asks again.
+        forget_asked(&APP, &env).unwrap();
+        forget_asked(&APP, &env).unwrap();
+        assert_eq!(install_offer(&APP, &env).unwrap(), InstallOffer::Install);
+    }
+
+    #[test]
+    fn the_installation_of_the_page_is_the_install_command_with_what_was_chosen() {
+        assert_eq!(install_args(false, false), ["install"]);
+        assert_eq!(
+            install_args(true, true),
+            ["install", "--autostart", "--shortcut"]
+        );
+        assert_eq!(install_args(false, true), ["install", "--shortcut"]);
+        let (env, config, _bin) = run_env("install-log");
+        let log = config.join("install.log");
+        let mut pairs: Vec<(String, String)> = vec![(
+            "RULES_DESKTOP_INSTALL_LOG".to_owned(),
+            log.display().to_string(),
+        )];
+        pairs.extend(
+            ["RULES_DESKTOP_CONFIG_DIR", "RULES_DESKTOP_INSTALL_DIR"]
+                .iter()
+                .filter_map(|k| {
+                    env.get(k)
+                        .map(|v| ((*k).to_owned(), v.to_string_lossy().into_owned()))
+                }),
+        );
+        let env = Env::from_pairs(pairs);
+        start_install(&APP, &env, true, false).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            "install --autostart\n"
+        );
     }
 
     /// Answers piped in (a spec with `ASSUME_TERMINAL`, also of a release build) are read from the pipe; the

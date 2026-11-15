@@ -402,6 +402,21 @@ async fn probe_nvim(nvim: &Path, env: &Env) -> Result<(u32, u32, u32), SetupProb
     Ok(version)
 }
 
+/// Probe a Neovim that a person chose (the page of the first start) before it is kept in the settings:
+/// the same probe as the search, with the same oldest version. Only a file that exists is started.
+///
+/// # Errors
+///
+/// [`SetupProblem::NvimNotFound`] for a path that is no file, else what the probe found.
+pub async fn check_nvim(nvim: &Path, env: &Env) -> Result<(u32, u32, u32), SetupProblem> {
+    if !nvim.is_absolute() || !nvim.is_file() {
+        return Err(SetupProblem::NvimNotFound {
+            tried: vec![nvim.display().to_string()],
+        });
+    }
+    probe_nvim(nvim, env).await
+}
+
 /// Resolve everything the engine needs and probe Neovim.
 ///
 /// # Errors

@@ -238,14 +238,22 @@ release kit did before `v0.56.1` (`appkit-testkit/tests/install_ps1.rs`). A `.cm
 itself. Closing the terminal ends
 a hub that runs in it (`serve`); `start` puts the hub in the background, which outlives it.
 
-**Questions on stdin go to a window of their own.** In the terminal the shell reads the same
-keys as the hub, and without a terminal there is nobody to ask. The questions of a first start
-(`appkit_hub::setup`, a hub run without arguments that is not set up yet) are asked in a console
-window the program opens only for them (`console::open_own`) and closes when they are answered
-(`console::close_own`); from a terminal a line there says so. Answers piped in (a spec with
-`<PREFIX>_ASSUME_TERMINAL`) are still read from the pipe. A hub that is set up asks nothing
-and opens nothing. A double click on a hub that is not set up gets that window; one that is set up
-starts the hub and opens the page.
+**The first start is set up in the page.** A double click on a hub that is not set up starts
+the hub and opens the page, as for one that is set up; no console window is opened. The page
+shows what is missing (the vault, Neovim) and offers the installation; the folder and the program
+are chosen in the dialog of the system that the hub shows in its own process (`folder_dialog`,
+`editor::pick_program`), and the hub checks the choice before it keeps it (`setup::checked_vault`,
+`setup::checked_nvim`, which starts only a file named `nvim(.exe)` to ask its version). The
+installation of the page is `<program> install` as a program of its own (`setup::start_install`,
+`launch::spawn` from the program the hub runs from): it stops the hub, copies the program and
+starts the hub again from the copy.
+
+**Questions on stdin are the second way.** In the terminal the shell reads the same keys as a
+window program, and without a terminal there is nobody to ask. A console program at a terminal
+(the debug build; every program on macOS and Linux) still asks the questions of a first start
+there. `<program> setup` asks always; a window program opens a console window for that command
+only (`console::open_own`) and closes it when the questions are answered (`console::close_own`).
+Answers piped in (a spec with `<PREFIX>_ASSUME_TERMINAL`) are still read from the pipe.
 
 **Without a terminal nobody reads stderr.** `console::report` writes an error to stderr and, when
 stderr goes nowhere, shows it in a message box: a link whose hub fails to start says why instead

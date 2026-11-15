@@ -282,6 +282,64 @@ impl FileOpener for TerminalOpener {
     }
 }
 
+/// Whether a dialog for a program is open: a second one would stand on top of the first.
+static PICKING_PROGRAM: AtomicBool = AtomicBool::new(false);
+
+/// The name of the program file of Neovim on this system.
+#[must_use]
+pub fn nvim_file_name() -> &'static str {
+    if cfg!(windows) {
+        "nvim.exe"
+    } else {
+        "nvim"
+    }
+}
+
+/// Ask the person for the program of Neovim with the file dialog of the system (on Windows; elsewhere
+/// there is none, and the page says where Neovim was looked for instead) and wait for the answer.
+/// `Ok(None)` is a dialog that was closed without a choice. Blocks until the person has answered: run it
+/// off the async threads. Needs no opener: it is asked when Neovim was not found, so there is none yet.
+///
+/// The answer is only what the person chose: the caller probes it before it keeps it.
+///
+/// `<PREFIX>_EDITOR_LOG` is the seam of the tests here too: the call is logged as `pick program` and
+/// `<PREFIX>_PICK_PROGRAM_RESULT` is the file the person "chose" (empty or unset: closed).
+///
+/// # Errors
+///
+/// Why no dialog could be shown (none on this system, one is open already).
+pub fn pick_program(env: &Env, identity: &'static AppIdentity) -> Result<Option<PathBuf>, String> {
+    if let Some(log) = env.path(&identity.var("EDITOR_LOG")) {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log)
+            .and_then(|mut out| writeln!(out, "pick program"))
+            .map_err(|_| "the test log cannot be written".to_owned())?;
+        let chosen = env
+            .get(&identity.var("PICK_PROGRAM_RESULT"))
+            .map(|c| c.to_string_lossy().into_owned());
+        return Ok(chosen.and_then(|c| picked_folder(c.as_bytes(), true)));
+    }
+    if PICKING_PROGRAM.swap(true, Ordering::SeqCst) {
+        return Err("a file dialog is open already".to_owned());
+    }
+    let answer = ask_for_program();
+    PICKING_PROGRAM.store(false, Ordering::SeqCst);
+    answer
+}
+
+#[cfg(windows)]
+fn ask_for_program() -> Result<Option<PathBuf>, String> {
+    let chosen = crate::folder_dialog::pick_file(nvim_file_name())?;
+    Ok(chosen.filter(|path| !path.to_string_lossy().chars().any(char::is_control)))
+}
+
+#[cfg(not(windows))]
+fn ask_for_program() -> Result<Option<PathBuf>, String> {
+    Err("choosing a program is not supported here".to_owned())
+}
+
 /// The folder as the shell of Windows takes it: an app hands over the folder as `canonicalize`
 /// gave it (`\\?\C:\vault`), which the shell does not take everywhere; it gets the plain form
 /// where that names the same folder ([`strip_verbatim`]).
@@ -752,6 +810,38 @@ mod tests {
         assert!(lines[1].ends_with("b.md:7"), "{text}");
         assert!(lines[2].starts_with("reveal "), "{text}");
         assert_eq!(lines[3], "pick");
+    }
+
+    /// The program of Neovim is asked for without an opener (none is made while Neovim is missing); the seam
+    /// logs the call and answers with the file the test names, and with nothing for a closed dialog.
+    #[test]
+    fn the_program_dialog_has_the_seam_of_the_tests() {
+        let dir = Scratch::new("pick-program");
+        let log = dir.join("opened.log");
+        let env = Env::from_pairs([
+            ("KIT_DESKTOP_EDITOR_LOG", log.to_string_lossy().into_owned()),
+            (
+                "KIT_DESKTOP_PICK_PROGRAM_RESULT",
+                "/opt/nvim/bin/nvim".to_owned(),
+            ),
+        ]);
+        assert_eq!(
+            pick_program(&env, &ID).unwrap(),
+            Some(PathBuf::from("/opt/nvim/bin/nvim"))
+        );
+        let closed =
+            Env::from_pairs([("KIT_DESKTOP_EDITOR_LOG", log.to_string_lossy().into_owned())]);
+        assert_eq!(pick_program(&closed, &ID).unwrap(), None);
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            "pick program
+pick program
+"
+        );
+        assert_eq!(
+            nvim_file_name(),
+            if cfg!(windows) { "nvim.exe" } else { "nvim" }
+        );
     }
 
     #[test]
