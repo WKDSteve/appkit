@@ -19,9 +19,9 @@ tokio = { version = "1", default-features = false, features = ["io-util", "proce
 [dev-dependencies]
 appkit-scratch = { path = "../appkit-scratch" }
 
-# The direct calls of the system (src/job.rs, src/console.rs): the version the rest of the kit uses.
+# The direct calls of the system (src/job.rs, src/console.rs, src/acl.rs): the version the rest of the kit uses.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_JobObjects", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
 
 # The process group and the parent-death signal of a child (src/child/unix.rs): the version tokio already brings.
 [target.'cfg(unix)'.dependencies]

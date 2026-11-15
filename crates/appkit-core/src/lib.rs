@@ -7,6 +7,8 @@
 //! pairing, sessions, rate limit) and `registry` (the discovery file) now;
 //! `sse` and `pathguard` follow.
 
+#[cfg(windows)]
+mod acl;
 pub mod authn;
 pub mod child;
 pub mod classes;

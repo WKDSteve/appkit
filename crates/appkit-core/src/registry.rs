@@ -134,40 +134,15 @@ pub fn write_secret(dir: &Path, secret_hex: &str) -> io::Result<()> {
 /// it can name other groups (measured on a development machine: a sandbox
 /// group with the right to change the file). Without the right to do this
 /// the hub does not start, because a secret that others can read is no secret.
+/// Through the security API of the system (`crate::acl`), never `icacls.exe`.
 #[cfg(windows)]
 fn restrict_to_user(path: &Path) -> io::Result<()> {
-    use std::os::windows::process::CommandExt as _;
-    use std::process::{Command, Stdio};
-
-    /// `CREATE_NO_WINDOW`: a hub that is a window program has no console, and a console program it
-    /// starts would get one of its own, with a window.
-    const NO_WINDOW: u32 = 0x0800_0000;
-    let root =
-        std::env::var_os("SystemRoot").ok_or_else(|| io::Error::other("SystemRoot is not set"))?;
-    let icacls = PathBuf::from(root).join("System32").join("icacls.exe");
-    let user = std::env::var("USERNAME").map_err(|_| io::Error::other("USERNAME is not set"))?;
-    let principal = match std::env::var("USERDOMAIN") {
-        Ok(domain) if !domain.is_empty() => format!("{domain}\\{user}"),
-        _ => user,
-    };
-    let status = Command::new(icacls)
-        .arg(path)
-        .args(["/inheritance:r", "/grant:r"])
-        .arg(format!("{principal}:F"))
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .creation_flags(NO_WINDOW)
-        .status()?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(io::Error::other(format!(
-            "icacls could not restrict the control secret (exit {:?}); \
-             set the config-folder variable of this app (<PREFIX>_CONFIG_DIR) to a folder that only you own",
-            status.code()
-        )))
-    }
+    crate::acl::restrict_to_user(path).map_err(|e| {
+        io::Error::other(format!(
+            "the control secret could not be restricted to you ({e}); \
+             set the config-folder variable of this app (<PREFIX>_CONFIG_DIR) to a folder that only you own"
+        ))
+    })
 }
 
 /// Read the control secret. A missing file is `None`.
@@ -241,16 +216,11 @@ mod tests {
     fn the_secret_file_has_no_inherited_rights() {
         let d = dir("acl");
         write_secret(&d, "abc").unwrap();
-        let out = std::process::Command::new("icacls")
-            .arg(secret_path(&d))
-            .output()
-            .unwrap();
-        let text = String::from_utf8_lossy(&out.stdout).into_owned();
-        // `(I)` marks an inherited entry; there must be none, and the one
-        // entry left is the current user's.
-        assert!(!text.contains("(I)"), "{text}");
-        let user = std::env::var("USERNAME").unwrap().to_lowercase();
-        assert!(text.to_lowercase().contains(&user), "{text}");
+        // Protected (nothing inherited), one entry, and that one gives the current user full control.
+        assert_eq!(
+            crate::acl::tests::rights_of(&secret_path(&d)),
+            (true, 1, true)
+        );
     }
 
     #[cfg(unix)]
