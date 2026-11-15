@@ -16,7 +16,8 @@
 //! the next restart needs administrator rights, which an install for one user never has. So the
 //! program moves its own file out of the install folder into the folder for temporary files and
 //! leaves it there, free to delete; the next removal takes away what earlier ones left. Everything
-//! else is gone when this ends.
+//! else is gone when this ends. That one file left in `%TEMP%` (`<program>-removed-<pid>.exe`) is
+//! the accepted price of starting no helper process (decided 2026-11-15).
 //!
 //! [`Product`] holds all that is specific to an app, [`run`] does the rest:
 //!
