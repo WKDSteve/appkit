@@ -33,7 +33,8 @@
 //! # Limits
 //!
 //! - Windows: the child runs for a moment before it is in its job (it is not started
-//!   suspended). A process it starts in that moment is not in the job.
+//!   suspended). A process it starts in that moment is not in the job. Why it stays so:
+//!   `docs/PROCESSES.md`, "Limits".
 //! - Linux: the parent-death signal ends the child itself when the app dies without cleaning
 //!   up. What the child started is then ended only if it follows its parent (a pipe that
 //!   closes). While the app lives, the whole group is ended.

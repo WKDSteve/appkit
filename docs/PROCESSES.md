@@ -135,7 +135,12 @@ runs `install` in a terminal sees it there.
 ### Limits
 
 - Windows: the child runs for a moment before it is in its job. A process it starts in that
-  first moment is not in the job.
+  first moment is not in the job. It stays so (looked at 2026-11-15): the clean way, the job named
+  at the start (`PROC_THREAD_ATTRIBUTE_JOB_LIST`), needs an attribute list that std and tokio offer
+  only unstable (`windows_process_extensions_raw_attribute`), or a start of our own with
+  `CreateProcessW` that would also replace the pipes and the waiting of tokio. A suspended start
+  that is resumed afterwards is what an endpoint protection reads as injection, and a hub that
+  puts itself in a job would end the browser a link starts with it.
 - Linux: when the app is killed, the parent-death signal ends the child itself. What the child
   started is not signalled; it ends when it follows its parent (a pipe that closes). While the
   app lives, the whole group is ended.

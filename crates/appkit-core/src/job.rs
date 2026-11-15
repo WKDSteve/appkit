@@ -7,6 +7,8 @@
 //!
 //! Limit: the child runs for a moment before it is put into the job (it is not started
 //! suspended), so a process it starts in that first moment is not in the job and outlives it.
+//! Naming the job at the start needs an attribute list that std and tokio offer only unstable;
+//! see `docs/PROCESSES.md`, "Limits".
 #![allow(unsafe_code)]
 
 /// Ends the process tree of a child when it is dropped (Windows), else nothing.
