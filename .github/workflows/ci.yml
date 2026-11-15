@@ -151,7 +151,17 @@ jobs:
       - name: PSScriptAnalyzer on install.ps1
         shell: pwsh
         run: |
-          Install-Module PSScriptAnalyzer -RequiredVersion 1.24.0 -Scope CurrentUser -Force
+          # Installed only when the pinned version cannot be loaded: the runners of this machine share the user's module
+          # folder, and an `Install-Module -Force` in every run wrote the module again while a job of another runner used
+          # it ("currently in use", then a file of the module is missing and the step is red; testing-desktop, run
+          # 43650895614). The import is the test, not the listing: a copy with a file missing is still listed, and it is
+          # written again here. By version: autoloading would take the newest copy on the runner, not the pinned one.
+          try {
+            Import-Module PSScriptAnalyzer -RequiredVersion 1.24.0 -ErrorAction Stop
+          } catch {
+            Install-Module PSScriptAnalyzer -RequiredVersion 1.24.0 -Scope CurrentUser -Force
+            Import-Module PSScriptAnalyzer -RequiredVersion 1.24.0 -ErrorAction Stop
+          }
           $found = Invoke-ScriptAnalyzer -Path release-kit/scripts/install.ps1 -Severity Error, Warning, Information
           $found | Format-Table -AutoSize | Out-String | Write-Output
           if ($found) { exit 1 }
