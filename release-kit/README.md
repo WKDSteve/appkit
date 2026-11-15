@@ -269,12 +269,31 @@ but the job has no OIDC token (`id-token: write` missing). Mind where the script
 one-liner takes `install.ps1` from the same release as the file, so a swapped release brings a swapped script that
 checks nothing. The check protects a copy of the script you keep, or got elsewhere, and a file you verify by hand.
 
+## The entry in Settings > Apps of an app with an install script of its own
+
+pult, takt and streamtap install from their own `install.ps1` (a payload of several files, not one
+program). The entry they write in Settings > Apps, and the check of it in their `test-release.ps1`,
+is one text here: `scripts/uninstall-entry.ps1`, dot-sourced from beside the script that uses it.
+
+| Function | What it does |
+|---|---|
+| `Set-UninstallEntry` | writes the entry (`DisplayName`, `DisplayVersion`, `Publisher`, `InstallLocation`, `DisplayIcon`, `UninstallString`, `NoModify`, `NoRepair`, `EstimatedSize` of the whole folder); says when it took the entry from an install in another folder; refuses a registry root outside HKCU |
+| `Get-UninstallEntryCommand` | the command: the installed program with `--uninstall` (appkit-uninstall), and only the places that are not the user's own (`--start-menu-dir`, `--desktop-dir`, `--registry-root`); no PowerShell |
+| `Test-UninstallEntry` | what is wrong with an entry, as sentences (none: as written) |
+| `Invoke-UninstallEntry` | runs the command of an entry as Settings > Apps would, plus `--yes`, with a temp folder of the test and a time limit |
+
+Each app keeps a copy in its `scripts\` (it ships beside `install.ps1`), and `tools/check-release-kit-copy.py`
+(a copy of appkit's) holds the copy to this file at the commit its workflows pin the release-kit actions to.
+A fix is made here, then the apps raise that pin and take the file. The tests (below) write only below a
+throw-away key `HKCU:\Software\appkit-test-uninstall-entry-*` and remove it.
+
 ## Checks
 
 ```
 python3 -m unittest discover -s release-kit -p "test_*.py" -v
 ```
 
+`scripts/uninstall-entry.ps1` runs in `pwsh` and Windows PowerShell 5.1 against a throw-away registry key.
 The tests run the install scripts against builds made on the spot (a fake hub and a fake setup that
 write down their arguments), `install.sh` with the `sh` of the system (dash on Linux, the MSYS `sh`
 of Git on Windows), `install.ps1` with `pwsh` and Windows PowerShell 5.1, and `publish.sh` against a

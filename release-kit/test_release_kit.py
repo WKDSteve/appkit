@@ -660,6 +660,99 @@ FAKE_GH_CMD = "@echo off\r\necho %*> \"%GH_ARGS%\"\r\necho %FAKE_GH_SAY% 1>&2\r\
 FAKE_CMD = "@echo off\r\nif \"%~1\"==\"--version\" (echo fake-hub 1.0& exit /b 0)\r\necho %*> \"%OUT%\"\r\nexit /b %FAKE_EXIT%\r\n"
 
 
+ENTRY_PS1 = KIT / "scripts" / "uninstall-entry.ps1"
+
+# Drives uninstall-entry.ps1 in a throw-away key below HKCU\Software that it removes again: the entry of
+# a demo install, what the check says of it and of a changed one, a second install elsewhere, a run of an
+# entry's command, and a root outside HKCU. The answers come back as JSON.
+ENTRY_DRIVER = r"""
+param([string] $Kit, [string] $Root, [string] $Install, [string] $Elsewhere, [string] $Start, [string] $Desk)
+$ErrorActionPreference = 'Stop'
+. $Kit
+$common = @{ RegistryRoot = $Root; Name = 'demo'; DisplayName = 'Demo'; Version = '1.2.3+abc1234'
+    InstallDir = $Install; App = (Join-Path $Install 'demo.exe'); StartMenuDir = $Start; DesktopDir = $Desk }
+$key = Get-UninstallEntryKey $Root 'demo'
+try {
+    $result = [ordered]@{}
+    $result.said = @(Set-UninstallEntry @common)
+    $entry = Get-ItemProperty -LiteralPath $key
+    $result.command = [string]$entry.UninstallString
+    $result.version = [string]$entry.DisplayVersion
+    $result.size = [int]$entry.EstimatedSize
+    $result.flags = @([int]$entry.NoModify, [int]$entry.NoRepair)
+    $result.problems = @(Test-UninstallEntry @common)
+    Set-ItemProperty -LiteralPath $key -Name UninstallString -Value '"powershell.exe" -File x.ps1'
+    Set-ItemProperty -LiteralPath $key -Name DisplayVersion -Value '0.0.1'
+    $result.changed = @(Test-UninstallEntry @common)
+    $second = $common.Clone()
+    $second.InstallDir = $Elsewhere
+    $second.App = Join-Path $Elsewhere 'demo.exe'
+    $result.moved = @(Set-UninstallEntry @second)
+    $result.location = [string](Get-ItemProperty -LiteralPath $key).InstallLocation
+    $result.own = Get-UninstallEntryCommand -App 'C:\x\demo.exe' -StartMenuDir ([Environment]::GetFolderPath('Programs')).TrimEnd('\') -DesktopDir ([Environment]::GetFolderPath('Desktop')).TrimEnd('\') -RegistryRoot 'HKCU:\Software'
+    $run = Invoke-UninstallEntry -Command "`"$env:SystemRoot\System32\cmd.exe`" /c echo entry" -Temp $Install
+    $result.run = @($run.Code, $run.Text.Trim())
+    $result.notACommand = (Invoke-UninstallEntry -Command 'no quotes here' -Temp $Install).Code
+    $hklm = $common.Clone()
+    $hklm.RegistryRoot = 'HKLM:\Software\appkit-never'
+    try { Set-UninstallEntry @hklm | Out-Null; $result.hklm = 'written' } catch { $result.hklm = "$_" }
+    try { Get-UninstallEntryCommand -App 'C:\x\demo.exe' -StartMenuDir 'C:\menu\' -DesktopDir 'C:\d' -RegistryRoot $Root | Out-Null; $result.slash = 'taken' } catch { $result.slash = "$_" }
+    $result | ConvertTo-Json -Depth 4 -Compress
+}
+finally {
+    Remove-Item -LiteralPath $Root -Recurse -Force -ErrorAction SilentlyContinue
+}
+"""
+
+
+@unittest.skipUnless(POWERSHELLS, "uninstall-entry.ps1 runs on Windows")
+class UninstallEntryPs1Test(unittest.TestCase):
+    def test_the_entry_is_written_checked_and_run_in_every_powershell(self) -> None:
+        for shell in POWERSHELLS:
+            with self.subTest(shell=shell):
+                tmp = Path(tempfile.mkdtemp())
+                self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+                install, other = tmp / "install", tmp / "other"
+                (install / "bin").mkdir(parents=True)
+                other.mkdir()
+                # In a folder below the install: the size counts what lies below it too.
+                (install / "bin" / "data").write_bytes(b"x" * 8192)
+                driver = tmp / "driver.ps1"
+                driver.write_text(ENTRY_DRIVER, encoding="utf-8-sig")
+                root = f"HKCU:\\Software\\appkit-test-uninstall-entry-{os.getpid()}-{len(shell)}"
+                start, desk = tmp / "menu", tmp / "desk"
+                res = subprocess.run(
+                    [shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(driver),
+                     "-Kit", str(ENTRY_PS1), "-Root", root, "-Install", str(install), "-Elsewhere", str(other),
+                     "-Start", str(start), "-Desk", str(desk)],
+                    capture_output=True, text=True, encoding="utf-8", errors="replace")
+                self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+                got = json.loads(res.stdout.strip().splitlines()[-1])
+                app = install / "demo.exe"
+                self.assertEqual(
+                    got["command"],
+                    f'"{app}" --uninstall --start-menu-dir "{start}" --desktop-dir "{desk}" --registry-root "{root}"')
+                self.assertEqual(got["version"], "1.2.3+abc1234")
+                self.assertEqual(got["size"], 8)
+                self.assertEqual(got["flags"], [1, 1])
+                self.assertEqual(got["problems"], [])
+                changed = " ".join(got["changed"])
+                self.assertIn("names PowerShell, a shell or a script", changed)
+                self.assertIn("DisplayVersion is '0.0.1'", changed)
+                self.assertIn("the Settings > Apps entry was for the install in", " ".join(got["moved"]))
+                self.assertEqual(got["location"], str(other))
+                # The places of the user are not named: the command is the program and --uninstall alone.
+                self.assertEqual(got["own"], '"C:\\x\\demo.exe" --uninstall')
+                self.assertEqual(got["run"], [0, "entry --yes"])
+                self.assertEqual(got["notACommand"], -1)
+                self.assertIn("below HKCU", got["hklm"])
+                self.assertIn("trailing backslash", got["slash"])
+                # Nothing of the test stays in the registry.
+                check = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-Command",
+                                        f"Test-Path -LiteralPath '{root}'"], capture_output=True, text=True)
+                self.assertEqual(check.stdout.strip(), "False")
+
+
 @unittest.skipUnless(POWERSHELLS, "install.ps1 runs on Windows")
 class InstallPs1Test(unittest.TestCase):
     def setUp(self) -> None:

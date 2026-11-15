@@ -147,7 +147,7 @@ jobs:
       # `scoop install shellcheck`) and, below, of PSScriptAnalyzer.
       - name: shellcheck on the shell scripts
         run: shellcheck release-kit/scripts/install.sh release-kit/publish.sh release-kit/prepare.sh
-      # install.ps1: no finding of PSScriptAnalyzer (errors, warnings and information).
+      # install.ps1 and uninstall-entry.ps1: no finding of PSScriptAnalyzer (errors, warnings and information).
       - name: PSScriptAnalyzer on install.ps1
         shell: pwsh
         run: |
@@ -162,7 +162,8 @@ jobs:
             Install-Module PSScriptAnalyzer -RequiredVersion 1.24.0 -Scope CurrentUser -Force
             Import-Module PSScriptAnalyzer -RequiredVersion 1.24.0 -ErrorAction Stop
           }
-          $found = Invoke-ScriptAnalyzer -Path release-kit/scripts/install.ps1 -Severity Error, Warning, Information
+          $found = @('release-kit/scripts/install.ps1', 'release-kit/scripts/uninstall-entry.ps1') |
+            ForEach-Object { Invoke-ScriptAnalyzer -Path $_ -Severity Error, Warning, Information }
           $found | Format-Table -AutoSize | Out-String | Write-Output
           if ($found) { exit 1 }
 
