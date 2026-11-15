@@ -51,6 +51,9 @@ fn install(shell: &Path, dir: &Path, exit: &str) -> (Output, String) {
             "-Command",
             &command,
         ])
+        // A runner started from PowerShell 7 hands its module path on, with which Windows PowerShell 5.1 loads the
+        // modules of 7 and has no Get-FileHash; without it, each shell makes its own.
+        .env_remove("PSModulePath")
         .env("INSTALL_GH", "no-such-gh-for-the-tests")
         .env("WINDOW_PROBE_INSTALLED", &installed)
         .env("WINDOW_PROBE_EXIT", exit)
