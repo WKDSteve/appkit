@@ -139,7 +139,9 @@ the program is an absolute path to a file, the arguments an argv (never a shell 
 stdout and stderr are the null device, the standard handles of this process are made not
 inheritable first (otherwise the child holds a pipe or log of its parent open), and the working
 folder and the kind of window are always named. It never hides a window (`CREATE_NO_WINDOW`,
-`DETACHED_PROCESS`). `browser::open(url, ports)` opens a link in the default browser only when
+`DETACHED_PROCESS`). `launch::spawn_with(.., &[(name, value)])` sets variables for the child on
+top of the inherited environment (names of upper case letters, digits and `_`).
+`browser::open(url, ports)` opens a link in the default browser only when
 it is `http://127.0.0.1:<port>/…` with a port from the list and plain characters after it.
 
 ## A hub in the background ends itself

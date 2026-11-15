@@ -5,8 +5,9 @@
 //! arguments after `<out>`, the working folder, what each standard stream is (`null`, `other` or
 //! `none`), how many processes share its console (Windows) and, for each `--probe-handle=<n>`
 //! argument, whether a handle with that number is open in this process and which file it is
-//! (Windows). `open` alone says nothing about inheritance: a process holds most small numbers
-//! itself, so whether a handle was inherited is a question for `file`.
+//! (Windows), and the variable `LAUNCH_PROBE_SET` (`spawn_with`). `open` alone says nothing about
+//! inheritance: a process holds most small numbers itself, so whether a handle was inherited is a
+//! question for `file`.
 #![allow(unsafe_code)]
 
 use std::path::Path;
@@ -31,7 +32,7 @@ fn main() {
         "stdio": stdio(),
         "console_processes": console_processes(),
         "handles": handles,
-    });
+        "set": std::env::var("LAUNCH_PROBE_SET").ok(),    });
     write_whole(Path::new(&out), &doc.to_string());
 }
 

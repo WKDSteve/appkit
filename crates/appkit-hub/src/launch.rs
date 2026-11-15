@@ -71,6 +71,31 @@ use appkit_core::child::local_absolute;
 /// The program or the working folder is not absolute or does not exist, an argument holds a NUL,
 /// or the system refused to start it.
 pub fn spawn(program: &Path, args: &[&str], opts: &LaunchOpts<'_>) -> Result<u32, String> {
+    spawn_with(program, args, opts, &[])
+}
+
+/// [`spawn`] with variables set for the child in addition to the environment of this process
+/// (which it inherits as with [`spawn`]): a starter that tells the program something, such as
+/// hub-desktop telling a hub it starts with itself to stay (`<APP>_STAY`). A name is upper case
+/// letters, digits and `_`; a value holds no NUL.
+///
+/// # Errors
+///
+/// As [`spawn`], or a name or a value that is not one.
+pub fn spawn_with(
+    program: &Path,
+    args: &[&str],
+    opts: &LaunchOpts<'_>,
+    set: &[(&str, &str)],
+) -> Result<u32, String> {
+    if let Some((name, _)) = set
+        .iter()
+        .find(|(name, value)| !plain_var(name) || value.contains('\0'))
+    {
+        return Err(format!(
+            "not started: {name:?} is not a variable that can be set"
+        ));
+    }
     if !local_absolute(program) || !program.is_file() {
         return Err(format!(
             "not started: {} is not an absolute path to a file",
@@ -95,6 +120,9 @@ pub fn spawn(program: &Path, args: &[&str], opts: &LaunchOpts<'_>) -> Result<u32
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    for (name, value) in set {
+        command.env(name, value);
+    }
     apply(&mut command, opts.window);
     let mut child = command
         .spawn()
@@ -104,6 +132,16 @@ pub fn spawn(program: &Path, args: &[&str], opts: &LaunchOpts<'_>) -> Result<u32
         let _ = child.wait();
     });
     Ok(pid)
+}
+
+/// A name of a variable: upper case letters, digits and `_`, not starting with a digit.
+fn plain_var(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && !name.starts_with(|c: char| c.is_ascii_digit())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
 }
 
 #[cfg(windows)]

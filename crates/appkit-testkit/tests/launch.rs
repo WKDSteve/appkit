@@ -4,7 +4,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use appkit_hub::launch::{spawn, LaunchOpts, Window};
+use appkit_hub::launch::{spawn, spawn_with, LaunchOpts, Window};
 use appkit_scratch::Scratch;
 use serde_json::Value;
 
@@ -96,6 +96,41 @@ fn a_new_console_is_a_console_of_the_child_alone() {
     let dir = Scratch::new("launch-console");
     let seen = run(Window::NewConsole, &[], &dir, &dir.join("seen.json"));
     assert_eq!(seen["console_processes"], 1, "{seen}");
+}
+
+/// What a starter sets reaches the child (hub-desktop's `<APP>_STAY`); a name that is not one starts
+/// nothing.
+#[test]
+fn a_variable_of_the_starter_reaches_the_child() {
+    let dir = Scratch::new("launch-env");
+    let out = dir.join("seen.json");
+    let opts = LaunchOpts {
+        cwd: &dir,
+        window: Window::Default,
+    };
+    spawn_with(
+        Path::new(PROBE),
+        &[out.to_str().unwrap()],
+        &opts,
+        &[("LAUNCH_PROBE_SET", "1")],
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !out.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let seen: Value = serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+    assert_eq!(seen["set"], "1");
+    for bad in [
+        ("", "1"),
+        ("PATH=X", "1"),
+        ("lower", "1"),
+        ("1X", "1"),
+        ("OK", "a\0b"),
+    ] {
+        let refused = spawn_with(Path::new(PROBE), &[], &opts, &[bad]).unwrap_err();
+        assert!(refused.starts_with("not started"), "{bad:?}: {refused}");
+    }
 }
 
 #[test]
