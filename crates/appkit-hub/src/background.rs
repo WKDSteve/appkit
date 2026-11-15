@@ -154,6 +154,36 @@ fn log_file(dir: &Path) -> Result<std::fs::File, String> {
 ///
 /// A text for the person at the terminal.
 pub async fn start(app: &Background<'_>) -> Result<String, String> {
+    start_as(app, "serve", Program::Console).await
+}
+
+/// What kind of program the hub is, for [`start_as`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Program {
+    /// A console program (a debug build, or a hub that is not a window program yet): it is started
+    /// with a console that has no window (`CREATE_NO_WINDOW`), see [`start`].
+    Console,
+    /// A window program (GUI subsystem): Windows opens no console for it, so nothing has to be
+    /// hidden and it is started as any program a person starts, in a process group of its own.
+    /// Such a hub shows itself (a window, an icon in the notification area).
+    Window,
+}
+
+/// [`start`] with the verb the program runs in the background (`serve`, or a verb of the app that
+/// serves and shows itself, such as `tray`) and what kind of program it is. The verb is one plain
+/// word of lower case letters and `-`.
+///
+/// # Errors
+///
+/// A text for the person at the terminal.
+pub async fn start_as(
+    app: &Background<'_>,
+    verb: &str,
+    program: Program,
+) -> Result<String, String> {
+    if !plain_verb(verb) {
+        return Err(format!("not a verb of the program: {verb:?}"));
+    }
     let env = Env::from_process();
     let dir = instance::config_folder(&env, app.identity())?;
     if let Some(record) = instance::running_hub(&dir, app.identity()).await {
@@ -168,7 +198,7 @@ pub async fn start(app: &Background<'_>) -> Result<String, String> {
     }
     let exe = std::env::current_exe().map_err(|e| format!("own program not found: {e}"))?;
     remove_old_start_script(&dir);
-    spawn_detached(app, &exe, &dir)?;
+    spawn_detached(app, &exe, &dir, verb, program)?;
 
     // The hub says it is there by its record and its answer.
     let deadline = Instant::now() + Duration::from_secs(20);
@@ -187,26 +217,38 @@ pub async fn start(app: &Background<'_>) -> Result<String, String> {
     ))
 }
 
-/// Run `serve` as a program of its own: no window, its own process group, the output in the
-/// log. On Windows the standard handles of this process are made not inheritable first, so the
-/// hub does not hold the pipe of a caller (`<program> start | ...`) open (see `handles`). It is
-/// started directly, not through the script host: an endpoint protection stops a program that
-/// starts `wscript.exe`.
-fn spawn_detached(app: &Background<'_>, exe: &Path, dir: &Path) -> Result<(), String> {
+/// Whether `verb` is one plain word (`serve`, `tray`): nothing a program could take as an option.
+fn plain_verb(verb: &str) -> bool {
+    !verb.is_empty()
+        && verb.len() <= 32
+        && !verb.starts_with('-')
+        && verb.bytes().all(|b| b.is_ascii_lowercase() || b == b'-')
+}
+
+/// Run the verb (`serve`) as a program of its own: no console window, its own process group, the
+/// output in the log. On Windows the standard handles of this process are made not inheritable
+/// first, so the hub does not hold the pipe of a caller (`<program> start | ...`) open (see
+/// `handles`). It is started directly, not through the script host: an endpoint protection stops a
+/// program that starts `wscript.exe`.
+fn spawn_detached(
+    app: &Background<'_>,
+    exe: &Path,
+    dir: &Path,
+    verb: &str,
+    program: Program,
+) -> Result<(), String> {
     #[cfg(windows)]
     crate::handles::keep_standard_handles();
     let log = log_file(dir)?;
     let err = log
         .try_clone()
         .map_err(|e| format!("cannot write the log: {e}"))?;
-    let mut command = Command::new(exe);
+    let mut command = detached_command(app, exe, verb);
     command
-        .arg("serve")
-        .env(detached_var(app), "1")
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(err));
-    detach(&mut command);
+    detach(&mut command, program);
     let child = command
         .spawn()
         .map_err(|e| format!("the hub could not be started: {e}"))?;
@@ -214,25 +256,46 @@ fn spawn_detached(app: &Background<'_>, exe: &Path, dir: &Path) -> Result<(), St
     Ok(())
 }
 
+/// The program, the one verb and the variable that says "started by `start`": nothing else.
+fn detached_command(app: &Background<'_>, exe: &Path, verb: &str) -> Command {
+    let mut command = Command::new(exe);
+    command.arg(verb).env(detached_var(app), "1");
+    command
+}
+
+/// The Windows creation flags of a hub in the background.
+///
+/// `CREATE_NEW_PROCESS_GROUP` always: a Ctrl-C of the terminal does not reach it.
+/// `CREATE_NO_WINDOW` for a console program only: a console of its own that has no window, not the
+/// one of the terminal (which may close) and not none (`DETACHED_PROCESS`): a hub with no console
+/// makes every console program it runs by hand create one, which flashes a window and fails where
+/// no console can be made (`STATUS_DLL_INIT_FAILED`). A window program gets no console from
+/// Windows anyway; the flag would only hide what is not there, so it is not given.
+#[must_use]
+pub fn detach_flags(program: Program) -> u32 {
+    const NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    const NO_WINDOW: u32 = 0x0800_0000;
+    match program {
+        Program::Console => NEW_PROCESS_GROUP | NO_WINDOW,
+        Program::Window => NEW_PROCESS_GROUP,
+    }
+}
+
 #[cfg(windows)]
-fn detach(command: &mut Command) {
+fn detach(command: &mut Command, program: Program) {
     use std::os::windows::process::CommandExt;
-    // CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW: a console of its own that has no window, not
-    // the one of the terminal (which may close) and not none (DETACHED_PROCESS): a hub with no
-    // console makes every console program it runs (`icacls`, `reg`) create one, which flashes a
-    // window and fails where no console can be made (STATUS_DLL_INIT_FAILED).
-    command.creation_flags(0x0000_0200 | 0x0800_0000);
+    command.creation_flags(detach_flags(program));
 }
 
 #[cfg(unix)]
-fn detach(command: &mut Command) {
+fn detach(command: &mut Command, _program: Program) {
     use std::os::unix::process::CommandExt;
     // Its own process group: a Ctrl-C of the terminal does not reach it.
     command.process_group(0);
 }
 
 #[cfg(not(any(windows, unix)))]
-fn detach(_command: &mut Command) {}
+fn detach(_command: &mut Command, _program: Program) {}
 
 /// How long a hub that was asked to end may take before it is ended the hard way.
 const END_GRACE: Duration = Duration::from_secs(10);
@@ -1596,6 +1659,50 @@ fn make_link_in(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_console_hub_is_started_without_a_window_and_a_window_program_as_any_program() {
+        assert_eq!(detach_flags(Program::Console), 0x0000_0200 | 0x0800_0000);
+        // CREATE_NEW_PROCESS_GROUP only: never CREATE_NO_WINDOW, never DETACHED_PROCESS.
+        assert_eq!(detach_flags(Program::Window), 0x0000_0200);
+    }
+
+    #[test]
+    fn the_hub_in_the_background_gets_its_verb_and_the_variable_of_start_and_nothing_else() {
+        let command = detached_command(&APP, Path::new("/apps/rules-hub"), "tray");
+        let args: Vec<&OsStr> = command.get_args().collect();
+        assert_eq!(args, [OsStr::new("tray")]);
+        let envs: Vec<(&OsStr, Option<&OsStr>)> = command.get_envs().collect();
+        assert_eq!(
+            envs,
+            [(OsStr::new("RULES_DESKTOP_DETACHED"), Some(OsStr::new("1")))]
+        );
+    }
+
+    #[test]
+    fn only_a_plain_word_is_a_verb() {
+        for good in ["serve", "tray", "run-here"] {
+            assert!(plain_verb(good), "{good:?}");
+        }
+        for bad in [
+            "",
+            "-x",
+            "--open",
+            "Serve",
+            "serve now",
+            "a/b",
+            "serve\u{0}",
+            &"x".repeat(33),
+        ] {
+            assert!(!plain_verb(bad), "{bad:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn start_as_refuses_a_verb_that_is_not_a_plain_word_before_it_looks_at_anything() {
+        let err = start_as(&APP, "--evil", Program::Window).await.unwrap_err();
+        assert!(err.contains("not a verb"), "{err}");
+    }
     use appkit_scratch::Scratch;
 
     /// An app that is not the one this kit was made from.

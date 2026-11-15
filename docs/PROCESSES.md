@@ -43,7 +43,10 @@ These starts are written by hand on purpose and stay; the allow file of the chec
   console is how that app is operated.
 - **The hub in the background** (`background::start`): the hub puts itself in the background.
   It is not a child of an app; when it ends is its own matter (see the README, "A hub in the
-  background ends itself").
+  background ends itself"). A console program (`start`: `serve`) gets a console without a window
+  (`CREATE_NO_WINDOW`); a window program that shows itself, such as a hub with an icon in the
+  notification area, is started with `start_as(app, "<verb>", Program::Window)`: a process group of
+  its own and nothing hidden (`detach_flags`), as any program a person starts.
 
 ## A child of the app (`appkit_core::child`)
 
