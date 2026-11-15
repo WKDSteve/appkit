@@ -56,6 +56,9 @@ pub struct Console;
 impl Console {
     /// A console to ask in; false when there is none and none could be opened.
     fn ready() -> bool {
+        if !needs_window(console::attach_parent(), console::started_without_streams()) {
+            return true;
+        }
         if console::shares_terminal() {
             println!("The questions of the first start are asked in a window of their own.");
         }
@@ -122,6 +125,17 @@ pub fn interactive(app: &SetupApp<'_>, env: &Env) -> bool {
             std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
             console::started_without_streams(),
         )
+}
+
+/// Whether the questions need a window of their own: in the terminal's console the shell reads the same keys,
+/// and a program started without streams has nowhere to ask. Streams that were given (answers piped in with
+/// `<PREFIX>_ASSUME_TERMINAL`) are asked over, as a console program asks over its console.
+fn needs_window(console: console::Console, without_streams: bool) -> bool {
+    match console {
+        console::Console::Own => false,
+        console::Console::Parent => true,
+        console::Console::None => without_streams,
+    }
 }
 
 /// Whether a person started the program, by what it got: with a console, both ends at a terminal (with
@@ -489,6 +503,17 @@ mod tests {
                 "{console:?} terminal={terminal} without_streams={without_streams}"
             );
         }
+    }
+
+    /// Answers piped in (a spec with `ASSUME_TERMINAL`, also of a release build) are read from the pipe; the
+    /// terminal's console and a start without streams get a window.
+    #[test]
+    fn only_the_terminal_and_a_start_without_streams_need_a_window() {
+        use appkit_core::console::Console as C;
+        assert!(!needs_window(C::Own, false));
+        assert!(needs_window(C::Parent, false));
+        assert!(needs_window(C::None, true));
+        assert!(!needs_window(C::None, false), "streams that were given");
     }
 
     fn temp(name: &str) -> Scratch {

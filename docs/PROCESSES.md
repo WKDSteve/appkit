@@ -228,7 +228,8 @@ a hub that runs in it (`serve`); `start` puts the hub in the background, which o
 keys as the hub, and without a terminal there is nobody to ask. The questions of a first start
 (`appkit_hub::setup`, a hub run without arguments that is not set up yet) are asked in a console
 window the program opens only for them (`console::open_own`) and closes when they are answered
-(`console::close_own`); from a terminal a line there says so. A hub that is set up asks nothing
+(`console::close_own`); from a terminal a line there says so. Answers piped in (a spec with
+`<PREFIX>_ASSUME_TERMINAL`) are still read from the pipe. A hub that is set up asks nothing
 and opens nothing. A double click on a hub that is not set up gets that window; one that is set up
 starts the hub and opens the page.
 

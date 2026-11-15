@@ -126,7 +126,7 @@ pub fn shares_terminal() -> bool {
 pub fn started_without_streams() -> bool {
     let _ = attach_parent();
     let given = state().given;
-    given[0] == 0 && given[1] == 0 && cfg!(windows)
+    sys::without_streams(&given)
 }
 
 /// Whether what is written to stderr reaches anybody: a console, a file or a pipe.
@@ -211,18 +211,23 @@ mod sys {
     /// parent gave (a file, a pipe, the null device): that one keeps its handle. Opened explicitly,
     /// instead of trusting which handles the system fills in after `AttachConsole`.
     fn bind(given: &[usize; 3]) {
-        let input = console_stream(true);
-        let output = console_stream(false);
+        // Opened only for a stream that needs it: a handle opened and not used would stay open.
+        let mut output = None;
         for (i, which) in STREAMS.into_iter().enumerate() {
             let handle = if leads_somewhere(given[i]) {
                 given[i] as HANDLE
             } else if i == 0 {
-                input
+                console_stream(true)
             } else {
-                output
+                *output.get_or_insert_with(|| console_stream(false))
             };
             set_std_handle(which, handle);
         }
+    }
+
+    /// Whether the parent gave neither stdin nor stdout.
+    pub(super) fn without_streams(given: &[usize; 3]) -> bool {
+        !leads_somewhere(given[0]) && !leads_somewhere(given[1])
     }
 
     pub(super) fn attach(given: &mut [usize; 3]) -> Console {
@@ -325,6 +330,11 @@ mod sys {
 
     pub(super) fn attach(_given: &mut [usize; 3]) -> Console {
         Console::Own
+    }
+
+    /// A program here always has the streams its parent gave it.
+    pub(super) fn without_streams(_given: &[usize; 3]) -> bool {
+        false
     }
 
     pub(super) fn open_own(_current: Console, _title: &str, _given: &[usize; 3]) -> bool {
