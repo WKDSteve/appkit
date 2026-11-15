@@ -305,6 +305,23 @@ pub fn write(path: &std::path::Path, link: &Link) -> Result<(), String> {
     })
 }
 
+/// Whether `path` is a link whose target is a file named `program` (compared without case, as Windows does). No file,
+/// a file that cannot be read or one that is no link is `false`.
+#[must_use]
+pub fn is_link_to(path: &std::path::Path, program: &str) -> bool {
+    std::fs::read(path)
+        .ok()
+        .is_some_and(|bytes| targets(&bytes, program))
+}
+
+fn targets(bytes: &[u8], program: &str) -> bool {
+    target_path(bytes).is_some_and(|t| {
+        t.rsplit(['\\', '/'])
+            .next()
+            .is_some_and(|name| name.eq_ignore_ascii_case(program))
+    })
+}
+
 /// Delete the link `path` when its target is a file named `program` (compared without case, as
 /// Windows does): a link of the person's own that has the same name and another target stays.
 /// Returns whether one was deleted; no file there is no error.
@@ -318,12 +335,7 @@ pub fn remove_if_target(path: &std::path::Path, program: &str) -> Result<bool, S
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
     };
-    let ours = target_path(&bytes).is_some_and(|t| {
-        t.rsplit(['\\', '/'])
-            .next()
-            .is_some_and(|name| name.eq_ignore_ascii_case(program))
-    });
-    if !ours {
+    if !targets(&bytes, program) {
         return Ok(false);
     }
     std::fs::remove_file(path).map_err(|e| format!("cannot remove {}: {e}", path.display()))?;

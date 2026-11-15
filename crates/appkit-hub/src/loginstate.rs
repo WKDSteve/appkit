@@ -4,7 +4,8 @@
 //!
 //! The state lives in two places of the machine and nowhere else; nothing keeps a copy of it:
 //!
-//! - the login entry of the app itself (Windows: its value in the `Run` key), and
+//! - the login entry of the app itself (Windows: its link in the Startup folder, or an old value in the `Run` key),
+//!   and
 //! - for an app that hub-desktop takes over ([`TAKEN_OVER`]): its id in `start_with_hub` of the
 //!   settings of hub-desktop, which counts only while hub-desktop itself starts with the login
 //!   (hub-desktop then starts that hub in the background).
@@ -68,7 +69,7 @@ pub trait LoginEntries {
     fn set(&self, identity: &AppIdentity, program: Option<&Path>) -> Result<(), String>;
 }
 
-/// The login entries of this machine, through the kit (Windows: `reg.exe` and the `Run` key; Linux and
+/// The login entries of this machine, through the kit (Windows: the Startup folder and the registry API; Linux and
 /// macOS: the files of [`crate::loginitems`]).
 pub struct SystemLogin;
 

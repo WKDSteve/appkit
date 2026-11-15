@@ -167,7 +167,8 @@ gives the app what it needs to end it:
 Whether an app starts with the login is read and switched by the app (`<program> autostart
 on|off|status`, `background::autostart`, and the switch of its page) and by hub-desktop (the
 switch of its tile) through the same functions, `loginstate::state`, `is_on` and `set`. The state
-is the app's own login entry, or, for an app hub-desktop takes over (`loginstate::TAKEN_OVER`:
+is the app's own login entry (Windows: a link `<app>.lnk` in the Startup folder of the user; a value in the `Run`
+key that an earlier version wrote still counts and goes with the next switch), or, for an app hub-desktop takes over (`loginstate::TAKEN_OVER`:
 tasks, rules, testing), its id in `start_with_hub` of hub-desktop's `config.json` while hub-desktop
 itself starts with the login. On goes into that list while hub-desktop starts with the login and
 into the own entry otherwise; off takes it out of both. Nothing keeps a copy, so a change on one

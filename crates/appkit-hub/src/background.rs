@@ -47,7 +47,8 @@ impl Background<'_> {
         self.login.identity
     }
 
-    /// The name of the value under the `Run` key of the registry.
+    /// The name of the value under the `Run` key of the registry (what earlier versions wrote; it is only read and
+    /// removed now) and of the link in the Startup folder.
     fn run_value(&self) -> &str {
         self.identity().app
     }
@@ -403,8 +404,7 @@ async fn gone_within(process: &Process, limit: Duration) -> bool {
     true
 }
 
-
-/// Start the hub with the login of the user (Windows: the `Run` key; Linux: an
+/// Start the hub with the login of the user (Windows: a link in the Startup folder; Linux: an
 /// autostart entry; macOS: a launch agent).
 ///
 /// # Errors
@@ -491,12 +491,72 @@ pub fn autostart_for(app: &Background<'_>, what: Autostart, exe: &Path) -> Resul
         };
         return loginitems::login_entry(&app.login, platform, action, exe, &Env::from_process());
     }
-    run_key_for(app, what, exe, &SystemRegistry)
+    startup_entry(app, what, exe, &Env::from_process(), &SystemRegistry)
 }
 
-/// Whether the program of another app starts with the login of the current user: its value in the
-/// `Run` key, which is named by the app (`identity.app`). Read only, through the registry API and
-/// never through a program of the other app.
+/// The start with the login on Windows: a link in the Startup folder of the user (`<app>.lnk`, it runs `<program>
+/// start`), not a value in the `Run` key, which endpoint protections watch as a way to stay on a machine. A value an
+/// earlier version wrote there still counts as on, and every change takes it away: on writes the link in its place,
+/// off removes both. Only a link to this program is ours; a link of the person's own with that name stays.
+fn startup_entry(
+    app: &Background<'_>,
+    what: Autostart,
+    exe: &Path,
+    env: &Env,
+    reg: &dyn Registry,
+) -> Result<String, String> {
+    let dir = shell_folder(env, reg, &LinkPlace::Startup)?;
+    let link = dir.join(format!("{}.lnk", app.identity().app));
+    let program = format!("{}.exe", app.identity().binary);
+    match what {
+        Autostart::On => {
+            std::fs::create_dir_all(&dir)
+                .map_err(|e| format!("the link in the Startup folder could not be made: {e}"))?;
+            crate::shell_link::write(&link, &startup_link(app.identity().app, exe))
+                .map_err(|e| format!("the link in the Startup folder could not be made: {e}"))?;
+            let mut out = format!(
+                "the hub starts with your login: {} start (link {})\n",
+                exe.display(),
+                link.display()
+            );
+            if let Err(e) = run_key_for(app, Autostart::Off, exe, reg) {
+                out.push_str(&format!("the old login entry in the Run key stays: {e}\n"));
+            }
+            Ok(out)
+        }
+        Autostart::Off => {
+            crate::shell_link::remove_if_target(&link, &program)?;
+            run_key_for(app, Autostart::Off, exe, reg)
+        }
+        Autostart::Status => {
+            if crate::shell_link::is_link_to(&link, &program) {
+                return Ok(format!("on: {}\n", link.display()));
+            }
+            let old = run_key_for(app, Autostart::Status, exe, reg)?;
+            Ok(if old.starts_with("on") {
+                format!(
+                    "{} (an old login entry in the Run key; switch it off and on to make the link)\n",
+                    old.trim_end()
+                )
+            } else {
+                old
+            })
+        }
+    }
+}
+
+/// The link in the Startup folder: `<program> start`, minimized, in the folder of the program.
+fn startup_link(app: &str, exe: &Path) -> crate::shell_link::Link {
+    crate::shell_link::Link {
+        arguments: "start".to_owned(),
+        description: format!("{app}: start the hub with the login"),
+        ..app_link(app, exe, LinkStart::OpenPage)
+    }
+}
+
+/// Whether the program of another app starts with the login of the current user: its link in the
+/// Startup folder, or an old value in the `Run` key, both named by the app (`identity.app`). Read only,
+/// and never through a program of the other app.
 ///
 /// `None`: it cannot be told (not Windows, or the registry could not be asked). A key or a value that is not
 /// there, or that a policy hides, is `Some(false)`.
@@ -505,13 +565,22 @@ pub fn autostart_of(identity: &AppIdentity) -> Option<bool> {
     if !cfg!(windows) {
         return None;
     }
-    let reg = SystemRegistry;
-    autostart_in(identity.app, &reg)
+    autostart_in(identity, &Env::from_process(), &SystemRegistry)
 }
 
-/// [`autostart_of`] through the given registry.
-fn autostart_in(value: &str, reg: &dyn Registry) -> Option<bool> {
-    login_value_present(value, reg).ok()
+/// [`autostart_of`] with the environment and the registry given.
+fn autostart_in(identity: &AppIdentity, env: &Env, reg: &dyn Registry) -> Option<bool> {
+    let other = Background {
+        login: LoginApp {
+            identity,
+            summary: "",
+        },
+        extra_files: &[],
+        uninstall_script: "",
+    };
+    startup_entry(&other, Autostart::Status, Path::new(""), env, reg)
+        .ok()
+        .map(|said| said.starts_with("on"))
 }
 
 /// The login entry of the app in the `Run` key, through `reg`: the value is the app's name.
@@ -1184,7 +1253,8 @@ fn undo_entry_on_failure(
     }
 }
 
-/// The login entry and the links of `install` on Windows, through `reg` (or why it cannot be asked).
+/// The login entry (the link in the Startup folder) and the links of `install` on Windows, through `reg` (or why it
+/// cannot be asked).
 fn entry_and_links(
     app: &Background<'_>,
     target: &Path,
@@ -1203,19 +1273,20 @@ fn entry_and_links(
         reg.clone().ok().filter(|_| sync)
     };
     if let Some(asked) = asked {
-        let was_on = login_value_present(app.run_value(), asked).unwrap_or(false);
+        let was_on = startup_entry(app, Autostart::Status, target, env, asked)
+            .is_ok_and(|said| said.starts_with("on"));
         // It may be registered for another copy: then it is pointed here.
         entry_made = login_entry_step(
             opts,
             was_on,
             sync,
-            |what| run_key_for(app, what, target, asked),
+            |what| startup_entry(app, what, target, env, asked),
             &mut out,
         )?;
     }
     let links = install_links(app, target, opts, env, reg.clone());
     out.push_str(&undo_entry_on_failure(links, entry_made, |what| {
-        run_key_for(app, what, target, reg.clone()?)
+        startup_entry(app, what, target, env, reg.clone()?)
     })?);
     Ok(out)
 }
@@ -1522,6 +1593,8 @@ fn expand_vars(text: &str, env: &Env) -> Option<PathBuf> {
 enum LinkPlace {
     Desktop,
     StartMenu,
+    /// The Startup folder of the user: what is linked there starts with the login.
+    Startup,
 }
 
 impl LinkPlace {
@@ -1532,6 +1605,7 @@ impl LinkPlace {
         match self {
             Self::Desktop => "Desktop",
             Self::StartMenu => "Programs",
+            Self::Startup => "Startup",
         }
     }
 
@@ -1542,6 +1616,9 @@ impl LinkPlace {
             Self::StartMenu => env
                 .path("APPDATA")
                 .map(|p| p.join(r"Microsoft\Windows\Start Menu\Programs")),
+            Self::Startup => env
+                .path("APPDATA")
+                .map(|p| p.join(r"Microsoft\Windows\Start Menu\Programs\Startup")),
         }
     }
 
@@ -1550,6 +1627,7 @@ impl LinkPlace {
         match self {
             Self::Desktop => "on the desktop",
             Self::StartMenu => "in the Start menu",
+            Self::Startup => "in the Startup folder",
         }
     }
 }
@@ -1843,28 +1921,99 @@ mod tests {
         assert!(!link.exists());
     }
 
+    /// A profile of the test: `APPDATA` in a folder of its own (the Startup folder below it), never the person's.
+    fn profile(name: &str) -> (Scratch, Env, PathBuf) {
+        let scratch = Scratch::new(name);
+        let env = Env::from_pairs([("APPDATA", scratch.path().as_os_str().to_owned())]);
+        let startup = scratch
+            .path()
+            .join(r"Microsoft\Windows\Start Menu\Programs\Startup");
+        (scratch, env, startup)
+    }
+
     #[test]
     fn the_login_entry_of_another_app_is_read_by_its_name_and_nothing_is_written() {
+        let other = AppIdentity {
+            app: "rules-desktop",
+            ..IDENTITY
+        };
+        let (_s, env, _) = profile("hub-login-other");
+        // An old value in the Run key counts.
         let on = FakeRegistry::new(Some(r"C:\a\rules-desktop.exe start"));
-        assert_eq!(autostart_in("rules-desktop", &on), Some(true));
+        assert_eq!(autostart_in(&other, &env, &on), Some(true));
         let calls = on.calls();
-        assert_eq!(calls.len(), 1, "{calls:?}");
-        assert_eq!(calls[0][0], "query", "{calls:?}");
-        let at = calls[0].iter().position(|a| a == "/v").unwrap();
-        assert_eq!(calls[0][at + 1], "rules-desktop");
+        assert!(calls.iter().all(|c| c[0] == "query"), "{calls:?}");
+        let run = calls.iter().find(|c| c[1] == RUN_KEY).unwrap();
+        let at = run.iter().position(|a| a == "/v").unwrap();
+        assert_eq!(run[at + 1], "rules-desktop");
 
         assert_eq!(
-            autostart_in("rules-desktop", &FakeRegistry::new(None)),
+            autostart_in(&other, &env, &FakeRegistry::new(None)),
             Some(false)
         );
         // A value that a policy hides reads like one that is not there.
         let mut locked = FakeRegistry::new(None);
         locked.locked = true;
-        assert_eq!(autostart_in("rules-desktop", &locked), Some(false));
-        // No `reg.exe`: nothing is known, which is not "off".
+        assert_eq!(autostart_in(&other, &env, &locked), Some(false));
+        // No registry to ask: nothing is known, which is not "off".
         let mut gone = FakeRegistry::new(None);
         gone.missing = true;
-        assert_eq!(autostart_in("rules-desktop", &gone), None);
+        assert_eq!(autostart_in(&other, &env, &gone), None);
+    }
+
+    /// On writes a link in the Startup folder (`<program> start`) and takes an old value of the Run key away; off removes
+    /// the link and any old value; a link of the person's own with that name is never ours.
+    #[test]
+    fn the_start_with_the_login_is_a_link_in_the_startup_folder_and_an_old_run_value_goes() {
+        const RULES_EXE: &str = r"C:\Apps\rules-hub.exe";
+        let (_s, env, startup) = profile("hub-login-startup");
+        let link = startup.join("rules-desktop.lnk");
+        let reg = FakeRegistry::new(Some(r#""C:\old\rules-hub.exe" start"#));
+        // An old value is on, and says how to make the link.
+        let old = startup_entry(&APP, Autostart::Status, Path::new(RULES_EXE), &env, &reg).unwrap();
+        assert!(
+            old.starts_with("on") && old.contains("old login entry"),
+            "{old}"
+        );
+
+        let said = startup_entry(&APP, Autostart::On, Path::new(RULES_EXE), &env, &reg).unwrap();
+        assert!(said.contains("starts with your login"), "{said}");
+        assert!(reg.value.borrow().is_none(), "the old value went");
+        let bytes = std::fs::read(&link).unwrap();
+        assert_eq!(
+            crate::shell_link::target_path(&bytes).as_deref(),
+            Some(RULES_EXE)
+        );
+        let made = startup_link(IDENTITY.app, Path::new(RULES_EXE));
+        assert_eq!(made.arguments, "start");
+        let on = startup_entry(&APP, Autostart::Status, Path::new(RULES_EXE), &env, &reg).unwrap();
+        assert_eq!(on, format!("on: {}\n", link.display()));
+        assert!(
+            reg.calls().iter().all(|c| c[0] != "add"),
+            "nothing is written to the Run key: {:?}",
+            reg.calls()
+        );
+
+        startup_entry(&APP, Autostart::Off, Path::new(RULES_EXE), &env, &reg).unwrap();
+        assert!(!link.exists());
+        let off = startup_entry(&APP, Autostart::Status, Path::new(RULES_EXE), &env, &reg).unwrap();
+        assert_eq!(off, "off\n");
+
+        // A link of the person's own with the name of the app is not ours: not on, and off leaves it.
+        crate::shell_link::write(
+            &link,
+            &app_link(
+                "mine",
+                Path::new(r"C:\Apps\editor.exe"),
+                LinkStart::OpenPage,
+            ),
+        )
+        .unwrap();
+        let theirs =
+            startup_entry(&APP, Autostart::Status, Path::new(RULES_EXE), &env, &reg).unwrap();
+        assert_eq!(theirs, "off\n");
+        startup_entry(&APP, Autostart::Off, Path::new(RULES_EXE), &env, &reg).unwrap();
+        assert!(link.is_file());
     }
 
     #[test]
@@ -2510,47 +2659,70 @@ mod tests {
         );
     }
 
-    /// `install --autostart --shortcut` where the link cannot be made (no folder for it): the install fails, and
-    /// the `Run` value it wrote a moment before is gone again.
+    /// `install --autostart --shortcut` where the link on the desktop cannot be made (no profile folder for it): the
+    /// install fails, and the link in the Startup folder it made a moment before is gone again.
     #[cfg(windows)]
     #[test]
-    fn an_install_that_fails_after_the_login_entry_leaves_no_run_value() {
+    fn an_install_that_fails_after_the_login_entry_leaves_no_startup_link() {
         let opts = InstallOptions {
             autostart: true,
             shortcut: true,
             ..InstallOptions::default()
         };
         let target = Path::new(r"C:\apps\rules-hub.exe");
+        // APPDATA (the Startup folder and the Start menu) but no USERPROFILE (the desktop).
+        let (_s, env, startup) = profile("hub-install-undo");
+        let link = startup.join("rules-desktop.lnk");
         let reg = FakeRegistry::new(None);
-        let failed = entry_and_links(&APP, target, opts, &Env::default(), Ok(&reg));
-        let why = failed.expect_err("no folder for the link");
+        let failed = entry_and_links(&APP, target, opts, &env, Ok(&reg));
+        let why = failed.expect_err("no folder for the link on the desktop");
         assert!(why.contains("taken back"), "{why}");
-        assert_eq!(*reg.value.borrow(), None, "{:?}", reg.calls());
         assert!(
-            reg.calls().iter().any(|c| c[0] == "add"),
-            "it was written first"
+            !link.exists(),
+            "the link of the login went with the failure"
+        );
+        assert!(
+            reg.calls().iter().all(|c| c[0] != "add"),
+            "{:?}",
+            reg.calls()
         );
 
-        // An entry that was there before the install stays: it is the person's.
-        let reg = FakeRegistry::new(Some("\"C:\\old\\rules-hub.exe\" start"));
-        assert!(entry_and_links(&APP, target, opts, &Env::default(), Ok(&reg)).is_err());
+        // An entry that was there before the install stays: it is the person's, pointed at the new copy.
+        crate::shell_link::write(
+            &link,
+            &startup_link(IDENTITY.app, Path::new(r"C:\old\rules-hub.exe")),
+        )
+        .unwrap();
+        assert!(entry_and_links(&APP, target, opts, &env, Ok(&reg)).is_err());
+        let bytes = std::fs::read(&link).unwrap();
         assert_eq!(
-            reg.value.borrow().as_deref(),
-            Some(run_command(target).as_str())
+            crate::shell_link::target_path(&bytes).as_deref(),
+            Some(r"C:\apps\rules-hub.exe")
         );
     }
 
-    /// With `NO_LOGIN_SYNC` too: the value that was there before a failed install is still there after it.
+    /// With `NO_LOGIN_SYNC` too: the entry that was there before a failed install is still there after it.
     #[cfg(windows)]
     #[test]
-    fn a_failed_install_never_removes_a_run_value_that_was_there_before() {
+    fn a_failed_install_never_removes_a_login_entry_that_was_there_before() {
         let opts = InstallOptions {
             autostart: true,
             shortcut: true,
             ..InstallOptions::default()
         };
-        let env = Env::from_pairs([("RULES_DESKTOP_NO_LOGIN_SYNC", "1")]);
-        let reg = FakeRegistry::new(Some("\"C:\\old\\rules-hub.exe\" start"));
+        let (scratch, _, startup) = profile("hub-install-kept");
+        let env = Env::from_pairs([
+            ("APPDATA", scratch.path().as_os_str().to_owned()),
+            ("RULES_DESKTOP_NO_LOGIN_SYNC", std::ffi::OsString::from("1")),
+        ]);
+        std::fs::create_dir_all(&startup).unwrap();
+        let link = startup.join("rules-desktop.lnk");
+        crate::shell_link::write(
+            &link,
+            &startup_link(IDENTITY.app, Path::new(r"C:\old\rules-hub.exe")),
+        )
+        .unwrap();
+        let reg = FakeRegistry::new(None);
         let failed = entry_and_links(
             &APP,
             Path::new(r"C:\apps\rules-hub.exe"),
@@ -2558,9 +2730,9 @@ mod tests {
             &env,
             Ok(&reg),
         );
-        let why = failed.expect_err("no folder for the link");
+        let why = failed.expect_err("no folder for the link on the desktop");
         assert!(!why.contains("taken back"), "{why}");
-        assert!(reg.value.borrow().is_some(), "{:?}", reg.calls());
+        assert!(link.is_file());
     }
 
     /// Without `--autostart` a registry that cannot be asked stops nothing: there is no entry to point here.
@@ -2647,6 +2819,9 @@ ERROR: Access is denied.
                 Some("delete") if !self.locked => {
                     let had = self.value.borrow_mut().take().is_some();
                     answer(had, String::new())
+                }
+                Some("query") if args.get(1).map(String::as_str) != Some(RUN_KEY) => {
+                    answer(false, String::new())
                 }
                 Some("query") => match self.value.borrow().as_deref() {
                     Some(v) => answer(
