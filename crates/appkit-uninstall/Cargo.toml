@@ -2,7 +2,9 @@
 name = "appkit-uninstall"
 version = "0.0.0"
 edition.workspace = true
-rust-version.workspace = true
+# Lower than the workspace: an app with an older minimum (takt: 1.90) takes this crate too, and the crate needs
+# nothing newer. The job rust of the kit's CI checks it with that version.
+rust-version = "1.90"
 license.workspace = true
 publish = false
 description = "`<app> --uninstall`: a program removes the install it is part of in its own process, asked for in a window; what the Settings > Apps entry of an app runs, with no shell and no console window (Windows)"
