@@ -121,6 +121,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "appkit-uninstall"
+version = "0.0.0"
+
+[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

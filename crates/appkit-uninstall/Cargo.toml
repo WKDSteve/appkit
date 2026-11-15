@@ -1,0 +1,11 @@
+[package]
+name = "appkit-uninstall"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "`<app> --uninstall`: a program removes the install it is part of in its own process, asked for in a window; what the Settings > Apps entry of an app runs, with no shell and no console window (Windows)"
+
+[lints]
+workspace = true
