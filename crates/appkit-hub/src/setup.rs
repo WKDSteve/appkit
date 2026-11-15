@@ -4,8 +4,9 @@
 //! is missing (the vault, Neovim) and offers the installation. The page names no path: the folder and the
 //! program are chosen in the dialog of the system that the hub shows ([`crate::editor::pick_program`],
 //! the folder dialog of the opener), and the hub checks what was chosen ([`checked_vault`],
-//! [`checked_nvim`]) before it keeps it. The installation runs as `<program> install` of its own
-//! ([`start_install`]): it stops this hub, copies the program and starts the hub again from the copy.
+//! [`checked_nvim`]) before it keeps it. The installation runs as `<program> install --open` of its own
+//! ([`start_install`]): it stops this hub, copies the program, starts the hub again from the copy and opens
+//! its page (the sessions of the page end with the hub that was stopped).
 //!
 //! **In the terminal** as the second way: a console program started from a terminal (both ends at it;
 //! the debug build, every program on macOS and Linux) asks as before, and `<program> setup` asks
@@ -438,10 +439,12 @@ pub fn forget_asked(app: &SetupApp<'_>, env: &Env) -> Result<(), String> {
     }
 }
 
-/// The arguments of `<program> install` for what the person chose in the page.
+/// The arguments of `<program> install` for what the person chose in the page. `--open`: the program opens the page
+/// of the hub it started again, with a pairing link of its own (the sessions of the page end with the hub that is
+/// stopped for the copy), so an app whose first start is in the page takes `install --open`.
 #[must_use]
 pub fn install_args(autostart: bool, shortcut: bool) -> Vec<&'static str> {
-    let mut args = vec!["install"];
+    let mut args = vec!["install", "--open"];
     if autostart {
         args.push("--autostart");
     }
@@ -451,8 +454,9 @@ pub fn install_args(autostart: bool, shortcut: bool) -> Vec<&'static str> {
     args
 }
 
-/// Start `<program> install` as a process of its own, from the program this hub runs from: it stops this hub,
-/// copies the program to the install folder and starts the hub again from there (what it does in a terminal).
+/// Start `<program> install --open` as a process of its own, from the program this hub runs from: it stops this hub,
+/// copies the program to the install folder, starts the hub again from there (what it does in a terminal) and opens
+/// its page.
 /// It is not a child of the hub: it outlives it. `<PREFIX>_INSTALL_LOG` (a file) is the seam of the tests: the
 /// arguments are written there instead.
 ///
@@ -854,12 +858,15 @@ mod tests {
 
     #[test]
     fn the_installation_of_the_page_is_the_install_command_with_what_was_chosen() {
-        assert_eq!(install_args(false, false), ["install"]);
+        assert_eq!(install_args(false, false), ["install", "--open"]);
         assert_eq!(
             install_args(true, true),
-            ["install", "--autostart", "--shortcut"]
+            ["install", "--open", "--autostart", "--shortcut"]
         );
-        assert_eq!(install_args(false, true), ["install", "--shortcut"]);
+        assert_eq!(
+            install_args(false, true),
+            ["install", "--open", "--shortcut"]
+        );
         let (env, config, _bin) = run_env("install-log");
         let log = config.join("install.log");
         let mut pairs: Vec<(String, String)> = vec![(
@@ -878,7 +885,7 @@ mod tests {
         start_install(&APP, &env, true, false).unwrap();
         assert_eq!(
             std::fs::read_to_string(&log).unwrap(),
-            "install --autostart\n"
+            "install --open --autostart\n"
         );
     }
 

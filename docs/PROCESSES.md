@@ -244,9 +244,9 @@ shows what is missing (the vault, Neovim) and offers the installation; the folde
 are chosen in the dialog of the system that the hub shows in its own process (`folder_dialog`,
 `editor::pick_program`), and the hub checks the choice before it keeps it (`setup::checked_vault`,
 `setup::checked_nvim`, which starts only a file named `nvim(.exe)` to ask its version). The
-installation of the page is `<program> install` as a program of its own (`setup::start_install`,
-`launch::spawn` from the program the hub runs from): it stops the hub, copies the program and
-starts the hub again from the copy.
+installation of the page is `<program> install --open` as a program of its own
+(`setup::start_install`, `launch::spawn` from the program the hub runs from): it stops the hub,
+copies the program, starts the hub again from the copy and opens its page with a new pairing link.
 
 **Questions on stdin are the second way.** In the terminal the shell reads the same keys as a
 window program, and without a terminal there is nobody to ask. A console program at a terminal
