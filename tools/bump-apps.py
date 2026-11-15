@@ -98,7 +98,9 @@ BY_HAND = [
      "appkit_core::console::attach_parent() and console::report_panics(<binary>); errors through "
      "console::report(<binary>, message); wait for Enter only when attach_parent() is Console::Own; a test of the "
      "release build with appkit_testkit::window_program run by `cargo test --release` in CI; scripts that start "
-     "the hub and need its exit code wait for it (Start-Process -Wait -NoNewWindow -PassThru)"),
+     "the hub and need its exit code or output wait for it: Start-Process -Wait -NoNewWindow -PassThru, or pipe the "
+     "call ($x = (& $exe --version | Out-String); a bare $x = (& $exe ...) does not wait and leaves $LASTEXITCODE "
+     "unset); take v0.56.1 or newer, whose install.ps1 waits"),
 ]
 
 

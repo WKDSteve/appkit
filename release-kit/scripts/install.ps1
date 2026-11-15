@@ -355,11 +355,14 @@ Parameters (all optional):
                 $exe = Join-Path $unpacked $program
                 if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { Exit-Install "the archive holds no $program" }
             }
-            $newVersion = (& $exe --version)
+            # Every call of the program is piped: a hub is a window program (appkit docs/PROCESSES.md), and a
+            # shell waits for one only then. `$x = (& $exe ...)` alone closes the pipe while it still runs and
+            # leaves $LASTEXITCODE unset.
+            $newVersion = (& $exe --version | Out-String).Trim()
             if ($LASTEXITCODE -ne 0) { Exit-Install 'the program does not run' }
             Write-Output "installing $newVersion"
             # `install` copies the program to its fixed place; its exit status is ours.
-            & $exe install @InstallArgs
+            & $exe install @InstallArgs | Out-Host
             if ($LASTEXITCODE -ne 0) { Exit-Install "$program install failed (see above)" }
             Write-Output "installed $newVersion"
         }

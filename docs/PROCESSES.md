@@ -219,9 +219,13 @@ closed.
 
 **The shell does not wait for a window program.** PowerShell and `cmd` show the prompt at once;
 the output of the hub follows after it, and `$LASTEXITCODE` and `%ERRORLEVEL%` are not the
-hub's. A script that needs the exit code waits for the program: `Start-Process -Wait
--NoNewWindow -PassThru` (its `ExitCode`), or it captures the output (`$out = & tasks-hub
-status`), for which PowerShell waits. A `.cmd` script waits by itself. Closing the terminal ends
+hub's. A script that needs the exit code or the output waits for the program: `Start-Process -Wait
+-NoNewWindow -PassThru` (its `ExitCode`), or it pipes the call (`$out = (& tasks-hub status |
+Out-String)`, `& tasks-hub install | Out-Host`), for which PowerShell 7 and Windows PowerShell 5.1
+wait. A bare assignment does not: `$out = (& tasks-hub status)` closes the pipe while the program
+still runs (it dies writing to it) and leaves `$LASTEXITCODE` unset, as `install.ps1` of the
+release kit did before `v0.56.1` (`appkit-testkit/tests/install_ps1.rs`). A `.cmd` script waits by
+itself. Closing the terminal ends
 a hub that runs in it (`serve`); `start` puts the hub in the background, which outlives it.
 
 **Questions on stdin go to a window of their own.** In the terminal the shell reads the same
