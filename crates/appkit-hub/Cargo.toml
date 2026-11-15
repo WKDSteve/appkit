@@ -44,7 +44,7 @@ tokio = { version = "1", default-features = false, features = ["sync", "rt", "rt
 # The direct calls of the system (src/handles.rs, src/browser.rs, src/phone.rs, src/folder_dialog.rs, src/process.rs): the version tokio
 # already brings through mio.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Console", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Console", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 # Ending the hub of `hub.json` with `kill(2)` (src/process.rs): the version tokio already brings.
 [target.'cfg(unix)'.dependencies]

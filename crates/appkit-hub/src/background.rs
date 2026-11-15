@@ -403,16 +403,6 @@ async fn gone_within(process: &Process, limit: Duration) -> bool {
     true
 }
 
-/// An absolute path of a program of the system folder (never one found
-/// along a PATH).
-fn system_program(name: &str) -> Result<PathBuf, String> {
-    let root = std::env::var_os("SystemRoot")
-        .or_else(|| std::env::var_os("windir"))
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .ok_or("no Windows folder found")?;
-    Ok(root.join("System32").join(name))
-}
 
 /// Start the hub with the login of the user (Windows: the `Run` key; Linux: an
 /// autostart entry; macOS: a launch agent).
@@ -501,21 +491,21 @@ pub fn autostart_for(app: &Background<'_>, what: Autostart, exe: &Path) -> Resul
         };
         return loginitems::login_entry(&app.login, platform, action, exe, &Env::from_process());
     }
-    run_key_for(app, what, exe, &RegExe(system_program("reg.exe")?))
+    run_key_for(app, what, exe, &SystemRegistry)
 }
 
 /// Whether the program of another app starts with the login of the current user: its value in the
-/// `Run` key, which is named by the app (`identity.app`). Read only, through `reg.exe` and never
-/// through a program of the other app.
+/// `Run` key, which is named by the app (`identity.app`). Read only, through the registry API and
+/// never through a program of the other app.
 ///
-/// `None`: it cannot be told (not Windows, or `reg.exe` did not run). A key or a value that is not
+/// `None`: it cannot be told (not Windows, or the registry could not be asked). A key or a value that is not
 /// there, or that a policy hides, is `Some(false)`.
 #[must_use]
 pub fn autostart_of(identity: &AppIdentity) -> Option<bool> {
     if !cfg!(windows) {
         return None;
     }
-    let reg = RegExe(system_program("reg.exe").ok()?);
+    let reg = SystemRegistry;
     autostart_in(identity.app, &reg)
 }
 
@@ -534,7 +524,8 @@ fn run_key_for(
     run_key(app.run_value(), what, exe, reg)
 }
 
-/// What one call of `reg.exe` came to: whether it succeeded, what it printed and what it complained of.
+/// What one question to the registry came to (in the form `reg.exe` answered it): whether it succeeded, what it
+/// gave and what it complained of.
 struct RegOutput {
     success: bool,
     stdout: String,
@@ -564,39 +555,71 @@ impl RegOutput {
     }
 }
 
-/// The registry, as far as the login entry needs it: one call of `reg.exe` with
-/// these arguments. The seam lets the tests stand in for the real registry,
-/// which they must never change.
+/// The registry, as far as the kit needs it: one question in the vocabulary of `reg.exe` (`query <key> [/v <value>]`,
+/// `add <key> /v <value> /t REG_SZ /d <data> /f`, `delete <key> /v <value> /f`). The seam lets the tests stand in for
+/// the real registry, which they must never change.
 trait Registry {
     /// # Errors
     ///
-    /// The program could not be run at all (a refusal of `reg.exe` is no error here).
+    /// The question could not be asked at all (a refusal is no error here).
     fn run(&self, args: &[OsString]) -> Result<RegOutput, String>;
 }
 
-/// The real thing: `reg.exe` of the system folder.
-struct RegExe(PathBuf);
+/// The real thing: the registry API of the system ([`crate::winreg`]), never `reg.exe`, which a hub that starts it to
+/// change the login entries makes an endpoint protection read as an attack.
+struct SystemRegistry;
 
-impl Registry for RegExe {
+impl Registry for SystemRegistry {
     fn run(&self, args: &[OsString]) -> Result<RegOutput, String> {
-        let mut command = Command::new(&self.0);
-        command.args(args).stdin(Stdio::null());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt as _;
-            // CREATE_NO_WINDOW: a hub that is a window program has no console, and reg.exe would get
-            // one of its own, with a window.
-            command.creation_flags(0x0800_0000);
-        }
-        let out = command
-            .output()
-            .map_err(|e| format!("reg.exe did not run: {e}"))?;
-        Ok(RegOutput {
-            success: out.status.success(),
-            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-        })
+        let words: Vec<String> = args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let words: Vec<&str> = words.iter().map(String::as_str).collect();
+        system_registry(&words)
     }
+}
+
+#[cfg(windows)]
+fn system_registry(words: &[&str]) -> Result<RegOutput, String> {
+    use crate::winreg;
+    let answer = |success: bool, stdout: String, stderr: String| {
+        Ok(RegOutput {
+            success,
+            stdout,
+            stderr,
+        })
+    };
+    match words {
+        ["query", key] => answer(winreg::key_exists(key)?, String::new(), String::new()),
+        ["query", key, "/v", value] => match winreg::get(key, value)? {
+            Some(data) => answer(
+                true,
+                format!("\n{key}\n    {value}    REG_SZ    {data}\n"),
+                String::new(),
+            ),
+            None => answer(false, String::new(), "the value is not there".to_owned()),
+        },
+        ["add", key, "/v", value, "/t", "REG_SZ", "/d", data, "/f"] => {
+            match winreg::set(key, value, data) {
+                Ok(()) => answer(true, String::new(), String::new()),
+                Err(e) => answer(false, String::new(), e),
+            }
+        }
+        ["delete", key, "/v", value, "/f"] => match winreg::delete(key, value) {
+            Ok(true) => answer(true, String::new(), String::new()),
+            Ok(false) => answer(false, String::new(), "the value is not there".to_owned()),
+            Err(e) => answer(false, String::new(), e),
+        },
+        _ => Err(format!(
+            "not a question the kit asks the registry: {words:?}"
+        )),
+    }
+}
+
+#[cfg(not(windows))]
+fn system_registry(_words: &[&str]) -> Result<RegOutput, String> {
+    Err("this system has no registry".to_owned())
 }
 
 fn args(list: &[&str]) -> Vec<OsString> {
@@ -714,10 +737,10 @@ fn setup_install_in(
 ///
 /// # Errors
 ///
-/// `reg.exe` could not be run at all.
+/// The registry could not be asked at all.
 pub fn setup_install(app: &Background<'_>) -> Result<Option<SetupInstall>, String> {
     if cfg!(windows) {
-        return setup_install_in(app, &RegExe(system_program("reg.exe")?));
+        return setup_install_in(app, &SystemRegistry);
     }
     let packaged = Path::new("/usr/bin").join(app.identity().binary);
     Ok(packaged.is_file().then_some(SetupInstall {
@@ -1095,12 +1118,13 @@ async fn install_steps_beside(
     }
 
     if cfg!(windows) {
-        let reg = system_program("reg.exe").map(RegExe);
-        let reg = reg
-            .as_ref()
-            .map(|r| r as &dyn Registry)
-            .map_err(Clone::clone);
-        out.push_str(&entry_and_links(app, &target, opts, &env, reg)?);
+        out.push_str(&entry_and_links(
+            app,
+            &target,
+            opts,
+            &env,
+            Ok(&SystemRegistry as &dyn Registry),
+        )?);
     } else {
         // It may be registered for another copy: then it is pointed here.
         let sync = env.get(&no_login_sync(app)).is_none();
@@ -1572,7 +1596,7 @@ fn remove_shortcut(app: &Background<'_>, env: &Env) -> Result<String, String> {
         };
         return loginitems::remove_launcher(&app.login, platform, env);
     }
-    let reg = RegExe(system_program("reg.exe")?);
+    let reg = SystemRegistry;
     let mut out = String::new();
     let mut failed = None;
     // Under either name: the program does not know how it was installed. Only a link to this program is taken away.
@@ -1655,7 +1679,7 @@ fn shortcut(
             loginitems::Platform::current().ok_or("a launcher is not built for this system")?;
         return loginitems::launcher(&app.login, platform, exe, &Env::from_process());
     }
-    let reg = RegExe(system_program("reg.exe")?);
+    let reg = SystemRegistry;
     shortcut_in(app, exe, name, start, places, &Env::from_process(), &reg)
 }
 

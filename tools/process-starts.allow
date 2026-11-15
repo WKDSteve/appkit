@@ -9,9 +9,9 @@ crates/appkit-core/src/launch.rs 2 the helper for a program of somebody else (it
 crates/appkit-hub/src/browser.rs 2 hands a link to the default browser (ShellExecuteW; open and xdg-open go through launch)
 crates/appkit-hub/src/editor.rs 3 named exception: Neovim in a visible console (Windows) or in a terminal program (Linux)
 
-# Named exception that stays: the hub puts itself in the background (a case of its own, not a child of an app). Its call of reg.exe is a system tool that is replaced by a task of its own.
-crates/appkit-hub/src/background.rs 4 named exception: the hub in the background; reg.exe is replaced later
-crates/appkit-core/src/registry.rs 2 icacls.exe on the secret file (no window), a blocking call that has not moved to the helper yet
+# Named exception that stays: the hub puts itself in the background (a case of its own, not a child of an app). The
+# registry and the rights of the secret file go through the API of the system (winreg.rs, acl.rs), no program.
+crates/appkit-hub/src/background.rs 2 named exception: the hub in the background
 
 # A test program (it plays a child that starts a process of its own).
 crates/appkit-testkit/src/bin/child-probe.rs 3 the probe of the child tests (a grandchild, the control start of a hub without a console, a start without standard handles)

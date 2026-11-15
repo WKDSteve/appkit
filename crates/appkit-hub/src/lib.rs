@@ -84,6 +84,8 @@ pub mod store;
 pub mod streams;
 pub mod usage;
 pub mod vaults;
+#[cfg(windows)]
+mod winreg;
 
 pub use self::devices::Level;
 pub use self::guard::{bearer, error_body, single, too_many, GuardRules};

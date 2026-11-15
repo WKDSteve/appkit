@@ -254,9 +254,9 @@ the person, so it is for the end of a command; the hub in the background writes 
 
 **Console programs the hub starts.** A window program has no console that a console program it
 starts could share, so such a child gets one of its own, with a window. Every child goes through
-`appkit_core::child`, which starts it with `CREATE_NO_WINDOW`; the system tools the kit still
-starts by hand (`reg.exe` for the login entry, `icacls.exe` for the control secret) carry the same
-flag. Programs of somebody else (`launch`) and Neovim in its console are visible on purpose.
+`appkit_core::child`, which starts it with `CREATE_NO_WINDOW`. The kit starts no system tool any
+more: the registry (`appkit-hub/src/winreg.rs`) and the rights of the control secret
+(`appkit-core/src/acl.rs`) go through the API of the system. Programs of somebody else (`launch`) and Neovim in its console are visible on purpose.
 
 The link keeps its `SW_SHOWMINNOACTIVE` (7) for apps that are still console programs; a window
 program has no window for it to minimize.
@@ -285,8 +285,7 @@ A file that may start processes itself is listed in `tools/process-starts.allow`
 `<count>` is the number of lines found in the file. More or fewer lines than the entry says
 fail, and so does an entry for a file without any, so the list can neither hide a new start nor
 keep an exception that is gone. In this repository the list holds the two helpers, the named
-exceptions above, the link handed to the browser, and the calls of system tools (`icacls`,
-`reg`) that are being replaced.
+exceptions above and the link handed to the browser.
 
 The script knows no repository. An app copies it into its own `tools/`, starts with an allow
 file that lists what it has today, and removes the entries as the starts move to the helpers:
