@@ -42,6 +42,10 @@ A job whose step `release-kit/publish` attests (the default since v0.48) needs `
 release run fails, and nothing in the app's CI notices. Such a job is a problem: the app is skipped, nothing written,
 until its workflow grants them (or the step says `attest: false`).
 
+What a tag asks of an app beyond its pins (a change in the app's own code) is in BY_HAND: the bump prints it for
+each app whose pin is older than that tag ("by hand, not part of the bump commit"), and the app does it in a commit
+of its own.
+
 For work on appkit and an app at the same time, do not bump: use a `[patch]` in an uncommitted
 .cargo/config.toml (see the CLAUDE.md of tasks-desktop).
 
@@ -80,6 +84,45 @@ CARGO = re.compile(r'(git\s*=\s*"https://github\.com/WKDSteve/appkit",\s*tag\s*=
 # one line of check-lock-age.py: "  too young: ctutils 0.4.8 (5.9 days)"
 YOUNG = re.compile(r"^\s*too young: (\S+) (\S+) \(", re.M)
 APPKIT = Path(__file__).resolve().parent.parent
+# the tag of appkit an app's Cargo.toml (full, cargo) or tools/release-kit.pin (kit) holds now
+CARGO_TAG = re.compile(r'git\s*=\s*"https://github\.com/WKDSteve/appkit",\s*tag\s*=\s*"(v\d+\.\d+\.\d+)"')
+PIN_TAG_VALUE = re.compile(r"^tag\s*=\s*(v\d+\.\d+\.\d+)[ \t]*\r?$", re.M)
+
+# What a bump cannot do and the app does by hand, from the tag that asks for it on: (tag, modes, text). Printed for
+# an app whose pin is older than the tag and whose mode is listed, also with --dry-run, so the bump commit is not
+# taken for the whole change.
+BY_HAND = [
+    ("v0.56.0", ("full",),
+     "the hub is a window program (docs/PROCESSES.md of appkit, 'A hub is a window program'): "
+     '#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] in main.rs of the hub; first in main '
+     "appkit_core::console::attach_parent() and console::report_panics(<binary>); errors through "
+     "console::report(<binary>, message); wait for Enter only when attach_parent() is Console::Own; a test of the "
+     "release build with appkit_testkit::window_program run by `cargo test --release` in CI; scripts that start "
+     "the hub and need its exit code wait for it (Start-Process -Wait -NoNewWindow -PassThru)"),
+]
+
+
+def version(tag: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in tag.lstrip("v").split("."))
+
+
+def pinned_tag(app: Path, mode: str) -> str | None:
+    """The tag of appkit the app holds now: Cargo.toml for an app with the crates, tools/release-kit.pin else."""
+    path, pattern = ((app / "Cargo.toml", CARGO_TAG) if mode in ("full", "cargo")
+                     else (app / "tools" / "release-kit.pin", PIN_TAG_VALUE))
+    if not path.is_file():
+        return None
+    found = pattern.search(read_exact(path))
+    return found.group(1) if found else None
+
+
+def by_hand(app: Path, mode: str, tag: str) -> list[str]:
+    """What the app does by hand for a bump to `tag`: the notes of the tags after its pin up to `tag`."""
+    held = pinned_tag(app, mode)
+    if held is None:
+        return []
+    return [f"{note_tag}: {text}" for note_tag, modes, text in BY_HAND
+            if mode in modes and version(held) < version(note_tag) <= version(tag)]
 UI = re.compile(r"(github:WKDSteve/appkit#)v\d+\.\d+\.\d+(&path:(?:ui-kit|web-kit))(?=\")")
 
 
@@ -483,6 +526,8 @@ def bump_app(name: str, repos: Path, tag: str, sha: str, args: argparse.Namespac
     if not (app / ".git").exists():
         print("   skipped: no clone at " + str(app))
         return False
+    for note in by_hand(app, mode, tag):
+        print(f"   by hand, not part of the bump commit: {note}")
     if getattr(args, "worktree", False):
         return bump_in_worktree(name, app, mode, tag, sha, args)
     changes, problems = plan(app, mode, tag, sha)

@@ -457,9 +457,16 @@ struct RegExe(PathBuf);
 
 impl Registry for RegExe {
     fn run(&self, args: &[OsString]) -> Result<RegOutput, String> {
-        let out = Command::new(&self.0)
-            .args(args)
-            .stdin(Stdio::null())
+        let mut command = Command::new(&self.0);
+        command.args(args).stdin(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt as _;
+            // CREATE_NO_WINDOW: a hub that is a window program has no console, and reg.exe would get
+            // one of its own, with a window.
+            command.creation_flags(0x0800_0000);
+        }
+        let out = command
             .output()
             .map_err(|e| format!("reg.exe did not run: {e}"))?;
         Ok(RegOutput {

@@ -627,6 +627,45 @@ class LockAgeTest(unittest.TestCase):
             self.assertTrue(bump.bump_app("rules-desktop", self.tmp, "v0.23.2", NEW_SHA, args))
 
 
+class ByHandTest(unittest.TestCase):
+    NOTES = [("v0.24.0", ("full",), "a window program"), ("v0.30.0", ("full", "kit"), "later")]
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="bump-by-hand-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def notes(self, app: Path, mode: str, tag: str) -> list[str]:
+        with mock.patch.object(bump, "BY_HAND", self.NOTES):
+            return bump.by_hand(app, mode, tag)
+
+    def test_the_notes_after_the_pin_up_to_the_tag_for_the_mode(self) -> None:
+        full = make_app(self.tmp, "tasks-desktop", full=True)  # Cargo.toml holds v0.23.1
+        self.assertEqual(self.notes(full, "full", "v0.23.2"), [])
+        self.assertEqual(self.notes(full, "full", "v0.24.0"), ["v0.24.0: a window program"])
+        self.assertEqual(self.notes(full, "full", "v0.30.0"), ["v0.24.0: a window program", "v0.30.0: later"])
+        cargo = make_cargo_app(self.tmp, "pult")
+        self.assertEqual(self.notes(cargo, "cargo", "v0.30.0"), [], "a mode that is not listed")
+
+    def test_an_app_past_the_tag_or_without_a_pin_gets_none(self) -> None:
+        app = make_app(self.tmp, "rules-desktop", full=True)
+        cargo = app / "Cargo.toml"
+        cargo.write_text(CARGO.replace("v0.23.1", "v0.24.0"), encoding="utf-8", newline="")
+        self.assertEqual(self.notes(app, "full", "v0.24.1"), [])
+        cargo.unlink()
+        self.assertEqual(self.notes(app, "full", "v0.24.1"), [])
+
+    def test_a_kit_app_reads_its_pin_file(self) -> None:
+        app = make_app(self.tmp, "docmap-desktop", full=False)
+        self.assertEqual(bump.pinned_tag(app, "kit"), "v0.23.1")
+        self.assertEqual(self.notes(app, "kit", "v0.30.0"), ["v0.30.0: later"])
+
+    def test_the_notes_of_the_kit_name_real_tags(self) -> None:
+        for note_tag, modes, text in bump.BY_HAND:
+            self.assertTrue(bump.TAG.match(note_tag), note_tag)
+            self.assertTrue(set(modes) <= set(bump.APPS.values()), modes)
+            self.assertTrue(text)
+
+
 class TagTest(unittest.TestCase):
     def test_only_vxyz_is_a_tag(self) -> None:
         for good in ("v0.23.2", "v1.0.0"):

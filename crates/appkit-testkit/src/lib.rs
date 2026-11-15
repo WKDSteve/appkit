@@ -12,6 +12,8 @@
 //! * [`ports`]: the default ports of the apps that run side by side; no two share one.
 //! * [`dialect`] and [`fake_engine`]: a stand-in for the engine of an app, to test the seam of the
 //!   engine and the routes without Neovim.
+//! * [`window_program`]: whether a program of Windows is a window program, read from its header
+//!   (the test of every hub's release build).
 
 pub mod dialect;
 pub mod fake_engine;
@@ -19,4 +21,5 @@ pub mod ports;
 pub mod security;
 pub mod subject;
 pub mod subjects;
+pub mod window_program;
 pub mod wire;

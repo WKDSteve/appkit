@@ -172,6 +172,87 @@ made not inheritable first, a process group of its own, and never `CREATE_NO_WIN
 `DETACHED_PROCESS`. A program that is a server in a console gets a visible console of its own
 (`Window::NewConsole`).
 
+## A hub is a window program
+
+A console program gets a console window from Windows whenever it is not started from a terminal:
+the link (`<hub> start --open`), the login entry (`<hub> start`) and a double click each showed
+one. So the release build of every hub is a **window program** (GUI subsystem), and
+`appkit_core::console` gives it back what a console program has for free:
+
+```rust
+// main.rs of the hub: a debug build (`cargo run`) stays a console program.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+use appkit_core::console::{self, Console};
+
+#[tokio::main]
+async fn main() {
+    // Before the first line is written.
+    let console = console::attach_parent();
+    console::report_panics("tasks-hub");
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let by_click = args.is_empty();
+    if let Err(message) = Box::pin(run(args)).await {
+        console::report("tasks-hub", &message); // stderr, or a message box when nobody reads it
+        if by_click && console == Console::Own {
+            wait_for_enter(); // a console a double click opened (a debug build) closes with the program
+        }
+        std::process::exit(1);
+    }
+}
+```
+
+What `attach_parent` does, by how the program was started:
+
+| Started | What it gets | Console |
+|---|---|---|
+| from a terminal (PowerShell, `cmd`, Windows Terminal) | it attaches to the terminal's console; `status`, `--help`, errors are written there | `Parent` |
+| with all three streams going somewhere (a pipe, a file, the null device: a script that captures the output, a test, the hub `start` puts in the background) | nothing is attached; the output goes where it was sent | `None` |
+| by a link, the login entry, a double click | no console, no window | `None` |
+| a debug build, every program on macOS and Linux | its own console, as before | `Own` |
+
+A stream that goes somewhere is never replaced by the console: `tasks-hub status > out.txt` from a
+terminal writes the file and still shows its errors in the terminal. A program whose three
+streams all go somewhere does not attach at all: the hub in the background (`start` hands it
+`hub.log` and the null device) would otherwise end when the terminal it was started from is
+closed.
+
+**The shell does not wait for a window program.** PowerShell and `cmd` show the prompt at once;
+the output of the hub follows after it, and `$LASTEXITCODE` and `%ERRORLEVEL%` are not the
+hub's. A script that needs the exit code waits for the program: `Start-Process -Wait
+-NoNewWindow -PassThru` (its `ExitCode`), or it captures the output (`$out = & tasks-hub
+status`), for which PowerShell waits. A `.cmd` script waits by itself. Closing the terminal ends
+a hub that runs in it (`serve`); `start` puts the hub in the background, which outlives it.
+
+**Questions on stdin go to a window of their own.** In the terminal the shell reads the same
+keys as the hub, and without a terminal there is nobody to ask. The questions of a first start
+(`appkit_hub::setup`, a hub run without arguments that is not set up yet) are asked in a console
+window the program opens only for them (`console::open_own`) and closes when they are answered
+(`console::close_own`); from a terminal a line there says so. A hub that is set up asks nothing
+and opens nothing. A double click on a hub that is not set up gets that window; one that is set up
+starts the hub and opens the page.
+
+**Without a terminal nobody reads stderr.** `console::report` writes an error to stderr and, when
+stderr goes nowhere, shows it in a message box: a link whose hub fails to start says why instead
+of ending without a word. `console::report_panics` does the same for a panic. The box waits for
+the person, so it is for the end of a command; the hub in the background writes to `hub.log`.
+
+**Console programs the hub starts.** A window program has no console that a console program it
+starts could share, so such a child gets one of its own, with a window. Every child goes through
+`appkit_core::child`, which starts it with `CREATE_NO_WINDOW`; the system tools the kit still
+starts by hand (`reg.exe` for the login entry, `icacls.exe` for the control secret) carry the same
+flag. Programs of somebody else (`launch`) and Neovim in its console are visible on purpose.
+
+The link keeps its `SW_SHOWMINNOACTIVE` (7) for apps that are still console programs; a window
+program has no window for it to minimize.
+
+An app tests the attribute on its release build (`cargo test --release` in its CI): the header of
+the program says which subsystem it is (`appkit_testkit::window_program::subsystem`, `WINDOW` or
+`CONSOLE`). appkit tests the behaviour with a window program of its own
+(`appkit-testkit/src/bin/window-probe.rs`, `tests/window_program.rs`): the streams, the exit
+code, the console of a parent with and without one, and (by hand, it shows a window) the window
+for the questions.
+
 ## The check
 
 `tools/check-process-starts.py` reads every tracked `*.rs` file and fails on a line that starts

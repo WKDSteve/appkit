@@ -23,6 +23,9 @@
 //!   console has a window, warns on stderr; fails with `CHILD_PROBE_FAIL` set.
 //! - `app <role>...`: plays an app: starts itself with `<role>...` through `child::spawn`,
 //!   prints `started` and sleeps. The test ends it the hard way.
+//! - `bare <program> <arg>...`: starts `<program>` without standard handles, the way a double
+//!   click, a link or a shell in a terminal starts a window program, waits for it and ends with
+//!   its exit code. The console of this probe (or none) is what the program finds at its parent.
 #![allow(unsafe_code)]
 
 use std::io::{Read, Write};
@@ -82,8 +85,30 @@ fn main() {
         }
         "app" => app(rest),
         "start" => start(),
+        "bare" => bare(rest),
         other => panic!("unknown role {other}"),
     }
+}
+
+/// Starts `role[0]` with `role[1..]` and null standard handles: this probe gives up its own
+/// first, and a stream inherited as null stays null in the child.
+fn bare(role: &[String]) {
+    #[cfg(windows)]
+    for which in [
+        windows_sys::Win32::System::Console::STD_INPUT_HANDLE,
+        windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE,
+        windows_sys::Win32::System::Console::STD_ERROR_HANDLE,
+    ] {
+        // SAFETY: no pointer; a null standard handle is what a process started without any has.
+        let _ = unsafe {
+            windows_sys::Win32::System::Console::SetStdHandle(which, std::ptr::null_mut())
+        };
+    }
+    let status = Command::new(&role[0])
+        .args(&role[1..])
+        .status()
+        .expect("start the program");
+    std::process::exit(status.code().unwrap_or(1));
 }
 
 /// Plays `<hub> start`: puts a "hub" (a `beat`) in the background the way `launch` does, says so

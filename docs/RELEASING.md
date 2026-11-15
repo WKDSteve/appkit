@@ -28,6 +28,10 @@ tag (`pnpm-lock.yaml` holds the commit of each kit), and its CI checks that the 
    puts it back to the version of appkit's own `Cargo.lock` and checks again. It refuses a tag that is not on
    origin, and skips an app whose files to edit hold uncommitted work. Then push each app and watch its CI.
 
+   A tag that asks an app for more than its pins (a change of its own code, such as `v0.56.0`: the hub is a
+   window program) gets an entry in `BY_HAND` of the script. The bump prints it for each app whose pin is
+   older ("by hand, not part of the bump commit"); the app makes that change in a commit of its own.
+
    Other sessions at work in the apps are no reason to wait: `--worktree` (implies `--commit`) makes each
    bump in a throw-away git worktree of the app's `HEAD`, so their uncommitted work neither skips the app nor
    slips into the lock files (`cargo update` resolves the whole workspace, and pnpm runs `--lockfile-only`

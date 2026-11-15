@@ -136,8 +136,12 @@ pub fn write_secret(dir: &Path, secret_hex: &str) -> io::Result<()> {
 /// the hub does not start, because a secret that others can read is no secret.
 #[cfg(windows)]
 fn restrict_to_user(path: &Path) -> io::Result<()> {
+    use std::os::windows::process::CommandExt as _;
     use std::process::{Command, Stdio};
 
+    /// `CREATE_NO_WINDOW`: a hub that is a window program has no console, and a console program it
+    /// starts would get one of its own, with a window.
+    const NO_WINDOW: u32 = 0x0800_0000;
     let root =
         std::env::var_os("SystemRoot").ok_or_else(|| io::Error::other("SystemRoot is not set"))?;
     let icacls = PathBuf::from(root).join("System32").join("icacls.exe");
@@ -153,6 +157,7 @@ fn restrict_to_user(path: &Path) -> io::Result<()> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .creation_flags(NO_WINDOW)
         .status()?;
     if status.success() {
         Ok(())

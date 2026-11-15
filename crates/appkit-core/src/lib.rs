@@ -10,6 +10,7 @@
 pub mod authn;
 pub mod child;
 pub mod classes;
+pub mod console;
 pub mod identity;
 pub mod job;
 pub mod proc;

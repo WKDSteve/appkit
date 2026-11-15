@@ -32,6 +32,11 @@ path = "src/bin/child-probe.rs"
 name = "hub-probe"
 path = "src/bin/hub-probe.rs"
 
+# A window program, for the tests of `appkit_core::console` (tests/window_program.rs).
+[[bin]]
+name = "window-probe"
+path = "src/bin/window-probe.rs"
+
 [dependencies]
 appkit-core = { path = "../appkit-core" }
 appkit-hub = { path = "../appkit-hub" }

@@ -1,15 +1,20 @@
 //! The first start by a double click: where the vault is, and whether to install the program.
 //!
-//! Asked in the console that the double click opened, one question at a time, each only once: what was
-//! answered (or declined) is remembered in `setup.json` in the config folder, so a second click asks
-//! nothing. Without a person at the console (a pipe, a script, a service) nothing is asked and nothing is
-//! installed: [`interactive`] is false and the program only starts the hub. The questions change no file
+//! Asked in a console, one question at a time, each only once: what was answered (or declined) is
+//! remembered in `setup.json` in the config folder, so a second click asks nothing. A console program
+//! asks in the console the double click opened, or in the terminal it was started from. A window program
+//! (the release build of a hub on Windows, see `appkit_core::console`) has no console after a double
+//! click, and the shell of a terminal does not wait for it: [`Console`] opens a console window of its
+//! own for the questions, only when there is something to ask, and closes it afterwards. Without a person
+//! (a pipe, a script, a service) nothing is asked and nothing is installed: [`interactive`] is false and
+//! the program only starts the hub. The questions change no file
 //! but the settings of the app, the install folder of the user and, when it is said yes to, the login entry
 //! and the desktop link (everything `<program> install` does, which this calls).
 
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
+use appkit_core::console;
 use serde::{Deserialize, Serialize};
 
 use crate::background::{self, Background, InstallOptions};
@@ -38,13 +43,35 @@ pub trait Io {
     fn ask(&mut self, question: &str) -> Option<String>;
     /// Tell something.
     fn say(&mut self, text: &str);
+    /// The questions are over (`finished`: without an error). The console closes a window it opened for them.
+    fn done(&mut self, finished: bool) {
+        let _ = finished;
+    }
 }
 
-/// The console of the process.
+/// The console of the process, or a console window of its own when the process is a window program (no
+/// console, or the console of a terminal whose shell reads the same keys).
 pub struct Console;
+
+impl Console {
+    /// A console to ask in; false when there is none and none could be opened.
+    fn ready() -> bool {
+        if console::shares_terminal() {
+            println!("The questions of the first start are asked in a window of their own.");
+        }
+        let title = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+            .unwrap_or_default();
+        console::open_own(&format!("{title}: first start"))
+    }
+}
 
 impl Io for Console {
     fn ask(&mut self, question: &str) -> Option<String> {
+        if !Self::ready() {
+            return None;
+        }
         print!("{question} ");
         let _ = std::io::stdout().flush();
         let mut line = String::new();
@@ -55,7 +82,22 @@ impl Io for Console {
     }
 
     fn say(&mut self, text: &str) {
-        println!("{text}");
+        if Self::ready() {
+            println!("{text}");
+        }
+    }
+
+    fn done(&mut self, finished: bool) {
+        if !console::opened_own() {
+            return;
+        }
+        // The window closes with the program's last word: what was installed is read before that.
+        if finished {
+            print!("Press Enter to close this window.");
+            let _ = std::io::stdout().flush();
+            let _ = std::io::stdin().lock().read_line(&mut String::new());
+        }
+        console::close_own();
     }
 }
 
@@ -71,10 +113,25 @@ fn no_setup(app: &SetupApp<'_>) -> String {
 /// Whether there is a person to ask.
 #[must_use]
 pub fn interactive(app: &SetupApp<'_>, env: &Env) -> bool {
-    // Both ends at a terminal: with the output in a file or a pipe the questions would go where nobody reads them.
-    env.get(&no_setup(app)).is_none()
-        && (env.get(&assume_terminal(app)).is_some()
-            || (std::io::stdin().is_terminal() && std::io::stdout().is_terminal()))
+    if env.get(&no_setup(app)).is_some() {
+        return false;
+    }
+    env.get(&assume_terminal(app)).is_some()
+        || person_present(
+            console::attach_parent(),
+            std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
+            console::started_without_streams(),
+        )
+}
+
+/// Whether a person started the program, by what it got: with a console, both ends at a terminal (with
+/// the output in a file or a pipe the questions would go where nobody reads them); without one, no
+/// streams at all (a double click, a link; a script or a service gives at least the null device).
+fn person_present(console: console::Console, terminal: bool, without_streams: bool) -> bool {
+    match console {
+        console::Console::Own | console::Console::Parent => terminal,
+        console::Console::None => without_streams,
+    }
 }
 
 /// What was asked already. A missing or unreadable file is "nothing yet": the worst case is a question twice.
@@ -288,6 +345,16 @@ pub async fn run<A: AppSettings>(
     io: &mut dyn Io,
     env: &Env,
 ) -> Result<Option<PathBuf>, String> {
+    let result = ask_all::<A>(app, io, env).await;
+    io.done(result.is_ok());
+    result
+}
+
+async fn ask_all<A: AppSettings>(
+    app: &SetupApp<'_>,
+    io: &mut dyn Io,
+    env: &Env,
+) -> Result<Option<PathBuf>, String> {
     let dir = instance::config_folder(env, app.identity())?;
     let mut asked = load_asked(&dir);
     let mut io = Watch {
@@ -374,6 +441,7 @@ mod tests {
         answers: Vec<&'static str>,
         asked: Vec<String>,
         said: Vec<String>,
+        done: Vec<bool>,
     }
 
     impl Script {
@@ -384,6 +452,7 @@ mod tests {
                 answers,
                 asked: Vec::new(),
                 said: Vec::new(),
+                done: Vec::new(),
             }
         }
     }
@@ -395,6 +464,30 @@ mod tests {
         }
         fn say(&mut self, text: &str) {
             self.said.push(text.to_owned());
+        }
+        fn done(&mut self, finished: bool) {
+            self.done.push(finished);
+        }
+    }
+
+    /// A window program without a console asks only after a double click or a link (no streams at all);
+    /// with a console (its own or the terminal's) only with both ends at the terminal.
+    #[test]
+    fn a_person_is_assumed_by_the_console_and_the_streams_the_program_got() {
+        use appkit_core::console::Console as C;
+        for (console, terminal, without_streams, expected) in [
+            (C::Own, true, false, true),
+            (C::Own, false, false, false),
+            (C::Parent, true, false, true),
+            (C::Parent, false, false, false),
+            (C::None, false, true, true),
+            (C::None, false, false, false),
+        ] {
+            assert_eq!(
+                person_present(console, terminal, without_streams),
+                expected,
+                "{console:?} terminal={terminal} without_streams={without_streams}"
+            );
         }
     }
 
@@ -579,6 +672,11 @@ mod tests {
         let mut io = Script::new(&[]);
         let program = run(&mut io, &env).await.unwrap();
         assert_eq!(program, None);
+        assert_eq!(
+            io.done,
+            [true],
+            "the console is told once that the questions are over"
+        );
         assert!(
             !asked_path(&config).exists(),
             "nothing was answered, nothing is noted"
