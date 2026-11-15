@@ -19,7 +19,7 @@ right, for different programs. What decides is who owns the process:
 | | The program | How | Window | Lifetime |
 |---|---|---|---|---|
 | (a) | **a child of the app**: it does work for the app (an engine call, an engine host, `git`, `gh`) | `appkit_core::child`: `run`, `run_lines`, `spawn` | none: it has nothing to show, its streams are pipes of the app | bound to the app by the system (job object, process group); time and size limits; named in the log |
-| (b) | **a program that is not the app's**: another app, a server in its console, an editor the person works in | `appkit_hub::launch::spawn` | its own, visible; never `CREATE_NO_WINDOW` or `DETACHED_PROCESS` | outlives the app on purpose; nothing of the app is inherited |
+| (b) | **a program that is not the app's**: another app, a server in its console, an editor the person works in | `appkit_core::launch::spawn` (also `appkit_hub::launch`) | its own, visible; never `CREATE_NO_WINDOW` or `DETACHED_PROCESS` | outlives the app on purpose; nothing of the app is inherited |
 | (c) | **something the system opens**: a link in the default browser | `appkit_hub::browser::open`: Windows `ShellExecuteW`, no program is started; macOS and Linux `/usr/bin/open` and `/usr/bin/xdg-open`, started the way (b) starts a program (it may become the browser) | the browser's | no process of the app at all |
 
 So a process without a window is always one that is bound to the app and ends with it, and a
@@ -110,6 +110,10 @@ What every child gets:
   output stream (for `run_lines`: all bytes of the stream, nothing is kept).
   When one is passed, the child and what it started are ended and the call fails with
   `ProcError::Timeout` or `ProcError::TooLarge`.
+- **A memory limit, where asked for** (`Start::memory(bytes)`): for a child that runs code of
+  somebody else. Windows: a memory limit of the child's job, so its own children count too; a
+  job that cannot be made fails the start. Linux: `RLIMIT_AS` in the child. macOS: none, only the
+  time limit holds.
 - **An environment that is named.** `Environment::Only(list)` is the whole environment;
   `Environment::Inherited { set, remove }` is the app's with changes. The default is empty.
 
@@ -166,7 +170,10 @@ A program of the system is not started where the system has a call for the same 
   (`ShellExecuteW`, verb `explore`, a folder only), no `explorer.exe` is started by the hub.
   macOS and Linux start `/usr/bin/open` and `xdg-open` the way (b) starts a program.
 
-## A program of somebody else (`appkit_hub::launch`)
+## A program of somebody else (`appkit_core::launch`)
+
+The module lives in `appkit-core`, so an app without a hub (docmap-desktop) has it without the
+server crates; `appkit_hub::launch` is the same module.
 
 A hub that starts another app does not own it: the other app stays when the hub ends. Such a
 start goes through `launch::spawn(program, args, &LaunchOpts { cwd, window })`: an absolute

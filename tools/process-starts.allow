@@ -3,7 +3,7 @@
 
 # The two helpers.
 crates/appkit-core/src/child.rs 2 the helper for children of the app
-crates/appkit-hub/src/launch.rs 2 the helper for a program of somebody else (it outlives the hub on purpose)
+crates/appkit-core/src/launch.rs 2 the helper for a program of somebody else (it outlives the hub on purpose)
 
 # Named exceptions that stay (decided 2026-11-14): Neovim as the editor in a visible console of its own, a window the person asked for and works in; a link handed to the system (ShellExecuteW) starts no process of the app.
 crates/appkit-hub/src/browser.rs 2 hands a link to the default browser (ShellExecuteW; open and xdg-open go through launch)

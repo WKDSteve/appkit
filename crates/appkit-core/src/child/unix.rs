@@ -7,16 +7,33 @@ use tokio::process::{Child, Command};
 
 /// The child leads a process group of its own (so the group can be ended as one), and on Linux
 /// the system ends it when this process is gone.
-pub(super) fn prepare(command: &mut Command) {
+///
+/// With `memory` the child's address space is limited to that many bytes (Linux, `RLIMIT_AS`);
+/// a limit that cannot be set keeps the child from starting.
+pub(super) fn prepare(command: &mut Command, memory: Option<u64>) {
     command.process_group(0);
+    #[cfg(not(target_os = "linux"))]
+    let _ = memory;
     #[cfg(target_os = "linux")]
     {
         let app = libc::pid_t::try_from(std::process::id()).unwrap_or(0);
         // SAFETY: the closure runs in the forked child before the program is loaded and calls
-        // only `prctl` and `getppid` (both async-signal-safe); it takes no lock and does not
-        // allocate (the errors are made from numbers).
+        // only `setrlimit`, `prctl` and `getppid` (all async-signal-safe); it takes no lock and
+        // does not allocate (the errors are made from numbers).
         unsafe {
             command.pre_exec(move || {
+                if let Some(bytes) = memory {
+                    // `rlim_t` is 64 bits wide on most targets and 32 on some.
+                    #[allow(clippy::useless_conversion)]
+                    let bytes = libc::rlim_t::try_from(bytes).unwrap_or(libc::RLIM_INFINITY);
+                    let limit = libc::rlimit {
+                        rlim_cur: bytes,
+                        rlim_max: bytes,
+                    };
+                    if libc::setrlimit(libc::RLIMIT_AS, &limit) != 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                }
                 if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
                     return Err(io::Error::last_os_error());
                 }

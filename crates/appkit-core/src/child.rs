@@ -25,7 +25,7 @@
 //! the three pipes.
 //!
 //! This module is for a child the app owns. A program that is meant to outlive the app (another
-//! app, an editor the person works in) is started through `appkit_hub::launch`, visibly and
+//! app, an editor the person works in) is started through [`crate::launch`] (also `appkit_hub::launch`), visibly and
 //! without a job; a link or a folder is handed to the system (`appkit_hub::browser`).
 //!
 //! Both need a tokio runtime.
@@ -86,6 +86,7 @@ pub struct Start {
     args: Vec<OsString>,
     env: Environment,
     cwd: Option<PathBuf>,
+    memory: Option<u64>,
     checked: bool,
 }
 
@@ -102,6 +103,7 @@ impl Start {
             args: Vec::new(),
             env: Environment::Only(Vec::new()),
             cwd: None,
+            memory: None,
             checked: true,
         }
     }
@@ -141,6 +143,22 @@ impl Start {
     #[must_use]
     pub fn cwd(mut self, cwd: impl Into<PathBuf>) -> Self {
         self.cwd = Some(cwd.into());
+        self
+    }
+
+    /// The child may not hold more than `bytes` of memory: for a child that runs code of
+    /// somebody else (an engine evaluating the checks of a ruleset), so that one call cannot take
+    /// the machine with it. An allocation past the limit fails in the child, or the child dies.
+    ///
+    /// - Windows: a memory limit of the child's job (`JOB_OBJECT_LIMIT_JOB_MEMORY`), so what the
+    ///   child starts counts too. A job that cannot be made fails the start.
+    /// - Linux: `RLIMIT_AS`, set in the child before it becomes the program. It bounds address
+    ///   space, which is more than what is used; the limit has to leave room for that.
+    /// - macOS and the rest: none. The kernel there does not enforce an address-space limit a
+    ///   process sets for itself; only the time limit holds.
+    #[must_use]
+    pub fn memory(mut self, bytes: u64) -> Self {
+        self.memory = Some(bytes);
         self
     }
 
@@ -210,7 +228,7 @@ impl Start {
             command.creation_flags(0x0800_0000);
         }
         #[cfg(unix)]
-        unix::prepare(&mut command);
+        unix::prepare(&mut command, self.memory);
         command
     }
 }
@@ -264,10 +282,12 @@ struct Tree {
 }
 
 impl Tree {
-    fn adopt(child: &Child) -> Self {
+    fn adopt(child: &Child, memory: Option<u64>) -> Self {
+        #[cfg(not(windows))]
+        let _ = memory;
         Self {
             #[cfg(windows)]
-            job: crate::job::Job::adopt(child),
+            job: crate::job::Job::adopt_limited(child, memory),
             // The child leads its own group (`unix::prepare`), so its id names the group.
             #[cfg(unix)]
             group: child.id(),
@@ -433,8 +453,18 @@ fn start_child(start: &Start) -> Result<Owned, ProcError> {
         let mut command = command;
         command.spawn()
     };
-    let child = child.map_err(ProcError::Spawn)?;
-    let tree = Tree::adopt(&child);
+    #[cfg_attr(not(windows), allow(unused_mut))]
+    let mut child = child.map_err(ProcError::Spawn)?;
+    let tree = Tree::adopt(&child, start.memory);
+    // A memory limit that was asked for and could not be set is a failure, not a run without
+    // one. The child has not been waited for, so killing it by its handle is safe.
+    #[cfg(windows)]
+    if start.memory.is_some() && tree.job.is_none() {
+        let _ = child.start_kill();
+        return Err(ProcError::Spawn(io::Error::other(
+            "not started: the memory limit of its job could not be set",
+        )));
+    }
     let what = format!(
         "{}: {} (pid {})",
         plain(OsStr::new(&start.caller)),

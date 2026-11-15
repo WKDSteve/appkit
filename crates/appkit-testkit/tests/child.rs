@@ -432,3 +432,36 @@ async fn a_child_of_a_hub_without_a_console_opens_no_console_window() {
     );
     assert_eq!(ask("helper"), ["none"]);
 }
+
+/// A child that asks for more memory than its limit does not get it; one that stays below does.
+/// macOS enforces no such limit (see `Start::memory`).
+#[cfg(any(windows, target_os = "linux"))]
+#[tokio::test]
+async fn a_child_with_a_memory_limit_cannot_take_more() {
+    // Linux limits the address space, which a program needs more of than it uses.
+    let limit: u64 = 256 * 1024 * 1024;
+    let below = child::run(call(probe(&["hold", "32"]).memory(limit)))
+        .await
+        .unwrap();
+    assert_eq!(
+        below.code,
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&below.stderr)
+    );
+    assert_eq!(lines(&below.stdout), vec!["held 32".to_owned()]);
+
+    let above = child::run(call(probe(&["hold", "1024"]).memory(limit)))
+        .await
+        .unwrap();
+    assert_ne!(
+        above.code,
+        Some(0),
+        "the child took 1 GB past a limit of 256 MB"
+    );
+    assert!(
+        lines(&above.stdout).is_empty(),
+        "{:?}",
+        lines(&above.stdout)
+    );
+}

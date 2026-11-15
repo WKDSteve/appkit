@@ -29,6 +29,15 @@ impl Job {
     #[cfg(windows)]
     #[must_use]
     pub fn adopt(child: &tokio::process::Child) -> Option<Self> {
+        Self::adopt_limited(child, None)
+    }
+
+    /// As [`Job::adopt`], and with `memory` the processes of the job together may not commit
+    /// more than that many bytes (`JOB_OBJECT_LIMIT_JOB_MEMORY`): an allocation past it fails
+    /// in the child.
+    #[cfg(windows)]
+    #[must_use]
+    pub fn adopt_limited(child: &tokio::process::Child, memory: Option<u64>) -> Option<Self> {
         use windows_sys::Win32::Foundation::CloseHandle;
         use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW};
 
@@ -38,7 +47,7 @@ impl Job {
         if job.is_null() {
             return None;
         }
-        let set = i32::from(set_kill_on_close(job, true));
+        let set = i32::from(set_limits(job, true, memory));
         // SAFETY: `job` is ours; `process` is the live handle of the child (it is not reaped
         // yet, the caller holds the `Child`).
         let assigned = set != 0 && unsafe { AssignProcessToJobObject(job, process) } != 0;
@@ -54,7 +63,7 @@ impl Job {
     /// behind on purpose is not ours to end. The job is dropped without killing.
     pub fn release(self) {
         #[cfg(windows)]
-        set_kill_on_close(self.handle, false);
+        set_limits(self.handle, false, None);
     }
 
     /// No job on this system.
@@ -63,20 +72,37 @@ impl Job {
     pub fn adopt(_child: &tokio::process::Child) -> Option<Self> {
         None
     }
+
+    /// No job on this system.
+    #[cfg(not(windows))]
+    #[must_use]
+    pub fn adopt_limited(_child: &tokio::process::Child, _memory: Option<u64>) -> Option<Self> {
+        None
+    }
 }
 
-/// Switch `KILL_ON_JOB_CLOSE` of `job` on or off. False when the system refuses.
+/// Set the limits of `job`: `KILL_ON_JOB_CLOSE` on or off, and a memory limit for the whole job
+/// or none. False when the system refuses.
 #[cfg(windows)]
-fn set_kill_on_close(job: windows_sys::Win32::Foundation::HANDLE, on: bool) -> bool {
+fn set_limits(
+    job: windows_sys::Win32::Foundation::HANDLE,
+    kill_on_close: bool,
+    memory: Option<u64>,
+) -> bool {
     use windows_sys::Win32::System::JobObjects::{
         JobObjectExtendedLimitInformation, SetInformationJobObject,
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_JOB_MEMORY,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
 
     // SAFETY: an all-zero struct is a valid "no limits" value of this plain-data type.
     let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
-    if on {
-        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if kill_on_close {
+        info.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    }
+    if let Some(bytes) = memory {
+        info.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_JOB_MEMORY;
+        info.JobMemoryLimit = usize::try_from(bytes).unwrap_or(usize::MAX);
     }
     let size = u32::try_from(std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())
         .unwrap_or(u32::MAX);

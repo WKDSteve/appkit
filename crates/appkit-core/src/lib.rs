@@ -11,7 +11,10 @@ pub mod authn;
 pub mod child;
 pub mod classes;
 pub mod console;
+#[cfg(windows)]
+pub mod handles;
 pub mod identity;
 pub mod job;
+pub mod launch;
 pub mod proc;
 pub mod registry;

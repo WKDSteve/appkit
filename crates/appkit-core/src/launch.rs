@@ -61,7 +61,7 @@ pub fn creation_flags(window: Window) -> u32 {
 // Absolute, on this machine (no network share, no device namespace) and without a `..`. The
 // caller has checked its paths already; this is the second layer, so that a program on a share
 // or one reached by climbing out of a root never starts, whatever the caller did.
-use appkit_core::child::local_absolute;
+use crate::child::local_absolute;
 
 /// Start `program` with `args` and return its process id. The call does not wait for the
 /// program; a thread of this process collects its exit status so that it is not left as a zombie.

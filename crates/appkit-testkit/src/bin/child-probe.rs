@@ -67,6 +67,7 @@ fn main() {
         }
         "hub" => hub(&rest[0], &rest[1]),
         "sleep" => std::thread::sleep(Duration::from_secs(60)),
+        "hold" => hold(rest[0].parse().unwrap_or(0)),
         "console" => println!("{}", if console_window() { "window" } else { "none" }),
         "beat" => beat(&rest[0]),
         "tree" => {
@@ -223,4 +224,18 @@ fn console_window() -> bool {
 #[cfg(not(windows))]
 fn console_window() -> bool {
     false
+}
+
+/// Take `mb` megabytes, touch every page and say so: the child of the memory-limit test. Past a
+/// limit the allocation fails and the program aborts.
+fn hold(mb: usize) {
+    let mut held: Vec<Vec<u8>> = Vec::new();
+    for _ in 0..mb {
+        let mut block = vec![0u8; 1024 * 1024];
+        for page in block.chunks_mut(4096) {
+            page[0] = 1;
+        }
+        held.push(block);
+    }
+    println!("held {}", held.len());
 }

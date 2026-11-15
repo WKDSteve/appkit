@@ -60,12 +60,14 @@ pub mod env;
 mod folder_dialog;
 pub mod fs_watch;
 pub mod guard;
+// Moved to appkit-core so that an app without a hub (docmap-desktop) starts a program of somebody
+// else the same way; the paths of the hub stay.
 #[cfg(windows)]
-mod handles;
+use appkit_core::handles;
 pub mod http;
 pub mod hub;
 pub mod instance;
-pub mod launch;
+pub use appkit_core::launch;
 pub mod limits;
 pub mod loginitems;
 pub mod loginstate;

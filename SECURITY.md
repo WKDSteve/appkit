@@ -270,7 +270,7 @@ switch that turns the host off.
   (not `~/.cache`: there
   every job of every repository on a self-hosted runner could enter an old date for a young version), so a run asks
   only for versions it has not seen. A cached date without a time zone is asked again.
-* `unsafe` is denied in the whole workspace. One module allows it: `appkit-hub/src/handles.rs`
+* `unsafe` is denied in the whole workspace. One module allows it: `appkit-core/src/handles.rs`
   (Windows only, `windows-sys`, the version tokio already brings) clears the inherit flag of the
   standard handles before a hub is started, so the hub does not hold a pipe of its caller. The
   stable standard library cannot start a program without handing on every inheritable handle.
