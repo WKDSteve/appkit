@@ -559,8 +559,8 @@ mod tests {
 
     #[test]
     fn a_file_that_is_no_shortcut_leads_nowhere() {
-        let file =
-            std::env::temp_dir().join(format!("takt-player-no-link-{}.lnk", std::process::id()));
+        let dir = appkit_scratch::Scratch::new("uninstall-no-link");
+        let file = dir.join("no-link.lnk");
         std::fs::write(&file, b"not a shortcut").unwrap();
         assert_eq!(shortcut_target(&file), None);
         std::fs::remove_file(&file).unwrap();

@@ -628,7 +628,9 @@ pub fn run<I: IntoIterator<Item = String>>(product: &Product, args: I) -> ExitCo
             if !options.yes && !sys::ask(name, &question) {
                 return Ok(None);
             }
-            remove(product, &places, &program, &std::env::temp_dir()).map(Some)
+            // temp-dir-ok: where the running program moves its own file, not a folder of a test.
+            let temp = std::env::temp_dir(); // temp-dir-ok
+            remove(product, &places, &program, &temp).map(Some)
         });
     match outcome {
         Ok(Some(report)) => {
@@ -663,6 +665,8 @@ pub fn run<I: IntoIterator<Item = String>>(product: &Product, args: I) -> ExitCo
 
 #[cfg(test)]
 mod tests {
+    use appkit_scratch::Scratch;
+
     use super::sys::TestPlace;
     use super::*;
 
@@ -804,6 +808,8 @@ mod tests {
 
     /// An install in a temp folder with its registry below a key of this test; both go with it.
     struct Install {
+        /// Removes the folder, also when the test fails.
+        _scratch: Scratch,
         root: PathBuf,
         registry: TestPlace,
         places: Places,
@@ -812,9 +818,8 @@ mod tests {
 
     impl Install {
         fn new(what: &str) -> Self {
-            let root = std::env::temp_dir()
-                .join(format!("demo-app-uninstall-{what}-{}", std::process::id()));
-            let _ = fs::remove_dir_all(&root);
+            let scratch = Scratch::new(&format!("uninstall-{what}"));
+            let root = scratch.path().to_path_buf();
             let install = root.join("demo").join("bin");
             for dir in [
                 &install,
@@ -836,6 +841,7 @@ mod tests {
             };
             let program = install.join(DEMO.program);
             Self {
+                _scratch: scratch,
                 root,
                 registry,
                 places,
@@ -860,12 +866,6 @@ mod tests {
 
         fn remove(&self) -> Result<Report, String> {
             remove(&DEMO, &self.places, &self.program, &self.root.join("temp"))
-        }
-    }
-
-    impl Drop for Install {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.root);
         }
     }
 
@@ -1023,9 +1023,7 @@ mod tests {
 
     #[test]
     fn an_install_with_folders_goes_whole_and_the_step_of_the_app_runs() {
-        let root =
-            std::env::temp_dir().join(format!("nested-app-uninstall-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
+        let root = Scratch::new("uninstall-nested");
         let install = root.join("nested");
         for dir in ["bin", r"extension\icons"] {
             fs::create_dir_all(install.join(dir)).unwrap();
@@ -1061,14 +1059,11 @@ mod tests {
         assert_eq!(sys::registry_text(&host, ""), None);
         assert!(report.removed.iter().any(|line| line == "the host"));
         assert!(temp.join(moved_name(&NESTED)).is_file());
-        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
     fn the_step_of_the_app_keeps_what_is_of_another_copy_and_its_error_ends_the_removal() {
-        let root =
-            std::env::temp_dir().join(format!("nested-app-uninstall-other-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
+        let root = Scratch::new("uninstall-nested-other");
         let install = root.join("nested");
         fs::create_dir_all(install.join("bin")).unwrap();
         fs::create_dir_all(install.join("extension")).unwrap();
@@ -1107,7 +1102,6 @@ mod tests {
             .notes
             .iter()
             .any(|note| note.starts_with("kept the host")));
-        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

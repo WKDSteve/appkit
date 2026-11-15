@@ -9,3 +9,7 @@ description = "`<app> --uninstall`: a program removes the install it is part of 
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# The folders of the tests, removed also when a test fails.
+appkit-scratch = { path = "../appkit-scratch" }

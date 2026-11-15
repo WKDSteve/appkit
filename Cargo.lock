@@ -123,6 +123,9 @@ dependencies = [
 [[package]]
 name = "appkit-uninstall"
 version = "0.0.0"
+dependencies = [
+ "appkit-scratch",
+]
 
 [[package]]
 name = "atomic-waker"
