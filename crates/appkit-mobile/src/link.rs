@@ -23,6 +23,43 @@ pub const DEVICE_PAIR_PATH: &str = "/auth/device/pair";
 pub const DEVICE_CHALLENGE_PATH: &str = "/auth/device/challenge";
 pub const DEVICE_SESSION_PATH: &str = "/auth/device/session";
 
+/// The version of the protocol between this phone app and its hub (`MOB-10`): the routes of pairing and login and the
+/// form of their answers. The hub names its own and the oldest it takes in `hello` and in each challenge; the same
+/// numbers as `appkit_hub::access::PHONE_PROTOCOL` of the same tag of the kit.
+pub const PROTOCOL: u32 = 1;
+/// The oldest protocol of a hub this app understands.
+pub const PROTOCOL_OLDEST_HUB: u32 = 1;
+
+/// Does the hub's answer (`hello` or a challenge) speak a protocol this app understands, and does it take this app?
+/// A hub from before `MOB-10` names none: it speaks version 1. Checked before a key is sent or anything is signed.
+fn check_protocol(doc: &Value) -> Result<(), LinkError> {
+    let said = &doc["protocol"];
+    if said.is_null() {
+        return check_versions(1, 1);
+    }
+    let number = |key: &str| {
+        said[key]
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+            .ok_or(LinkError::BadReply)
+    };
+    let (version, oldest) = (number("version")?, number("oldest")?);
+    if oldest > version {
+        return Err(LinkError::BadReply);
+    }
+    check_versions(version, oldest)
+}
+
+fn check_versions(hub: u32, hub_oldest: u32) -> Result<(), LinkError> {
+    if PROTOCOL < hub_oldest {
+        Err(LinkError::AppTooOld)
+    } else if hub < PROTOCOL_OLDEST_HUB {
+        Err(LinkError::HubTooOld)
+    } else {
+        Ok(())
+    }
+}
+
 /// What a device signs to open a session: the same text as `appkit_hub::devices::login_message`, byte for byte.
 #[must_use]
 pub fn login_message(origin: &str, device: &str, challenge: &str) -> String {
@@ -241,6 +278,12 @@ pub enum LinkError {
     NotAllowed,
     /// The answer is not what the hub sends.
     BadReply,
+    /// The hub no longer takes this version of the app (`MOB-10`): the page shows "update needed"; nothing was sent
+    /// or signed.
+    AppTooOld,
+    /// The hub is older than this app understands (`MOB-10`): the page asks to update the hub on the PC; nothing was
+    /// sent or signed.
+    HubTooOld,
 }
 
 impl From<NetError> for LinkError {
@@ -349,9 +392,11 @@ pub async fn pair(
     if hello.status != 200 {
         return Err(refusal(&hello));
     }
-    if object(&hello)?["app"].as_str() != Some(routes.app.as_str()) {
+    let hello = object(&hello)?;
+    if hello["app"].as_str() != Some(routes.app.as_str()) {
         return Err(LinkError::OtherApp);
     }
+    check_protocol(&hello)?;
     let key = signer.public_key().await?;
     let mut body = json!({ "code": link.code, "name": name, "key": key });
     if let Some(confirm) = &confirm {
@@ -446,6 +491,7 @@ impl Link {
         if doc["hub"].as_str() != Some(self.paired.hub.as_str()) {
             return Err(LinkError::OtherHub);
         }
+        check_protocol(&doc)?;
         hex_field(&doc, "challenge", 32)
     }
 
@@ -708,6 +754,36 @@ pub struct Read {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_protocol_of_the_hub_is_checked_both_ways() {
+        let said = |v: Value| check_protocol(&json!({ "protocol": v }));
+        assert_eq!(said(json!({ "version": PROTOCOL, "oldest": 1 })), Ok(()));
+        // A hub from before MOB-10 says nothing: it speaks version 1.
+        assert_eq!(check_protocol(&json!({ "app": "x" })), Ok(()));
+        // A newer hub that still takes this app, and one that no longer does.
+        assert_eq!(
+            said(json!({ "version": PROTOCOL + 3, "oldest": PROTOCOL })),
+            Ok(())
+        );
+        assert_eq!(
+            said(json!({ "version": PROTOCOL + 3, "oldest": PROTOCOL + 1 })),
+            Err(LinkError::AppTooOld)
+        );
+        assert_eq!(
+            check_versions(PROTOCOL_OLDEST_HUB - 1, 0),
+            Err(LinkError::HubTooOld)
+        );
+        for bad in [
+            json!("1"),
+            json!({ "version": 1 }),
+            json!({ "version": -1, "oldest": 1 }),
+            json!({ "version": 1, "oldest": 2 }),
+            json!({ "version": 1.5, "oldest": 1 }),
+        ] {
+            assert_eq!(said(bad.clone()), Err(LinkError::BadReply), "{bad}");
+        }
+    }
 
     #[test]
     fn only_plain_routes_of_the_app_are_sent() {

@@ -161,6 +161,96 @@ async fn a_phone_pairs_reads_logs_in_again_and_is_refused_once_revoked() {
     );
 }
 
+/// The real network, with the protocol a newer hub would name in `hello` and in each challenge (`MOB-10`), and a
+/// list of the paths that were sent.
+struct NewerHub {
+    net: Arc<dyn Transport>,
+    oldest: u32,
+    sent: std::sync::Mutex<Vec<String>>,
+}
+
+impl Transport for NewerHub {
+    fn send(
+        &self,
+        request: appkit_mobile::link::Request,
+        limits: Limits,
+    ) -> BoxFuture<'_, Result<appkit_mobile::link::Response, NetError>> {
+        Box::pin(async move {
+            self.sent.lock().unwrap().push(request.url.clone());
+            let mut answer = self.net.send(request, limits).await?;
+            if let Ok(mut doc) = serde_json::from_slice::<serde_json::Value>(&answer.body)
+                && doc.get("protocol").is_some()
+            {
+                doc["protocol"] =
+                    serde_json::json!({ "version": self.oldest + 1, "oldest": self.oldest });
+                answer.body = doc.to_string().into_bytes();
+            }
+            Ok(answer)
+        })
+    }
+}
+
+#[tokio::test]
+async fn an_app_the_hub_no_longer_takes_is_told_so_and_sends_and_signs_nothing() {
+    use appkit_mobile::link::{PROTOCOL, PROTOCOL_OLDEST_HUB};
+    // A hub and an app of the same tag of the kit speak to each other.
+    const { assert!(appkit_hub::access::PHONE_PROTOCOL >= PROTOCOL_OLDEST_HUB) };
+    const { assert!(PROTOCOL >= appkit_hub::access::PHONE_PROTOCOL_OLDEST) };
+
+    let hub = hub().await;
+    let newer = |oldest: u32| {
+        Arc::new(NewerHub {
+            net: net(),
+            oldest,
+            sent: std::sync::Mutex::new(Vec::new()),
+        })
+    };
+    let counting = Arc::new(Counting {
+        key: SoftwareSigner::random(),
+        signed: AtomicUsize::new(0),
+    });
+    // Pairing: the hello says so, the code and the key are not sent.
+    let too_new = newer(PROTOCOL + 1);
+    let r = pair(
+        too_new.clone(),
+        counting.clone(),
+        None,
+        &routes(),
+        &hub.link().await,
+        "Fairphone",
+        Limits::default(),
+    )
+    .await;
+    assert_eq!(r.err(), Some(LinkError::AppTooOld));
+    let sent = too_new.sent.lock().unwrap().clone();
+    assert!(sent.iter().all(|u| u.ends_with("/hello")), "{sent:?}");
+
+    // A hub that still takes this app pairs it; after its update it no longer does, and the login signs nothing.
+    let (paired, _) = pair(
+        newer(PROTOCOL),
+        counting.clone(),
+        None,
+        &routes(),
+        &hub.link().await,
+        "Fairphone",
+        Limits::default(),
+    )
+    .await
+    .unwrap();
+    let link = Link::new(
+        newer(PROTOCOL + 1),
+        counting.clone(),
+        routes(),
+        paired,
+        Limits::default(),
+    );
+    assert_eq!(
+        link.fetch(Method::Get, "/api/demo/items", &[], None).await,
+        Err(LinkError::AppTooOld)
+    );
+    assert_eq!(counting.signed.load(Ordering::SeqCst), 0);
+}
+
 #[tokio::test]
 async fn nothing_is_signed_for_a_hub_that_names_another_id() {
     let hub = hub().await;

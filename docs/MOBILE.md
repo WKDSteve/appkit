@@ -148,7 +148,10 @@ http://127.0.0.1:<port>/#appkit-pair=1&app=<namespace>&code=<32 hex digits>
 
 The code is good once, for 60 s, and stands in the fragment (no server sees it). The phone checks that the hub there is
 of its app (`hello`), sends its public key (and the public key that confirms triggers) with the code, and keeps the
-device id and the id of the hub. The keys are the platform's (Android Keystore) and never leave the phone. Every start
+device id and the id of the hub. Both `hello` and every challenge name the protocol between phone app and hub (`MOB-10`): `"protocol":
+{"version": n, "oldest": m}` (`appkit_hub::access::PHONE_PROTOCOL`, `PHONE_PROTOCOL_OLDEST`). An app older than `oldest`
+gets `LinkError::AppTooOld` and shows "update needed"; a hub older than the app's `PROTOCOL_OLDEST_HUB` gives
+`HubTooOld`. Either is found before a key is sent or anything is signed. A hub that names no protocol speaks version 1. The keys are the platform's (Android Keystore) and never leave the phone. Every start
 of the app signs a challenge of the hub; a hub that names another id gets no signature.
 
 ## Losing a phone

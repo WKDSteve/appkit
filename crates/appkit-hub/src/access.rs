@@ -31,6 +31,19 @@ pub async fn shell<R: Runtime>(State(st): State<Arc<Core<R>>>, uri: axum::http::
         .into_response()
 }
 
+/// The version of the protocol between a phone app and its hub (`MOB-10`) this hub speaks: the routes of pairing and
+/// login and the form of their answers. It is raised when a change would make an older phone app misread an answer.
+pub const PHONE_PROTOCOL: u32 = 1;
+/// The oldest version of a phone app's protocol this hub takes. A phone app older than this shows "update needed" and
+/// sends nothing.
+pub const PHONE_PROTOCOL_OLDEST: u32 = 1;
+
+/// What `hello` and the challenge of a device say about the protocol: the phone checks it before it sends a key or
+/// signs anything.
+fn phone_protocol() -> serde_json::Value {
+    json!({ "version": PHONE_PROTOCOL, "oldest": PHONE_PROTOCOL_OLDEST })
+}
+
 pub async fn hello<R: Runtime>(State(st): State<Arc<Core<R>>>) -> Response {
     let rt = st.rt();
     // Version and abilities only: no task, no area, no path, no vault name.
@@ -52,6 +65,8 @@ pub async fn hello<R: Runtime>(State(st): State<Arc<Core<R>>>) -> Response {
             "capabilities": rt.status().capabilities,
         },
         "capabilities": ["pairing"],
+        // Added to schema 1 (`MOB-10`): what a phone app checks before it pairs.
+        "protocol": phone_protocol(),
     });
     axum::Json(body).into_response()
 }
@@ -265,9 +280,12 @@ pub async fn device_challenge<R: Runtime>(State(st): State<Arc<Core<R>>>, body: 
         return error_body(StatusCode::BAD_REQUEST, "bad_body", "invalid request body");
     };
     match devices.challenge(&request.device) {
-        Ok(challenge) => {
-            axum::Json(json!({ "challenge": challenge, "hub": devices.hub_id() })).into_response()
-        }
+        Ok(challenge) => axum::Json(json!({
+            "challenge": challenge,
+            "hub": devices.hub_id(),
+            "protocol": phone_protocol(),
+        }))
+        .into_response(),
         Err(_) => error_body(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal",
