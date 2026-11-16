@@ -287,7 +287,7 @@ fn edit_list(dir: &Path, change: impl FnOnce(&mut Vec<String>)) -> Result<(), St
     let text = serde_json::to_string_pretty(&Value::Object(doc)).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(dir)
         .map_err(|e| format!("cannot make the config folder of hub-desktop: {e}"))?;
-    let tmp = dir.join(format!("config.json.{}.login.tmp", std::process::id()));
+    let tmp = crate::config::temp_beside(dir, "config.json");
     std::fs::write(&tmp, format!("{text}\n"))
         .map_err(|e| format!("cannot write the settings of hub-desktop: {e}"))?;
     std::fs::rename(&tmp, dir.join("config.json")).map_err(|e| {

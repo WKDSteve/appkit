@@ -387,6 +387,14 @@ pub fn load_file<A: AppSettings>(dir: &Path) -> Result<FileConfig<A>, ConfigErro
     Ok(cfg)
 }
 
+/// A temporary file in `dir` for a write of `name` that is then renamed over it: unique per call, not only per
+/// process, so two writers of one process (two routes of a hub) never share it.
+pub(crate) fn temp_beside(dir: &Path, name: &str) -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    dir.join(format!("{name}.{}.{n}.tmp", std::process::id()))
+}
+
 /// The largest settings file that is read.
 const MAX_FILE_BYTES: u64 = 64 * 1024;
 
@@ -400,7 +408,7 @@ pub fn save_file<A: AppSettings>(dir: &Path, cfg: &FileConfig<A>) -> Result<(), 
     cfg.validate()?;
     let text = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(dir).map_err(|e| format!("cannot make the config folder: {e}"))?;
-    let tmp = dir.join(format!("config.json.{}.tmp", std::process::id()));
+    let tmp = temp_beside(dir, "config.json");
     std::fs::write(&tmp, format!("{text}\n"))
         .map_err(|e| format!("cannot write the settings: {e}"))?;
     std::fs::rename(&tmp, dir.join("config.json")).map_err(|e| {
@@ -646,6 +654,36 @@ mod tests {
             load_file::<NoSettings>(&dir).is_ok(),
             "a refused save leaves the file as it was"
         );
+    }
+
+    #[test]
+    fn two_saves_of_one_process_at_the_same_time_both_succeed() {
+        // Two routes of one hub may save at once; each needs a temporary file of its own, or one rename finds
+        // the file gone and reports a failure although the change arrived.
+        let scratch = Scratch::new("hub-save-twice");
+        let dir = scratch.join("config");
+        let saves = |port: u16| {
+            let dir = dir.clone();
+            std::thread::spawn(move || {
+                let mut cfg = with_vaults(&[("native", abs())], Some("native"));
+                cfg.port = Some(port);
+                (0..200)
+                    .map(|_| save_file(&dir, &cfg))
+                    .find(Result::is_err)
+                    .unwrap_or(Ok(()))
+            })
+        };
+        let (a, b) = (saves(20000), saves(20001));
+        assert_eq!(a.join().unwrap(), Ok(()));
+        assert_eq!(b.join().unwrap(), Ok(()));
+        let port = load_file::<NoSettings>(&dir).unwrap().port;
+        assert!(matches!(port, Some(20000 | 20001)), "{port:?}");
+        let left: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .filter(|n| n != "config.json")
+            .collect();
+        assert!(left.is_empty(), "left behind: {left:?}");
     }
 
     #[test]
