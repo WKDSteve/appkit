@@ -574,11 +574,20 @@ pub async fn hello_needs_no_token_and_carries_no_data(s: &dyn Subject) {
             "engine",
             "instance",
             "kind",
+            "protocol",
             "schema",
             "setup_reason",
             "setup_required",
             "version"
         ]
+    );
+    // The protocol of a phone app (MOB-10): two numbers, nothing else.
+    let protocol = doc["protocol"].as_object().expect("protocol is an object");
+    assert_eq!(protocol.len(), 2, "{}", r.body);
+    assert!(
+        doc["protocol"]["version"].is_u64() && doc["protocol"]["oldest"].is_u64(),
+        "{}",
+        r.body
     );
     // A hub that is set up says so with a boolean and no reason; a reason is a short code.
     assert!(doc["setup_required"].is_boolean(), "{}", r.body);
