@@ -44,6 +44,15 @@ PUBLISH = KIT / "publish.sh"
 WINDOWS = os.name == "nt"
 
 
+def elevated() -> bool:
+    """Whether this session is elevated (Windows): only there does install.ps1 refuse without -AllowElevated."""
+    if not WINDOWS:
+        return False
+    import ctypes
+
+    return bool(ctypes.windll.shell32.IsUserAnAdmin())
+
+
 def git_bash(name: str) -> str | None:
     """A POSIX shell; on Windows the one of Git (the `bash` on PATH may be the WSL launcher).
 
@@ -761,11 +770,11 @@ class InstallPs1Test(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
 
     def run_ps(self, shell: str, script: Path, args: str, fake_exit: str = "0", prelude: str = "",
-               cwd: Path | None = None, **env: str) -> subprocess.CompletedProcess[str]:
+               cwd: Path | None = None, allow_elevated: bool = True, **env: str) -> subprocess.CompletedProcess[str]:
         # No real gh: a test that wants one passes INSTALL_GH (the fake below).
         full = dict(os.environ, OUT=str(self.out), FAKE_EXIT=fake_exit, INSTALL_GH="no-such-gh-for-the-tests")
         full.update(env)
-        command = f"{prelude}& '{script}' {args} -AllowElevated"
+        command = f"{prelude}& '{script}' {args}" + (" -AllowElevated" if allow_elevated else "")
         # errors="replace": a PowerShell on a German system writes its messages in the OEM code page, and a
         # test that only wants the exit code must not die on an umlaut before it can say what failed.
         return subprocess.run([shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
@@ -863,6 +872,31 @@ class InstallPs1Test(unittest.TestCase):
                 res = self.run_ps(shell, PS1, f"-File '{setup}' -Kind {kind}")
                 self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
                 self.assertEqual(self.out_text(), flags)
+
+    def test_the_environment_stands_for_allow_elevated(self) -> None:
+        # `irm ... | iex` takes no parameters: on an elevated CI machine INSTALL_ALLOW_ELEVATED=1 says what
+        # -AllowElevated says. In a session that is not elevated nothing is refused either way; the self-hosted
+        # runner is elevated, and there this proves the variable (with the refusal below).
+        setup = self.fake("demo-setup.cmd")
+        write_sums(self.tmp, setup)
+        for shell in self.each_shell():
+            res = self.run_ps(shell, PS1, f"-File '{setup}' -Kind inno", allow_elevated=False,
+                              INSTALL_ALLOW_ELEVATED="1")
+            self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+            self.assertEqual(self.out_text(), "/VERYSILENT /SUPPRESSMSGBOXES /CURRENTUSER /NORESTART")
+
+    @unittest.skipUnless(elevated(), "the refusal is only seen in an elevated session")
+    def test_an_elevated_session_is_refused_without_the_switch_or_the_variable(self) -> None:
+        setup = self.fake("demo-setup.cmd")
+        write_sums(self.tmp, setup)
+        # Only the exact value 1 counts: a variable that is merely set must not let it through.
+        for value in ("", "true", "0"):
+            for shell in self.each_shell():
+                res = self.run_ps(shell, PS1, f"-File '{setup}' -Kind inno", allow_elevated=False,
+                                  INSTALL_ALLOW_ELEVATED=value)
+                self.assertNotEqual(res.returncode, 0, value)
+                self.assertIn("do not run this elevated", res.stdout + res.stderr)
+                self.assertEqual(self.out_text(), "", "nothing was installed")
 
     def test_a_failing_setup_fails(self) -> None:
         setup = self.fake("demo-setup.cmd")
@@ -1228,7 +1262,9 @@ class PublishTest(unittest.TestCase):
         if WINDOWS:
             # Git Bash finds the fake gh by its POSIX path.
             full["PATH"] = "/" + self.bin.as_posix().replace(":", "", 1) + ":" + "/usr/bin:/bin:" + os.environ["PATH"]
-        return subprocess.run([BASH_EXE, PUBLISH.as_posix()], capture_output=True, text=True, env=full)
+        # In a folder of its own: publish.sh reads README.md and README.<lang>.md of the folder it runs in.
+        return subprocess.run([BASH_EXE, PUBLISH.as_posix()], capture_output=True, text=True, env=full,
+                              cwd=self.tmp)
 
     def calls(self) -> list[str]:
         return self.log.read_text().splitlines() if self.log.exists() else []
@@ -1254,6 +1290,41 @@ class PublishTest(unittest.TestCase):
         self.assertIn("install.sh", calls[upload])
         self.assertIn("SHA256SUMS", res.stdout + "".join(calls))
         self.assertIn("install.ps1", res.stdout)
+
+    WRAPPED = 'powershell -ExecutionPolicy Bypass -c "irm https://github.com/Owner/demo/releases/download/{tag}/install.ps1 | iex"\n'
+
+    def test_notes_with_the_wrapped_install_line_are_refused_before_anything_is_sent(self) -> None:
+        notes = self.tmp / "notes.md"
+        notes.write_text("Install it:\n\n```\n" + self.WRAPPED + "```\n", encoding="utf-8")
+        res = self.publish(NOTES_FILE=notes.as_posix())
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("notes.md:4 wraps the install line", res.stderr)
+        self.assertEqual(self.calls(), [], "nothing was sent")
+
+    def test_a_readme_with_the_wrapped_install_line_is_refused(self) -> None:
+        # Also a translation, and the other spellings of the switch and of Invoke-Expression.
+        for name, line in (("README.md", self.WRAPPED),
+                           ("README.de.md", "powershell -ep bypass -c \"irm https://x/install.ps1 | Invoke-Expression\"\n")):
+            with self.subTest(name=name):
+                readme = self.tmp / name
+                readme.write_text("# demo\n" + line, encoding="utf-8")
+                res = self.publish()
+                readme.unlink()
+                self.assertNotEqual(res.returncode, 0)
+                self.assertIn(f"{name}:2 wraps the install line", res.stderr)
+                self.assertEqual(self.calls(), [])
+
+    def test_the_line_as_it_is_typed_and_the_words_about_the_wrapper_pass(self) -> None:
+        # What the apps write since 2026-11-14: the plain line, and a sentence that names the wrapper without a pipe.
+        notes = self.tmp / "notes.md"
+        notes.write_text(
+            "irm https://github.com/Owner/demo/releases/download/{tag}/install.ps1 | iex\n\n"
+            "Wrapped in a new `powershell -ExecutionPolicy Bypass -c \"...\"`, Microsoft Defender reports it.\n"
+            "A saved script runs as `powershell -ExecutionPolicy Bypass -File .\\install.ps1`.\n",
+            encoding="utf-8")
+        (self.tmp / "README.md").write_text(notes.read_text(encoding="utf-8"), encoding="utf-8")
+        res = self.publish(NOTES_FILE=notes.as_posix())
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
 
     def uploads(self) -> list[str]:
         return [c for c in self.calls() if c.startswith("gh release upload")]

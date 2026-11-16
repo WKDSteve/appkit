@@ -56,6 +56,19 @@ esac
 if [ "$STEP" = stage ] && [ "${ATTEST:-}" = true ] && [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
     fail "attest is on, but this job has no OIDC token: give the publish job 'id-token: write' and 'attestations: write', or set attest: false"
 fi
+# The install line is typed into a PowerShell session, never wrapped in a new powershell.exe that switches the
+# execution policy off: Microsoft Defender reports that command line as Trojan:Win32/Commando.B!ml and nothing is
+# installed (README, "The install scripts"). Checked before anything is staged or sent, in the words of the page and in
+# the README of the app (README.md and its translations, README.<lang>.md, in the folder the action runs in), the two
+# places that line was written down. The same pattern as InstallLineTest.WRAPPED of test_release_kit.py.
+WRAPPED_INSTALL_LINE='-(executionpolicy|ep|ex)[[:space:]]+bypass.*\|[[:space:]]*(iex|invoke-expression)([^[:alnum:]_-]|$)'
+for doc in ${NOTES_FILE:+"$NOTES_FILE"} README.md README.*.md; do
+    [ -f "$doc" ] || continue
+    if hit="$(grep -Ein -m 1 -e "$WRAPPED_INSTALL_LINE" "$doc")"; then
+        fail "$doc:${hit%%:*} wraps the install line in a new powershell with the execution policy switched off, which Microsoft Defender reports as a trojan; write it as it is typed into a PowerShell session (irm ... | iex): ${hit#*:}"
+    fi
+done
+
 # On a Windows runner `runner.temp` is a path with backslashes; Git Bash wants its own form.
 if [ -n "$STAGE" ] && command -v cygpath > /dev/null 2>&1; then STAGE="$(cygpath -u "$STAGE")"; fi
 

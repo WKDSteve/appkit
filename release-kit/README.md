@@ -103,11 +103,14 @@ report the script reaches `Invoke-Expression` line by line, and its first line i
 session there is no such command line. From `cmd.exe` or the Run dialog, the same line without the
 bypass switch (`powershell -c "<the line>"`) was not reported on that day; a model's verdict can change,
 so the session is the way this page names. `test_release_kit.py` fails when the wrapped form comes back
-into this page or the script.
+into this page or the script, and `publish` refuses to send a page whose notes have it, or whose app has it
+in its README (see "Using it in an app").
 
 The scripts install **for the current user, without administrator rights**, and refuse an elevated
 session (`-AllowElevated` / `--allow-root` for a build machine): elevated, the app would be installed
-into the profile of the administrator account.
+into the profile of the administrator account. The one-liner takes no parameters; a CI job that runs it as
+it is on an elevated machine (a GitHub-hosted Windows runner is one) sets `INSTALL_ALLOW_ELEVATED=1` in the
+environment instead, which `install.ps1` reads as `-AllowElevated` (only the value `1` counts).
 
 | Kind | Script | Install step |
 |---|---|---|
@@ -227,6 +230,13 @@ The release page of a tag: `title` is its title (default: the tag; one line), an
 `notes-file` is replaced by the tag, so the notes can show the install line of exactly that release
 (`…/releases/download/{tag}/install.ps1`). The rolling build names its commit in its title itself. A draft
 that is there already gets the title and the notes of this run.
+
+Before anything is staged or sent, `publish` reads the notes file and the README of the app (`README.md` and
+`README.<lang>.md` in the folder the action runs in, the checkout when there is one) and stops when one of
+them wraps the install line in a new PowerShell that switches the execution policy off (the bypass switch,
+also as `-ep` or `-ex`, and a pipe into `iex` or `Invoke-Expression` on the same line): Microsoft Defender
+reports that command line as a trojan (see "The install scripts"). The error names the file and the line.
+A sentence that only names the wrapper, without the pipe on the same line, passes.
 
 ### A Windows-only app, a self-hosted Windows runner
 

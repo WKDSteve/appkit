@@ -36,7 +36,9 @@ Parameters (all optional):
   -Sums PATH          a SHA256SUMS file ("<hash>  <file>" per line)
   -Sha256 HEX         the expected SHA-256 of the file
   -InstallArgs A,B    more arguments for the install step (`<program> install ...` or the setup)
-  -AllowElevated      install although the session is elevated (a build machine)
+  -AllowElevated      install although the session is elevated (a build machine); where no parameter
+                      can be passed (`irm ... | iex` on an elevated CI machine), INSTALL_ALLOW_ELEVATED=1
+                      in the environment does the same
   -RequireAttestation stop unless the GitHub CLI `gh` confirms the file's attestation (without it a
                       missing `gh` or a build without attestation is only noted; a file whose
                       attestation does not verify is never installed)
@@ -182,9 +184,12 @@ Parameters (all optional):
         Exit-Install '-Program must be the file name of the program'
     }
 
-    # The app belongs to one user: elevated, it would be the administrator account.
+    # The app belongs to one user: elevated, it would be the administrator account. A build machine says it means
+    # it with -AllowElevated, or with INSTALL_ALLOW_ELEVATED=1 where the line typed by a person is run as it is
+    # (`irm ... | iex` takes no parameters; the published jobs of the apps run it so on an elevated VM).
+    $allowElevated = $AllowElevated -or $env:INSTALL_ALLOW_ELEVATED -ceq '1'
     $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-    if (-not $AllowElevated -and $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    if (-not $allowElevated -and $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         Exit-Install 'do not run this elevated: it installs for one user, without administrator rights (-AllowElevated for a build machine)'
     }
 
