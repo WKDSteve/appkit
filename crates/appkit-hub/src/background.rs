@@ -211,23 +211,99 @@ pub async fn start_as(
     }
     let exe = std::env::current_exe().map_err(|e| format!("own program not found: {e}"))?;
     remove_old_start_script(&dir);
-    spawn_detached(app, &exe, &dir, verb, program)?;
+    let (child, log_from) = spawn_detached(app, &exe, &dir, verb, program)?;
+    wait_for_hub(app, &dir, child, log_from, start_limit(app, &env)).await
+}
 
-    // The hub says it is there by its record and its answer.
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while Instant::now() < deadline {
-        if let Some(record) = instance::running_hub(&dir, app.identity()).await {
+/// How long `start` waits for the hub to come up: 20 seconds, or what `<APP>_START_SECS` names (1 to 3600;
+/// anything else is ignored), for the tests of an app on a machine under load.
+#[must_use]
+pub fn start_limit(app: &Background<'_>, env: &Env) -> Duration {
+    env.get(&app.identity().var("START_SECS"))
+        .and_then(|v| v.to_str()?.trim().parse::<u64>().ok())
+        .filter(|secs| (1..=3600).contains(secs))
+        .map_or(START_LIMIT, Duration::from_secs)
+}
+
+/// How long `start` waits for the hub by default.
+const START_LIMIT: Duration = Duration::from_secs(20);
+/// How long `start` still looks for a hub after the one it started failed: a hub started at the same time
+/// by someone else (a second double click) may be the one that comes up.
+const FAILED_GRACE: Duration = Duration::from_secs(2);
+
+/// Waits until the hub says it is there (its record and its answer). A hub that ends with a failure before
+/// that is reported at once, with the last line it wrote to `hub.log` after `log_from`: a broken settings
+/// file ends it in a moment, and nobody should wait the whole limit for a message that does not say why.
+async fn wait_for_hub(
+    app: &Background<'_>,
+    dir: &Path,
+    mut child: std::process::Child,
+    log_from: u64,
+    limit: Duration,
+) -> Result<String, String> {
+    let log = dir.join("hub.log");
+    let mut deadline = Instant::now() + limit;
+    let mut failed = None;
+    loop {
+        if let Some(record) = instance::running_hub(dir, app.identity()).await {
             return Ok(format!(
                 "{STARTED} (port {}, process {})\n",
                 record.port, record.pid
             ));
         }
+        if failed.is_none()
+            && let Ok(Some(status)) = child.try_wait()
+            && !status.success()
+        {
+            failed = Some(status);
+            deadline = deadline.min(Instant::now() + FAILED_GRACE);
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
-    Err(format!(
-        "the hub did not come up within 20 seconds; see {}",
-        dir.join("hub.log").display()
-    ))
+    match failed {
+        Some(status) => {
+            let cause =
+                last_log_line(&log, log_from).unwrap_or_else(|| format!("it ended with {status}"));
+            Err(format!(
+                "the hub ended before it came up: {cause}; see {}",
+                log.display()
+            ))
+        }
+        None => Err(format!(
+            "the hub did not come up within {} seconds; see {}",
+            limit.as_secs(),
+            log.display()
+        )),
+    }
+}
+
+/// The last line in `log` from byte `from` on that says something (not a note of the runtime such as
+/// "note: run with `RUST_BACKTRACE=1`"), without control characters and cut to 300 characters.
+fn last_log_line(log: &Path, from: u64) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    const TAIL: u64 = 64 * 1024;
+    let mut file = std::fs::File::open(log).ok()?;
+    let len = file.metadata().ok()?.len();
+    // A log cut by another start in between is read from its beginning.
+    let from = if from > len { 0 } else { from };
+    file.seek(SeekFrom::Start(from.max(len.saturating_sub(TAIL))))
+        .ok()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    let text = String::from_utf8_lossy(&bytes);
+    let line = text
+        .lines()
+        .map(|l| l.chars().filter(|c| !c.is_control()).collect::<String>())
+        .map(|l| l.trim().to_owned())
+        .rfind(|l| !l.is_empty() && !l.starts_with("note: ") && l != "stack backtrace:")?;
+    let mut cut: String = line.chars().take(300).collect();
+    if cut.len() < line.len() {
+        cut.push_str("...");
+    }
+    Some(cut)
 }
 
 /// Whether `verb` is one plain word (`serve`, `tray`): nothing a program could take as an option.
@@ -249,10 +325,11 @@ fn spawn_detached(
     dir: &Path,
     verb: &str,
     program: Program,
-) -> Result<(), String> {
+) -> Result<(std::process::Child, u64), String> {
     #[cfg(windows)]
     crate::handles::keep_standard_handles();
     let log = log_file(dir)?;
+    let log_from = log.metadata().map_or(0, |m| m.len());
     let err = log
         .try_clone()
         .map_err(|e| format!("cannot write the log: {e}"))?;
@@ -265,8 +342,7 @@ fn spawn_detached(
     let child = command
         .spawn()
         .map_err(|e| format!("the hub could not be started: {e}"))?;
-    drop(child);
-    Ok(())
+    Ok((child, log_from))
 }
 
 /// The program, the one verb and the variable that says "started by `start`": nothing else.
@@ -2506,6 +2582,87 @@ mod tests {
             &APP,
             &Env::from_pairs([("RULES_DESKTOP_DETACHED", "1")])
         ));
+    }
+
+    #[test]
+    fn start_waits_twenty_seconds_unless_a_sane_number_of_seconds_is_named() {
+        let limit =
+            |v: &str| start_limit(&APP, &Env::from_pairs([("RULES_DESKTOP_START_SECS", v)]));
+        assert_eq!(start_limit(&APP, &Env::default()), Duration::from_secs(20));
+        assert_eq!(limit("90"), Duration::from_secs(90));
+        assert_eq!(limit(" 3600 "), Duration::from_secs(3600));
+        for ignored in ["0", "3601", "-1", "soon", ""] {
+            assert_eq!(limit(ignored), Duration::from_secs(20), "{ignored:?}");
+        }
+    }
+
+    /// A hub that fails at once (a broken `config.json`) is reported at once, with what it wrote to its log;
+    /// what an earlier start wrote there is not taken for the cause.
+    #[tokio::test]
+    async fn a_hub_that_ends_with_a_failure_is_reported_at_once_with_its_cause() {
+        let scratch = Scratch::new("bg-start-fails");
+        let dir = scratch.path().to_path_buf();
+        let log_path = dir.join("hub.log");
+        std::fs::write(&log_path, "error: an old start\n").unwrap();
+        let log = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&log_path)
+            .unwrap();
+        let from = log.metadata().unwrap().len();
+        let said =
+            "invalid settings file config.json: EOF while parsing a value at line 1 column 0";
+        #[cfg(windows)]
+        let mut command = {
+            let mut c = Command::new("cmd");
+            c.args(["/d", "/c", &format!("echo {said}\x1b[0m 1>&2 & exit /b 1")]);
+            c
+        };
+        #[cfg(not(windows))]
+        let mut command = {
+            let mut c = Command::new("sh");
+            let script = format!("printf '%s\\033[0m\\nnote: run with it\\n' '{said}' >&2; exit 1");
+            c.args(["-c", &script]);
+            c
+        };
+        let child = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::from(log))
+            .spawn()
+            .unwrap();
+        let began = Instant::now();
+        let got = wait_for_hub(&APP, &dir, child, from, Duration::from_secs(60)).await;
+        let err = got.unwrap_err();
+        assert!(
+            began.elapsed() < Duration::from_secs(15),
+            "{:?}",
+            began.elapsed()
+        );
+        assert!(
+            err.starts_with("the hub ended before it came up: "),
+            "{err}"
+        );
+        assert!(err.contains(said), "{err}");
+        assert!(!err.contains('\x1b') && !err.contains("old start"), "{err}");
+        assert!(err.contains(&log_path.display().to_string()), "{err}");
+    }
+
+    #[test]
+    fn the_cause_is_the_last_line_that_says_something_cut_and_plain() {
+        let scratch = Scratch::new("bg-last-line");
+        let log = scratch.join("hub.log");
+        let long = "x".repeat(400);
+        let text = format!("before\nerror: one\r\n{long}\n\nnote: run with `RUST_BACKTRACE=1`\n");
+        std::fs::write(&log, text).unwrap();
+        let got = last_log_line(&log, 7).unwrap();
+        assert_eq!(got, format!("{}...", "x".repeat(300)));
+        std::fs::write(&log, "a\u{7}b\n").unwrap();
+        assert_eq!(last_log_line(&log, 0).as_deref(), Some("ab"));
+        // A log that was cut since is read from its start; an empty one says nothing.
+        assert_eq!(last_log_line(&log, 1000).as_deref(), Some("ab"));
+        std::fs::write(&log, "").unwrap();
+        assert_eq!(last_log_line(&log, 0), None);
+        assert_eq!(last_log_line(&scratch.join("none"), 0), None);
     }
 
     #[test]

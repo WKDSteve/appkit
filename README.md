@@ -148,7 +148,11 @@ it is `http://127.0.0.1:<port>/…` with a port from the list and plain characte
 
 `background::start` puts `serve` in the background, without a window. Such a hub must not stay
 behind when nobody uses it (an install that was cancelled, a tab closed days ago), so the kit
-gives the app what it needs to end it:
+gives the app what it needs to end it. `start` waits 20 seconds for the hub to come up (`<APP>_START_SECS`: another
+time, for the tests of an app on a machine under load); a hub that ends with a failure before that is reported at
+once, with the last line it wrote to `hub.log`.
+
+What the kit gives the app to end such a hub:
 
 - `RunningServer::presence()` counts who is here: a connection counts from the request on which
   the guard accepted a session until it ends. `hello`, the page shell, the control secret and a
