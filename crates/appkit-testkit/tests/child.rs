@@ -215,11 +215,13 @@ async fn a_call_that_takes_too_long_is_ended_with_what_it_started() {
     let dir = Scratch::new("child-timeout");
     let file = dir.join("beat");
     let mut run = call(probe(&["tree", text(&file)]));
-    run.timeout = Duration::from_secs(3);
+    // `tree` waits for its grandchild to run before it waits for nothing; the limit leaves room for a runner
+    // under load to start both (3 s did not, 2026-11-15), and the call still ends long before `tree` would.
+    run.timeout = Duration::from_secs(10);
     let began = Instant::now();
     let outcome = child::run(run).await;
     assert!(matches!(outcome, Err(ProcError::Timeout(_))), "{outcome:?}");
-    assert!(began.elapsed() < Duration::from_secs(20));
+    assert!(began.elapsed() < Duration::from_secs(30));
     assert!(size(&file) > 0, "the grandchild never ran");
     assert!(stops(&file).await, "the grandchild outlived the time limit");
 }

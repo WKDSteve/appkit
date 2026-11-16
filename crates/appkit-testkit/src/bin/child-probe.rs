@@ -72,6 +72,9 @@ fn main() {
         "beat" => beat(&rest[0]),
         "tree" => {
             start_beat(&rest[0]);
+            // The wait of a caller starts once the grandchild is known to run: a time limit that ends this
+            // call ends it after that, however slow the machine is to start a process.
+            beaten(&rest[0]);
             std::thread::sleep(Duration::from_secs(60));
         }
         "leave" => start_beat(&rest[0]),
@@ -146,6 +149,14 @@ fn beat(file: &str) {
             return;
         }
         std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Waits until the beat in `file` has written once (at most 60 seconds).
+fn beaten(file: &str) {
+    let end = Instant::now() + Duration::from_secs(60);
+    while Instant::now() < end && std::fs::metadata(file).map_or(0, |m| m.len()) == 0 {
+        std::thread::sleep(Duration::from_millis(20));
     }
 }
 
