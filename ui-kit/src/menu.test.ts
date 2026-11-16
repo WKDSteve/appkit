@@ -3,6 +3,7 @@ import {
   ariaShortcut,
   letterOfCode,
   menuForMnemonic,
+  popupShift,
   splitMnemonic,
   toBlocks,
   typeAheadIndex,
@@ -105,5 +106,21 @@ describe('typeAheadIndex', () => {
     expect(typeAheadIndex(labels, 0, 'z')).toBe(-1);
     expect(typeAheadIndex(labels, 0, '')).toBe(-1);
     expect(typeAheadIndex([], 0, 'a')).toBe(-1);
+  });
+});
+
+describe('popupShift', () => {
+  it('leaves a popup that fits where it is', () => {
+    expect(popupShift(10, 200, 375)).toBe(0);
+  });
+  it('moves one that reaches past the right edge back in, to the margin', () => {
+    // View at 173 px, a popup of 13rem: it reached to 410 px in a window 375 px wide.
+    expect(popupShift(173, 410, 375)).toBe(375 - 8 - 410);
+  });
+  it('moves one that starts left of the window to the right', () => {
+    expect(popupShift(-30, 150, 375)).toBe(38);
+  });
+  it('keeps the left edge of one wider than the window at the margin', () => {
+    expect(popupShift(100, 500, 320)).toBe(-92);
   });
 });

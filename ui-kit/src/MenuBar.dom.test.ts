@@ -125,6 +125,49 @@ describe('MenuBar keys', () => {
   });
 });
 
+describe('MenuBar in a narrow window', () => {
+  const pointer = (target: EventTarget, type: string, pointerType = 'mouse'): void => {
+    target.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerType }));
+  };
+
+  it('switches the open menu on a move of the pointer, not on an enter without a move (a scroll)', async () => {
+    trigger('project').click();
+    await settle();
+    expect(popup('project')).not.toBeNull();
+    // A scroll under the resting pointer: the browser reports an enter, but nothing moved.
+    trigger('view').dispatchEvent(new MouseEvent('mouseenter'));
+    pointer(trigger('view'), 'pointerenter');
+    await settle();
+    expect(popup('project')).not.toBeNull();
+    expect(popup('view')).toBeNull();
+    // A finger that slides over the bar does not switch either.
+    pointer(trigger('view'), 'pointermove', 'touch');
+    await settle();
+    expect(popup('view')).toBeNull();
+    pointer(trigger('view'), 'pointermove');
+    await settle();
+    expect(popup('project')).toBeNull();
+    expect(popup('view')).not.toBeNull();
+  });
+
+  it('moves a popup that would reach past the right edge into the window', async () => {
+    // Where the browser would draw it: View at 173 px, the popup 13rem wide, in a window of 375 px.
+    vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(375);
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const shifted = this.style.translate ? parseFloat(this.style.translate) : 0;
+      return new DOMRect(173 + shifted, 40, 237, 200);
+    });
+    trigger('view').click();
+    await settle();
+    const box = popup('view') as HTMLElement;
+    expect(box.style.translate).toBe('-43px 0');
+    // A wider window: it goes back where the bar puts it.
+    vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(1024);
+    window.dispatchEvent(new Event('resize'));
+    expect(box.style.translate).toBe('');
+  });
+});
+
 describe('MenuBar opens an item apart', () => {
   const opened: string[] = [];
   const apartMenus: Menu[] = [

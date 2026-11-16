@@ -17,6 +17,7 @@
     ariaShortcut,
     letterOfCode,
     menuForMnemonic,
+    popupShift,
     splitMnemonic,
     toBlocks,
     TYPE_AHEAD_MS,
@@ -82,6 +83,23 @@
     await tick();
     const items = itemButtons(id);
     (focusItem === 'first' ? items[0] : items[items.length - 1])?.focus();
+  }
+
+  /**
+   * Keeps an open popup inside the window: a menu far right in a narrow window would reach past the edge and give
+   * the page a sideways scroll (then a scroll could put another title under the resting pointer). Measured once it
+   * is drawn and again when the window changes size.
+   */
+  function fit(popup: HTMLElement): { destroy: () => void } {
+    const place = (): void => {
+      popup.style.translate = '';
+      const box = popup.getBoundingClientRect();
+      const shift = popupShift(box.left, box.right, document.documentElement.clientWidth || window.innerWidth);
+      if (shift !== 0) popup.style.translate = `${shift}px 0`;
+    };
+    place();
+    window.addEventListener('resize', place);
+    return { destroy: () => window.removeEventListener('resize', place) };
   }
 
   function close(focusTrigger: boolean): void {
@@ -316,12 +334,14 @@
         aria-expanded={openId === menu.id}
         onclick={() => (openId === menu.id ? close(false) : void open(menu.id, null))}
         onkeydown={(e) => onTriggerKey(e, menu.id)}
-        onmouseenter={() => {
-          if (openId !== null && openId !== menu.id) void open(menu.id, null);
+        onpointermove={(e) => {
+          // A move of the pointer, not its enter: a scroll or a shift of the layout under a resting pointer brings
+          // another title under it without a move, and must not switch the menu one is choosing in.
+          if (e.pointerType !== 'touch' && openId !== null && openId !== menu.id) void open(menu.id, null);
         }}>{@render triggerText(menu)}</button
       >
       {#if openId === menu.id}
-        <div class="mb-popup" role="menu" aria-label={menu.label} data-menu={menu.id}>
+        <div class="mb-popup" role="menu" aria-label={menu.label} data-menu={menu.id} use:fit>
           {#each toBlocks(menu.items) as block, b (b)}
             {#if block.kind === 'divider'}
               <hr />

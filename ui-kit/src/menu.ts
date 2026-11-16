@@ -169,3 +169,17 @@ export function typeAheadIndex(labels: readonly string[], from: number, typed: s
   }
   return -1;
 }
+
+/** How far a popup keeps from the edges of the window, in pixels. */
+export const POPUP_MARGIN = 8;
+
+/**
+ * How far to move a popup sideways (negative: to the left) so that it lies inside a window `viewWidth` wide, given
+ * where it lies now. A popup wider than the window keeps its left edge at the margin.
+ */
+export function popupShift(left: number, right: number, viewWidth: number, margin = POPUP_MARGIN): number {
+  let shift = 0;
+  if (right > viewWidth - margin) shift = viewWidth - margin - right;
+  if (left + shift < margin) shift = margin - left;
+  return shift;
+}
