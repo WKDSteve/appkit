@@ -21,8 +21,9 @@ use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{
     CUIAutomation8, IUIAutomation, IUIAutomationElement, IUIAutomationInvokePattern,
     IUIAutomationRangeValuePattern, IUIAutomationSelectionItemPattern, IUIAutomationTogglePattern,
-    ToggleState_On, TreeScope_Descendants, UIA_InvokePatternId, UIA_NamePropertyId,
-    UIA_RangeValuePatternId, UIA_SelectionItemPatternId, UIA_TogglePatternId,
+    IUIAutomationWindowPattern, ToggleState_On, TreeScope_Descendants, UIA_InvokePatternId,
+    UIA_NamePropertyId, UIA_RangeValuePatternId, UIA_SelectionItemPatternId, UIA_TogglePatternId,
+    UIA_WindowPatternId,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClientRect, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
@@ -253,6 +254,39 @@ impl Desktop for Uia {
             .map_err(|e| format!("the window {window:?} has no automation tree: {}", text(&e)))?;
         let found = self.elements_in(&root, name)?;
         seen(found, name).map(Some)
+    }
+
+    fn shut(&mut self, window: &str) -> Result<bool, String> {
+        let automation = self.automation()?;
+        // without the app's process every window would be "another program's", the app's own too
+        let pid = self.pid.ok_or("the app's window is not open")?;
+        let hwnd = match windows(None, Some(window), false, Some(pid)).as_slice() {
+            [] => return Ok(false),
+            [one] => *one,
+            many => {
+                return Err(format!(
+                    "{} windows have {window:?} in their title",
+                    many.len()
+                ))
+            }
+        };
+        // SAFETY: a window the system just listed, the results are counted references. Close is
+        // what the title bar's close button does: the program may ask first, and nothing is killed.
+        unsafe {
+            automation
+                .ElementFromHandle(HWND(hwnd as *mut _))
+                .and_then(|root| {
+                    root.GetCurrentPatternAs::<IUIAutomationWindowPattern>(UIA_WindowPatternId)
+                })
+                .and_then(|p| p.Close())
+        }
+        .map_err(|e| format!("the window {window:?} cannot be closed: {}", text(&e)))?;
+        Ok(true)
+    }
+
+    fn count(&mut self, window: &str) -> Result<usize, String> {
+        let pid = self.pid.ok_or("the app's window is not open")?;
+        Ok(windows(None, Some(window), false, Some(pid)).len())
     }
 
     fn toggle(&mut self, name: &str) -> Result<(), String> {

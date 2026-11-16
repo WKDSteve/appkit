@@ -9,6 +9,9 @@ const WAIT_MS: u64 = 2000;
 /// `expect` looks this long too: a window draws its change in a later frame, and what the driver
 /// did itself must not be a race. Measured: 15 ms typical, 56 ms at worst (analysis of E2).
 const EXPECT_MS: u64 = 1000;
+/// How long a window that was asked to close may take to go. One that is still there asks something
+/// (unsaved work): the step is red, the window is never killed.
+const GONE_MS: u64 = 5000;
 const POLL: Duration = Duration::from_millis(20);
 
 /// What a step can ask about an element; every field given has to hold.
@@ -19,7 +22,7 @@ pub struct Want {
     pub state: Option<bool>,
     pub value: Option<f64>,
     /// A part of the title of another program's window to look in instead of the app's: the
-    /// driver only reads there, it never acts in a window it did not open.
+    /// driver only reads there; the one thing it does to such a window is the `close` step.
     pub window: Option<String>,
 }
 
@@ -49,6 +52,12 @@ pub trait Desktop {
     /// now, `Ok(Some(None))` when it has no such element, an error when several windows or
     /// elements fit.
     fn look(&mut self, window: &str, name: &str) -> Result<Option<Option<Seen>>, String>;
+    /// Asks the one visible window of another process (not the app's) whose title contains
+    /// `window` to close, as its close button does (no kill, no keys): `Ok(false)` when there is
+    /// no such window now, an error when several fit or it offers no closing.
+    fn shut(&mut self, window: &str) -> Result<bool, String>;
+    /// How many visible windows of other processes (not the app's) have `window` in their title.
+    fn count(&mut self, window: &str) -> Result<usize, String>;
     fn toggle(&mut self, name: &str) -> Result<(), String>;
     fn click(&mut self, name: &str) -> Result<(), String>;
     fn set(&mut self, name: &str, value: f64) -> Result<(), String>;
@@ -69,6 +78,12 @@ impl Desktop for NoDesktop {
         Err(UNSUPPORTED.to_owned())
     }
     fn look(&mut self, _: &str, _: &str) -> Result<Option<Option<Seen>>, String> {
+        Err(UNSUPPORTED.to_owned())
+    }
+    fn shut(&mut self, _: &str) -> Result<bool, String> {
+        Err(UNSUPPORTED.to_owned())
+    }
+    fn count(&mut self, _: &str) -> Result<usize, String> {
         Err(UNSUPPORTED.to_owned())
     }
     fn toggle(&mut self, _: &str) -> Result<(), String> {
@@ -160,10 +175,46 @@ fn await_want(desktop: &mut dyn Desktop, want: &Want, ms: u64) -> Result<(), Str
     }
 }
 
+/// Closes the one window of another program with `window` in its title: waits up to `ms` for it to
+/// be there alone, asks it to close, and waits until it is gone.
+fn close_other(desktop: &mut dyn Desktop, window: &str, ms: u64) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_millis(ms);
+    loop {
+        // as in a `wait`: a window that is not there yet, or twice there for a moment, is "not yet"
+        let why = match desktop.shut(window) {
+            Ok(true) => break,
+            Ok(false) => format!("no window has {window:?} in its title"),
+            Err(why) => why,
+        };
+        if Instant::now() >= deadline {
+            return Err(format!("after {ms} ms: {why}"));
+        }
+        std::thread::sleep(POLL);
+    }
+    let gone = Instant::now() + Duration::from_millis(GONE_MS);
+    loop {
+        if desktop.count(window)? == 0 {
+            return Ok(());
+        }
+        if Instant::now() >= gone {
+            return Err(format!(
+                "the window {window:?} is still open {GONE_MS} ms after it was asked to close (does it ask something?)"
+            ));
+        }
+        std::thread::sleep(POLL);
+    }
+}
+
 fn step(desktop: &mut dyn Desktop, sheet: &Sheet, step: &Value) -> Result<Option<String>, String> {
     let timeout = step.get("timeout").and_then(Value::as_u64);
     if let Some(value) = step.get("wait") {
         await_want(desktop, &want(value)?, timeout.unwrap_or(WAIT_MS))?;
+    } else if let Some(value) = step.get("close") {
+        let window = value
+            .as_str()
+            .filter(|w| !w.is_empty())
+            .ok_or_else(|| "close names a part of a title, a non-empty string".to_owned())?;
+        close_other(desktop, window, timeout.unwrap_or(WAIT_MS))?;
     } else if let Some(value) = step.get("expect") {
         await_want(desktop, &want(value)?, EXPECT_MS)?;
     } else if let Some(name) = step.get("toggle").and_then(Value::as_str) {
@@ -318,6 +369,20 @@ mod tests {
         appears: u32,
         /// Looks that see two fitting windows before the second closes.
         ambiguous: u32,
+        /// Windows that ask something when asked to close, and stay.
+        stubborn: Vec<String>,
+        /// Windows asked to close, by title.
+        shut: Vec<String>,
+    }
+
+    impl Fake {
+        fn fitting(&self, window: &str) -> Vec<String> {
+            self.others
+                .keys()
+                .filter(|t| t.contains(window))
+                .cloned()
+                .collect()
+        }
     }
 
     impl Desktop for Fake {
@@ -366,6 +431,34 @@ mod tests {
                 1 => Ok(Some(fits[0].1.get(name).cloned())),
                 n => Err(format!("{n} windows have {window:?} in their title")),
             }
+        }
+        fn shut(&mut self, window: &str) -> Result<bool, String> {
+            if self.appears > 0 {
+                self.appears -= 1;
+                return Ok(false);
+            }
+            if self.ambiguous > 0 {
+                self.ambiguous -= 1;
+                return Err(format!("2 windows have {window:?} in their title"));
+            }
+            let fits = self.fitting(window);
+            match fits.as_slice() {
+                [] => Ok(false),
+                [one] => {
+                    self.shut.push(one.clone());
+                    if !self.stubborn.contains(one) {
+                        self.others.remove(one);
+                    }
+                    Ok(true)
+                }
+                many => Err(format!(
+                    "{} windows have {window:?} in their title",
+                    many.len()
+                )),
+            }
+        }
+        fn count(&mut self, window: &str) -> Result<usize, String> {
+            Ok(self.fitting(window).len())
         }
         fn toggle(&mut self, name: &str) -> Result<(), String> {
             self.pending = Some(name.to_owned());
@@ -609,6 +702,56 @@ mod tests {
         assert!(a["reason"].as_str().unwrap().contains("2 windows"), "{a}");
         let a = run(&mut f, &json!({ "wait": { "name": "x", "window": "" } }));
         assert!(a["reason"].as_str().unwrap().contains("non-empty"), "{a}");
+    }
+
+    #[test]
+    fn close_waits_for_the_one_window_and_until_it_is_gone() {
+        let mut f = fake();
+        f.others
+            .insert("clip.mkv - Media Player".to_owned(), HashMap::new());
+        f.others
+            .insert("Downloads - File Explorer".to_owned(), HashMap::new());
+        f.appears = 3;
+        let a = run(&mut f, &json!({ "close": "clip.mkv" }));
+        assert_eq!(a["ok"], true, "{a}");
+        assert_eq!(f.shut, ["clip.mkv - Media Player"]);
+        assert!(
+            f.others.contains_key("Downloads - File Explorer"),
+            "only that one window"
+        );
+    }
+
+    #[test]
+    fn close_without_one_window_or_against_a_question_is_a_reason() {
+        let mut f = fake();
+        let a = run(&mut f, &json!({ "close": "Player", "timeout": 50 }));
+        assert!(
+            a["reason"]
+                .as_str()
+                .unwrap()
+                .contains("after 50 ms: no window has \"Player\" in its title"),
+            "{a}"
+        );
+        f.others.insert("a - Player".to_owned(), HashMap::new());
+        f.others.insert("b - Player".to_owned(), HashMap::new());
+        let a = run(&mut f, &json!({ "close": "Player", "timeout": 50 }));
+        assert!(a["reason"].as_str().unwrap().contains("2 windows"), "{a}");
+        assert!(f.shut.is_empty(), "two fitting windows: neither is closed");
+        f.others.remove("b - Player");
+        f.stubborn.push("a - Player".to_owned());
+        let a = run(&mut f, &json!({ "close": "Player" }));
+        assert!(a["reason"].as_str().unwrap().contains("still open"), "{a}");
+        let a = run(&mut f, &json!({ "close": "" }));
+        assert!(a["reason"].as_str().unwrap().contains("non-empty"), "{a}");
+    }
+
+    #[test]
+    fn a_window_twice_there_for_a_moment_does_not_end_a_close() {
+        let mut f = fake();
+        f.others.insert("x - Player".to_owned(), HashMap::new());
+        f.ambiguous = 3;
+        let a = run(&mut f, &json!({ "close": "Player" }));
+        assert_eq!(a["ok"], true, "{a}");
     }
 
     #[test]
