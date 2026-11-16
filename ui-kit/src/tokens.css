@@ -58,6 +58,19 @@
   --warn: light-dark(#8a5a00, #f0c060);
   --bad: light-dark(#a3231f, #ff8a84);
 
+  /* 4b. Areas: eight colours that tell areas (a group of lists, of tasks) apart, as a band beside the area's name,
+     never without it. Each has at least 3:1 on --surface and --surface-2 in both themes; next ones in the row stay
+     apart for red-green blindness too; none is the blue of the accent. The app picks one per area (a hash of its
+     name); tokens.test.ts checks the values. A palette leaves them as they are. */
+  --area-1: light-dark(#9a6b00, #e0c040);
+  --area-2: light-dark(#00807a, #3cc8bd);
+  --area-3: light-dark(#4f7f1a, #9ccf5a);
+  --area-4: light-dark(#7a4fd0, #b79bff);
+  --area-5: light-dark(#c0392b, #ff8070);
+  --area-6: light-dark(#0b7fab, #4cc0f0);
+  --area-7: light-dark(#b85c00, #f0a050);
+  --area-8: light-dark(#b8327f, #f07ab8);
+
   /* 5. Depth and marks: the shadow of a popup or menu, the smaller one of a hint, the shade behind a dialog, a
      marked piece of text (a search hit). */
   --shadow: 0 6px 20px rgb(0 0 0 / 0.25);
