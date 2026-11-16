@@ -21,16 +21,16 @@ use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{
     CUIAutomation8, IUIAutomation, IUIAutomationElement, IUIAutomationInvokePattern,
     IUIAutomationRangeValuePattern, IUIAutomationSelectionItemPattern, IUIAutomationTogglePattern,
-    IUIAutomationWindowPattern, ToggleState_On, TreeScope_Descendants, UIA_InvokePatternId,
-    UIA_NamePropertyId, UIA_RangeValuePatternId, UIA_SelectionItemPatternId, UIA_TogglePatternId,
-    UIA_WindowPatternId,
+    IUIAutomationWindowPattern, ToggleState_On, TreeScope_Descendants, UIA_ControlTypePropertyId,
+    UIA_InvokePatternId, UIA_NamePropertyId, UIA_RangeValuePatternId, UIA_SelectionItemPatternId,
+    UIA_TextControlTypeId, UIA_TogglePatternId, UIA_WindowPatternId,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClientRect, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
     SetWindowPos, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
 };
 
-use crate::protocol::{Desktop, Seen};
+use crate::protocol::{By, Desktop, Seen};
 
 /// `PW_RENDERFULLCONTENT`: also what the GPU draws, which is all of an egui window.
 const FULL_CONTENT: PRINT_WINDOW_FLAGS = PRINT_WINDOW_FLAGS(2);
@@ -120,23 +120,30 @@ impl Uia {
     }
 
     /// The elements called `name` below the window.
-    fn elements(&mut self, name: &str) -> Result<Vec<IUIAutomationElement>, String> {
+    fn elements(&mut self, name: &str, by: By) -> Result<Vec<IUIAutomationElement>, String> {
         let root = self.root.clone().ok_or("the window is not open")?;
-        self.elements_in(&root, name)
+        self.elements_in(&root, name, by)
     }
 
-    /// The elements called `name` below `root`.
+    /// The elements called `name` below `root`; with [`By::TextPart`] the texts whose name contains it.
     fn elements_in(
         &mut self,
         root: &IUIAutomationElement,
         name: &str,
+        by: By,
     ) -> Result<Vec<IUIAutomationElement>, String> {
         let automation = self.automation()?;
-        let wanted = VARIANT::from(BSTR::from(name));
+        let (property, wanted) = match by {
+            By::Name => (UIA_NamePropertyId, VARIANT::from(BSTR::from(name))),
+            By::TextPart => (
+                UIA_ControlTypePropertyId,
+                VARIANT::from(UIA_TextControlTypeId.0),
+            ),
+        };
         // SAFETY: counted references and a variant that outlive each call.
-        unsafe {
+        let all: Vec<IUIAutomationElement> = unsafe {
             let condition = automation
-                .CreatePropertyCondition(UIA_NamePropertyId, &wanted)
+                .CreatePropertyCondition(property, &wanted)
                 .map_err(|e| text(&e))?;
             let found = root
                 .FindAll(TreeScope_Descendants, &condition)
@@ -144,13 +151,21 @@ impl Uia {
             let count = found.Length().map_err(|e| text(&e))?;
             (0..count)
                 .map(|i| found.GetElement(i).map_err(|e| text(&e)))
-                .collect()
-        }
+                .collect::<Result<_, _>>()?
+        };
+        Ok(match by {
+            By::Name => all,
+            By::TextPart => all
+                .into_iter()
+                // SAFETY: a counted reference; a text that went away meanwhile has no name here.
+                .filter(|e| unsafe { e.CurrentName() }.is_ok_and(|n| n.to_string().contains(name)))
+                .collect(),
+        })
     }
 
     /// The one element called `name`, for an action.
     fn one(&mut self, name: &str) -> Result<IUIAutomationElement, String> {
-        let mut found = self.elements(name)?;
+        let mut found = self.elements(name, By::Name)?;
         match found.len() {
             0 => Err(format!("no element is called {name:?}")),
             1 => Ok(found.remove(0)),
@@ -160,11 +175,12 @@ impl Uia {
 }
 
 /// What a sheet sees of the one element in `found`: `None` without one, an error with several.
-fn seen(mut found: Vec<IUIAutomationElement>, name: &str) -> Result<Option<Seen>, String> {
-    match found.len() {
-        0 => return Ok(None),
-        1 => {}
-        n => return Err(format!("{n} elements are called {name:?}")),
+fn seen(mut found: Vec<IUIAutomationElement>, name: &str, by: By) -> Result<Option<Seen>, String> {
+    match (found.len(), by) {
+        (0, _) => return Ok(None),
+        (1, _) => {}
+        (n, By::Name) => return Err(format!("{n} elements are called {name:?}")),
+        (n, By::TextPart) => return Err(format!("{n} texts contain {name:?}")),
     }
     let element = found.remove(0);
     // SAFETY: counted references; a pattern the element does not offer is an error, which here
@@ -230,12 +246,12 @@ impl Desktop for Uia {
         Ok(())
     }
 
-    fn find(&mut self, name: &str) -> Result<Option<Seen>, String> {
-        let found = self.elements(name)?;
-        seen(found, name)
+    fn find(&mut self, name: &str, by: By) -> Result<Option<Seen>, String> {
+        let found = self.elements(name, by)?;
+        seen(found, name, by)
     }
 
-    fn look(&mut self, window: &str, name: &str) -> Result<Option<Option<Seen>>, String> {
+    fn look(&mut self, window: &str, name: &str, by: By) -> Result<Option<Option<Seen>>, String> {
         let automation = self.automation()?;
         let hits = windows(None, Some(window), false, self.pid);
         let hwnd = match hits.as_slice() {
@@ -252,8 +268,8 @@ impl Desktop for Uia {
         // It may close between the two calls, which is an error of this look, not of the run.
         let root = unsafe { automation.ElementFromHandle(HWND(hwnd as *mut _)) }
             .map_err(|e| format!("the window {window:?} has no automation tree: {}", text(&e)))?;
-        let found = self.elements_in(&root, name)?;
-        seen(found, name).map(Some)
+        let found = self.elements_in(&root, name, by)?;
+        seen(found, name, by).map(Some)
     }
 
     fn shut(&mut self, window: &str) -> Result<bool, String> {

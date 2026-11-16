@@ -14,10 +14,22 @@ const EXPECT_MS: u64 = 1000;
 const GONE_MS: u64 = 5000;
 const POLL: Duration = Duration::from_millis(20);
 
+/// How a step names its element.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum By {
+    /// The whole accessible name.
+    #[default]
+    Name,
+    /// A part of the name of a text (`contains`): a message whose wording holds paths of the run.
+    TextPart,
+}
+
 /// What a step can ask about an element; every field given has to hold.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Want {
+    /// The name, or the part of it with [`By::TextPart`].
     pub name: String,
+    pub by: By,
     /// `on` or `off`.
     pub state: Option<bool>,
     pub value: Option<f64>,
@@ -44,14 +56,15 @@ pub trait Desktop {
         rows: u32,
         wait: Duration,
     ) -> Result<(), String>;
-    /// The one element called `name`: `Ok(None)` when there is none now, an error when there are
-    /// several (a guess would act on the wrong control).
-    fn find(&mut self, name: &str) -> Result<Option<Seen>, String>;
-    /// The one element called `name` in the one visible window of another process (not the app's)
-    /// whose title contains `window`, read only (no size, no focus): `Ok(None)` when there is no such window
-    /// now, `Ok(Some(None))` when it has no such element, an error when several windows or
-    /// elements fit.
-    fn look(&mut self, window: &str, name: &str) -> Result<Option<Option<Seen>>, String>;
+    /// The one element called `name` (with [`By::TextPart`]: the one text whose name contains `name`):
+    /// `Ok(None)` when there is none now, an error when there are several (a guess would act on the
+    /// wrong control).
+    fn find(&mut self, name: &str, by: By) -> Result<Option<Seen>, String>;
+    /// The one element called `name` (as in [`Desktop::find`]) in the one visible window of another
+    /// process (not the app's) whose title contains `window`, read only (no size, no focus): `Ok(None)`
+    /// when there is no such window now, `Ok(Some(None))` when it has no such element, an error when
+    /// several windows or elements fit.
+    fn look(&mut self, window: &str, name: &str, by: By) -> Result<Option<Option<Seen>>, String>;
     /// Asks the one visible window of another process (not the app's) whose title contains
     /// `window` to close, as its close button does (no kill, no keys): `Ok(false)` when there is
     /// no such window now, an error when several fit or it offers no closing.
@@ -74,10 +87,10 @@ impl Desktop for NoDesktop {
     fn open(&mut self, _: u32, _: Option<&str>, _: u32, _: u32, _: Duration) -> Result<(), String> {
         Err(UNSUPPORTED.to_owned())
     }
-    fn find(&mut self, _: &str) -> Result<Option<Seen>, String> {
+    fn find(&mut self, _: &str, _: By) -> Result<Option<Seen>, String> {
         Err(UNSUPPORTED.to_owned())
     }
-    fn look(&mut self, _: &str, _: &str) -> Result<Option<Option<Seen>>, String> {
+    fn look(&mut self, _: &str, _: &str, _: By) -> Result<Option<Option<Seen>>, String> {
         Err(UNSUPPORTED.to_owned())
     }
     fn shut(&mut self, _: &str) -> Result<bool, String> {
@@ -103,7 +116,7 @@ impl Desktop for NoDesktop {
 #[cfg(not(windows))]
 const UNSUPPORTED: &str = "this driver has only a Windows part so far";
 
-/// Reads what a `wait` or `expect` step wants: a name, or `{ name, state, value }`.
+/// Reads what a `wait` or `expect` step wants: a name, or `{ name | contains, state, value, window }`.
 fn want(value: &Value) -> Result<Want, String> {
     if let Some(name) = value.as_str() {
         return Ok(Want {
@@ -111,10 +124,17 @@ fn want(value: &Value) -> Result<Want, String> {
             ..Want::default()
         });
     }
-    let name = value
-        .get("name")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "it names no element".to_owned())?;
+    let (name, by) = match (value.get("name"), value.get("contains")) {
+        (Some(Value::String(name)), None) => (name, By::Name),
+        (None, Some(Value::String(part))) if !part.is_empty() => (part, By::TextPart),
+        (Some(_), Some(_)) => {
+            return Err("it names an element by name or by contains, not both".to_owned())
+        }
+        (None, Some(_)) => {
+            return Err("contains is a part of a text, a non-empty string".to_owned())
+        }
+        _ => return Err("it names no element".to_owned()),
+    };
     let state = match value.get("state").and_then(Value::as_str) {
         None => None,
         Some("on") => Some(true),
@@ -127,7 +147,8 @@ fn want(value: &Value) -> Result<Want, String> {
         Some(_) => return Err("window is a part of a title, a non-empty string".to_owned()),
     };
     Ok(Want {
-        name: name.to_owned(),
+        name: name.clone(),
+        by,
         state,
         value: value.get("value").and_then(Value::as_f64),
         window,
@@ -137,7 +158,10 @@ fn want(value: &Value) -> Result<Want, String> {
 /// Whether the element holds what is wanted, and otherwise what it shows instead.
 fn holds(want: &Want, seen: Option<&Seen>) -> Result<(), String> {
     let Some(seen) = seen else {
-        return Err(format!("no element is called {:?}", want.name));
+        return Err(match want.by {
+            By::Name => format!("no element is called {:?}", want.name),
+            By::TextPart => format!("no text contains {:?}", want.name),
+        });
     };
     if let Some(state) = want.state
         && seen.state != Some(state)
@@ -158,10 +182,10 @@ fn await_want(desktop: &mut dyn Desktop, want: &Want, ms: u64) -> Result<(), Str
     let deadline = Instant::now() + Duration::from_millis(ms);
     loop {
         let result = match &want.window {
-            None => holds(want, desktop.find(&want.name)?.as_ref()),
+            None => holds(want, desktop.find(&want.name, want.by)?.as_ref()),
             // Another program's windows come and go while it works: two of them for a moment, or one
             // that closes between the listing and the read, is "not yet", said only at the deadline.
-            Some(window) => match desktop.look(window, &want.name) {
+            Some(window) => match desktop.look(window, &want.name, want.by) {
                 Err(why) => Err(why),
                 Ok(None) => Err(format!("no window has {window:?} in its title")),
                 Ok(Some(seen)) => holds(want, seen.as_ref())
@@ -373,6 +397,8 @@ mod tests {
         stubborn: Vec<String>,
         /// Windows asked to close, by title.
         shut: Vec<String>,
+        /// The names of the texts of the window (a message), for `contains`.
+        texts: Vec<String>,
     }
 
     impl Fake {
@@ -401,7 +427,14 @@ mod tests {
                 .push((pid, title.map(str::to_owned), cols, rows));
             Ok(())
         }
-        fn find(&mut self, name: &str) -> Result<Option<Seen>, String> {
+        fn find(&mut self, name: &str, by: By) -> Result<Option<Seen>, String> {
+            if by == By::TextPart {
+                return match self.texts.iter().filter(|t| t.contains(name)).count() {
+                    0 => Ok(None),
+                    1 => Ok(Some(Seen::default())),
+                    n => Err(format!("{n} texts contain {name:?}")),
+                };
+            }
             if self.twice.iter().any(|n| n == name) {
                 return Err(format!("2 elements are called {name:?}"));
             }
@@ -412,7 +445,12 @@ mod tests {
             }
             Ok(self.elements.get(name).cloned())
         }
-        fn look(&mut self, window: &str, name: &str) -> Result<Option<Option<Seen>>, String> {
+        fn look(
+            &mut self,
+            window: &str,
+            name: &str,
+            by: By,
+        ) -> Result<Option<Option<Seen>>, String> {
             if self.appears > 0 {
                 self.appears -= 1;
                 return Ok(None);
@@ -428,6 +466,13 @@ mod tests {
                 .collect();
             match fits.len() {
                 0 => Ok(None),
+                1 if by == By::TextPart => Ok(Some(
+                    fits[0]
+                        .1
+                        .iter()
+                        .find(|(text, _)| text.contains(name))
+                        .map(|(_, seen)| seen.clone()),
+                )),
                 1 => Ok(Some(fits[0].1.get(name).cloned())),
                 n => Err(format!("{n} windows have {window:?} in their title")),
             }
@@ -632,6 +677,72 @@ mod tests {
         assert_eq!(f.shots.len(), 1);
         let a = run(&mut f, &json!({ "shot": "../x" }));
         assert_eq!(a["ok"], false);
+    }
+
+    /// A message holds paths of the run: `contains` finds the one text with that part, and none or two
+    /// such texts are a reason, as with a name.
+    #[test]
+    fn contains_finds_the_one_text_with_that_part() {
+        let mut f = fake();
+        f.texts.push(
+            "the hub ended before it came up: invalid settings file C:\\t\\config.json: EOF while parsing a value; see C:\\t\\hub.log"
+                .to_owned(),
+        );
+        f.texts.push("OK".to_owned());
+        let a = run(
+            &mut f,
+            &json!({ "wait": { "contains": "EOF while parsing" } }),
+        );
+        assert_eq!(a["ok"], true, "{a}");
+        let a = run(&mut f, &json!({ "expect": { "contains": "hub.log" } }));
+        assert_eq!(a["ok"], true, "{a}");
+        // not there: the reason names the part
+        let a = run(
+            &mut f,
+            &json!({ "wait": { "contains": "did not come up" }, "timeout": 50 }),
+        );
+        assert_eq!(a["ok"], false);
+        assert!(
+            a["reason"]
+                .as_str()
+                .unwrap()
+                .contains("no text contains \"did not come up\""),
+            "{a}"
+        );
+        // twice there: never a guess
+        f.texts.push("see the hub.log".to_owned());
+        let a = run(
+            &mut f,
+            &json!({ "wait": { "contains": "hub.log" }, "timeout": 50 }),
+        );
+        assert_eq!(a["ok"], false);
+        assert!(
+            a["reason"].as_str().unwrap().contains("2 texts contain"),
+            "{a}"
+        );
+        // a name and a part, or an empty part, is no step
+        for body in [
+            json!({ "wait": { "name": "OK", "contains": "O" } }),
+            json!({ "wait": { "contains": "" } }),
+            json!({ "wait": { "contains": 3 } }),
+        ] {
+            assert_eq!(run(&mut f, &body)["ok"], false, "{body}");
+        }
+    }
+
+    /// `contains` reads in the window of another program too.
+    #[test]
+    fn contains_looks_into_the_window_of_another_program() {
+        let mut f = fake();
+        f.others.insert(
+            "Error - App".to_owned(),
+            HashMap::from([("it failed: see C:\\x\\hub.log".to_owned(), Seen::default())]),
+        );
+        let a = run(
+            &mut f,
+            &json!({ "wait": { "contains": "hub.log", "window": "Error" }, "timeout": 500 }),
+        );
+        assert_eq!(a["ok"], true, "{a}");
     }
 
     #[test]
