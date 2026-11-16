@@ -231,8 +231,8 @@ const START_LIMIT: Duration = Duration::from_secs(20);
 /// by someone else (a second double click) may be the one that comes up.
 const FAILED_GRACE: Duration = Duration::from_secs(2);
 
-/// Waits until the hub says it is there (its record and its answer). A hub that ends with a failure before
-/// that is reported at once, with the last line it wrote to `hub.log` after `log_from`: a broken settings
+/// Waits until the hub says it is there (its record and its answer). A hub that ends before that (with a
+/// failure or with exit code 0) is reported at once, with the last line it wrote to `hub.log` after `log_from`: a broken settings
 /// file ends it in a moment, and nobody should wait the whole limit for a message that does not say why.
 async fn wait_for_hub(
     app: &Background<'_>,
@@ -251,9 +251,10 @@ async fn wait_for_hub(
                 record.port, record.pid
             ));
         }
+        // Any end counts, also one with exit code 0: a `stop` that came first, or a window hub that was quit,
+        // brings no hub either, and nobody should wait the whole limit for it.
         if failed.is_none()
             && let Ok(Some(status)) = child.try_wait()
-            && !status.success()
         {
             failed = Some(status);
             deadline = deadline.min(Instant::now() + FAILED_GRACE);
@@ -265,8 +266,12 @@ async fn wait_for_hub(
     }
     match failed {
         Some(status) => {
-            let cause =
-                last_log_line(&log, log_from).unwrap_or_else(|| format!("it ended with {status}"));
+            let cause = last_log_line(&log, log_from).unwrap_or_else(|| {
+                status.code().map_or_else(
+                    || format!("it ended with {status}"),
+                    |code| format!("it ended with exit code {code}"),
+                )
+            });
             Err(format!(
                 "the hub ended before it came up: {cause}; see {}",
                 log.display()
@@ -2644,6 +2649,47 @@ mod tests {
         );
         assert!(err.contains(said), "{err}");
         assert!(!err.contains('\x1b') && !err.contains("old start"), "{err}");
+        assert!(err.contains(&log_path.display().to_string()), "{err}");
+    }
+
+    /// A hub that ends with exit code 0 before it came up (a `stop` that came first, a window hub that was
+    /// quit) is reported at once too, not after the whole limit; with nothing in its log the exit code is the cause.
+    #[tokio::test]
+    async fn a_hub_that_ends_with_exit_code_0_is_reported_at_once() {
+        let scratch = Scratch::new("bg-start-ends-0");
+        let dir = scratch.path().to_path_buf();
+        let log_path = dir.join("hub.log");
+        let log = std::fs::File::create(&log_path).unwrap();
+        #[cfg(windows)]
+        let mut command = {
+            let mut c = Command::new("cmd");
+            c.args(["/d", "/c", "exit /b 0"]);
+            c
+        };
+        #[cfg(not(windows))]
+        let mut command = {
+            let mut c = Command::new("sh");
+            c.args(["-c", "exit 0"]);
+            c
+        };
+        let child = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::from(log))
+            .spawn()
+            .unwrap();
+        let began = Instant::now();
+        let got = wait_for_hub(&APP, &dir, child, 0, Duration::from_secs(60)).await;
+        let err = got.unwrap_err();
+        assert!(
+            began.elapsed() < Duration::from_secs(15),
+            "{:?}",
+            began.elapsed()
+        );
+        assert!(
+            err.starts_with("the hub ended before it came up: it ended with exit code 0; see "),
+            "{err}"
+        );
         assert!(err.contains(&log_path.display().to_string()), "{err}");
     }
 
