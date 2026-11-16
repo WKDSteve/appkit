@@ -770,11 +770,12 @@ class InstallPs1Test(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
 
     def run_ps(self, shell: str, script: Path, args: str, fake_exit: str = "0", prelude: str = "",
-               cwd: Path | None = None, allow_elevated: bool = True, **env: str) -> subprocess.CompletedProcess[str]:
+               cwd: Path | None = None, allow_elevated: bool = True, after: str = "",
+               **env: str) -> subprocess.CompletedProcess[str]:
         # No real gh: a test that wants one passes INSTALL_GH (the fake below).
         full = dict(os.environ, OUT=str(self.out), FAKE_EXIT=fake_exit, INSTALL_GH="no-such-gh-for-the-tests")
         full.update(env)
-        command = f"{prelude}& '{script}' {args}" + (" -AllowElevated" if allow_elevated else "")
+        command = f"{prelude}& '{script}' {args}" + (" -AllowElevated" if allow_elevated else "") + after
         # errors="replace": a PowerShell on a German system writes its messages in the OEM code page, and a
         # test that only wants the exit code must not die on an umlaut before it can say what failed.
         return subprocess.run([shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
@@ -786,7 +787,7 @@ class InstallPs1Test(unittest.TestCase):
         path.write_bytes(FAKE_CMD.encode())
         return path
 
-    def attested(self, shell: str, extra: str = "", **env: str) -> subprocess.CompletedProcess[str]:
+    def attested(self, shell: str, extra: str = "", after: str = "", **env: str) -> subprocess.CompletedProcess[str]:
         setup = self.fake("demo-setup.cmd")
         write_sums(self.tmp, setup)
         gh = self.tmp / "fake-gh.cmd"
@@ -795,7 +796,7 @@ class InstallPs1Test(unittest.TestCase):
         full.update(env)
         if full.pop("WITH_GH", "1") == "1":
             full["INSTALL_GH"] = str(gh)
-        return self.run_ps(shell, PS1, f"-File '{setup}' -Kind nsis -Repo Owner/demo {extra}", **full)
+        return self.run_ps(shell, PS1, f"-File '{setup}' -Kind nsis -Repo Owner/demo {extra}", after=after, **full)
 
     def test_attestation_noted_required_verified_and_refused(self) -> None:
         for shell in self.each_shell():
@@ -832,6 +833,16 @@ class InstallPs1Test(unittest.TestCase):
             self.assertIn("does not verify", res.stdout + res.stderr)
             self.assertIn("identity mismatch", res.stdout + res.stderr)
             self.assertEqual(self.out_text(), "")
+
+    def test_a_noted_attestation_leaves_no_failed_exit_code_behind(self) -> None:
+        # The powershell shell of GitHub Actions ends each step with `exit $LASTEXITCODE`: gh's 1 from a check that
+        # was only noted turned a good install into a red step (docmap-desktop, publish, 2026-11-14).
+        for shell in self.each_shell():
+            res = self.attested(shell, after="; exit $LASTEXITCODE", FAKE_GH_EXIT="1",
+                                FAKE_GH_SAY="Error: no attestations found for subject")
+            self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+            self.assertIn("attestation not checked: gh could not check it", res.stdout)
+            self.assertEqual(self.out_text(), "/S")
 
     def out_text(self) -> str:
         return self.out.read_text().strip() if self.out.exists() else ""

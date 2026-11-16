@@ -316,6 +316,10 @@ Parameters (all optional):
             # "$_" per line: Out-String of a stderr line would prefix it with the program's name in 5.1.
             try { $said = (@(& $gh.Source @verify 2>&1 | ForEach-Object { "$_" }) -join "`n"); $rc = $LASTEXITCODE }
             finally { $ErrorActionPreference = $before }
+            # gh's status is in $rc now. Left in $LASTEXITCODE it would outlive this script: a caller that reads it
+            # afterwards (the powershell shell of GitHub Actions ends every step with `exit $LASTEXITCODE`) would
+            # see a failure where the check was only noted and the install went on.
+            $global:LASTEXITCODE = 0
             if ($rc -eq 0) { Write-Output "attestation ok ($repo)" }
             # Only gh's verdict that the attestation is wrong stops the install. Anything else - no attestation (a
             # build from before them), not signed in, no network - means it could not be checked, which is not a "no".
