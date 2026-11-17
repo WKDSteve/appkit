@@ -56,6 +56,7 @@ pub mod discovery;
 pub mod editor;
 pub mod engine;
 pub mod env;
+pub mod family;
 #[cfg(windows)]
 mod folder_dialog;
 pub mod fs_watch;

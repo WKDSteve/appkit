@@ -21,6 +21,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use appkit_core::child::{self, Environment, Leftovers, Run, Start, Stream};
+use appkit_core::family;
 use appkit_core::identity::AppIdentity;
 
 use crate::env::Env;
@@ -1257,6 +1258,7 @@ async fn install_steps_beside(
         }
     }
     out.push_str(&format!("installed: {}\n", target.display()));
+    out.push_str(&register_in_family(app, &env, &target));
     if let Some(warning) = private_storage_warning(&env, &dir) {
         // On stderr and at once: a later error must not take it away.
         eprintln!("{warning}");
@@ -1614,6 +1616,7 @@ async fn uninstall_steps(app: &Background<'_>, opts: UninstallOptions) -> Result
         step(autostart(app, Autostart::Off), &mut out);
         step(remove_shortcut(app, &env), &mut out);
     }
+    unregister_from_family(app, &env);
     uninstall_closing(
         app,
         &env,
@@ -1628,6 +1631,45 @@ async fn uninstall_steps(app: &Background<'_>, opts: UninstallOptions) -> Result
     } else {
         print!("{out}");
         Err(failed.join("; "))
+    }
+}
+
+/// The family folder that `install` registers the app in and `uninstall` takes it out of
+/// (`appkit_core::family`). The tests of the program (`NO_LOGIN_SYNC`) leave the folder of the machine
+/// alone unless they name their own (`APPKIT_FAMILY_DIR`).
+fn family_folder(app: &Background<'_>, env: &Env) -> Option<PathBuf> {
+    if env.get(&no_login_sync(app)).is_some() && env.get(family::FAMILY_DIR_VAR).is_none() {
+        return None;
+    }
+    family::family_dir(&|name: &str| env.path(name))
+}
+
+/// Tell the family that the app is installed at `target` (the manifest that other apps read to
+/// know they can hand something over to it). A failure is said, never fatal: the app works without it.
+fn register_in_family(app: &Background<'_>, env: &Env, target: &Path) -> String {
+    let Some(folder) = family_folder(app, env) else {
+        return String::new();
+    };
+    let manifest = family::Manifest {
+        schema: family::MANIFEST_SCHEMA.to_owned(),
+        app: app.identity().app.to_owned(),
+        version: None,
+        program: target.to_path_buf(),
+        env_prefix: app.identity().env_prefix.to_owned(),
+    };
+    match family::write_manifest(&folder, &manifest) {
+        Ok(()) => String::new(),
+        Err(e) => format!(
+            "the other apps of the family will not find this one: cannot write {}: {e}\n",
+            family::manifest_path(&folder, &manifest.app).display()
+        ),
+    }
+}
+
+/// Take the app out of the family folder again.
+fn unregister_from_family(app: &Background<'_>, env: &Env) {
+    if let Some(folder) = family_folder(app, env) {
+        family::remove_manifest(&folder, app.identity().app);
     }
 }
 
@@ -1973,6 +2015,42 @@ mod tests {
 
     fn purge_settings(dir: &Path) -> Result<String, String> {
         super::purge_settings(&APP, dir)
+    }
+
+    #[test]
+    fn install_registers_the_app_in_the_family_and_uninstall_takes_it_out() {
+        let root = Scratch::new("hub-family-register");
+        let program = root.join("rules-hub.exe");
+        std::fs::create_dir_all(&*root).unwrap();
+        std::fs::write(&program, b"x").unwrap();
+        let family_dir = root.join("family");
+        let env = Env::from_pairs([
+            (family::FAMILY_DIR_VAR, family_dir.clone()),
+            ("RULES_DESKTOP_NO_LOGIN_SYNC", PathBuf::from("1")),
+        ]);
+        assert_eq!(register_in_family(&APP, &env, &program), "");
+        let manifest =
+            family::read_manifest(&family::manifest_path(&family_dir, "rules-desktop")).unwrap();
+        assert_eq!(manifest.program, program);
+        assert_eq!(manifest.env_prefix, "RULES_DESKTOP");
+        let vars = |name: &str| env.path(name);
+        assert!(family::family_apps(&vars, &[])[0].installed);
+        unregister_from_family(&APP, &env);
+        assert!(family::family_apps(&vars, &[]).is_empty());
+    }
+
+    #[test]
+    fn the_tests_of_a_program_leave_the_family_folder_of_the_machine_alone() {
+        let tests = Env::from_pairs([
+            ("RULES_DESKTOP_NO_LOGIN_SYNC", "1"),
+            ("LOCALAPPDATA", "C:/local"),
+            ("XDG_DATA_HOME", "/data"),
+        ]);
+        assert_eq!(family_folder(&APP, &tests), None);
+        let person = Env::from_pairs([("LOCALAPPDATA", "C:/local"), ("XDG_DATA_HOME", "/data")]);
+        if !cfg!(target_os = "macos") {
+            assert!(family_folder(&APP, &person).is_some());
+        }
     }
 
     #[test]

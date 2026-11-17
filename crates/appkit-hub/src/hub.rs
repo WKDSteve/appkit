@@ -289,6 +289,10 @@ fn router<R: Runtime>(core: &Arc<Core<R>>, app: Router<Arc<Core<R>>>) -> Router 
         .route(core.guard_rules.hello_path(), get(hello::<R>))
         .route("/api/vaults", get(vaults_list::<R>))
         .route(
+            crate::family::FAMILY_PATH,
+            get(crate::family::family_list::<R>),
+        )
+        .route(
             "/api/vaults/add",
             post(vaults_add::<R>).layer(DefaultBodyLimit::max(small)),
         )

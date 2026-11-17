@@ -13,6 +13,7 @@ pub mod authn;
 pub mod child;
 pub mod classes;
 pub mod console;
+pub mod family;
 #[cfg(windows)]
 pub mod handles;
 pub mod identity;

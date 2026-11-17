@@ -340,19 +340,8 @@ impl std::error::Error for ConfigError {}
 /// on macOS, which is not a promised platform, concept 13.9).
 #[must_use]
 pub fn config_dir(env: &Env, identity: &AppIdentity) -> Option<PathBuf> {
-    if let Some(dir) = env.path(&identity.var("CONFIG_DIR")) {
-        return Some(dir);
-    }
-    let base = if cfg!(windows) {
-        env.path("APPDATA")
-    } else if cfg!(target_os = "macos") {
-        env.path("HOME")
-            .map(|h| h.join("Library").join("Application Support"))
-    } else {
-        env.path("XDG_CONFIG_HOME")
-            .or_else(|| env.path("HOME").map(|h| h.join(".config")))
-    };
-    base.map(|b| b.join(identity.app))
+    let vars = |name: &str| env.path(name);
+    appkit_core::family::config_dir(&vars, identity.app, identity.env_prefix)
 }
 
 /// Load `config.json` from `dir`. A missing file is an empty config.

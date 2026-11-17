@@ -103,7 +103,8 @@ fn plain_policy_name(name: &str) -> bool {
 }
 
 /// The routes of the core itself: an app cannot name one of them as its own.
-const CORE_PATHS: [&str; 14] = [
+const CORE_PATHS: [&str; 15] = [
+    crate::family::FAMILY_PATH,
     crate::push::PUSH_KEY_PATH,
     crate::push::PUSH_SUBSCRIBE_PATH,
     crate::push::PUSH_UNSUBSCRIBE_PATH,
