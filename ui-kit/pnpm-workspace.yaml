@@ -8,3 +8,10 @@ onlyBuiltDependencies: []
 # used only to watch files in dev) was published without the provenance its earlier versions had.
 trustPolicyExclude:
   - chokidar@4.0.3
+# One audit advisory left out (2026-11-17, as in tasks-desktop): GHSA-fc5q-39xc-vjpf, picomatch ReDoS through repeated
+# extglobs, every version <=4.0.7, no fixed version published. picomatch is reached only through devDependencies
+# (svelte-check>fdir): a check tool that reads our own globs, never in a shipped page. Remove once picomatch is fixed
+# (task in tasks-vault: tasks-desktop/ausnahme-ghsa-fc5q-39xc-vjpf-entfernen-sobald-picomatch-gefi).
+auditConfig:
+  ignoreGhsas:
+    - GHSA-fc5q-39xc-vjpf
