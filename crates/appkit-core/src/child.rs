@@ -8,9 +8,10 @@
 //!   into a job object with `KILL_ON_JOB_CLOSE`; the system closes the job when the app is
 //!   gone and ends every process in it. Linux and macOS: the child leads a process group of
 //!   its own, which is killed when the [`Owned`] is dropped, the time is over or the output is
-//!   too large; a watcher in that group (forked from the child, no program of its own) waits
-//!   on a pipe only the app writes to and kills the group when the app is gone, however it
-//!   ended. On Linux the child also gets the parent-death signal. See "Limits" below.
+//!   too large; a watcher in that group waits on a pipe only the app writes to and kills the
+//!   group when the app is gone, however it ended. The watcher is the app's own program
+//!   started with one fixed argument, when the app calls [`watcher_main`] first in its `main`.
+//!   On Linux the child also gets the parent-death signal. See "Limits" below.
 //! - Its three standard streams are pipes of the app. It never gets a console, a log handle
 //!   or a terminal of its parent.
 //! - The program is a path and its arguments are an argv. No shell splits a string, and no
@@ -37,9 +38,13 @@
 //! - Windows: the child runs for a moment before it is in its job (it is not started
 //!   suspended). A process it starts in that moment is not in the job. Why it stays so:
 //!   `docs/PROCESSES.md`, "Limits".
-//! - Linux and macOS: the watcher closes the app's descriptors up to its limit of open files, at
-//!   most 65536; one above that would stay open in it. A child the app releases
-//!   ([`Leftovers::Keep`]) is not watched any more.
+//! - Linux and macOS: a child the app releases ([`Leftovers::Keep`]) is not watched any more.
+//!   Without [`watcher_main`] (a test program) Linux keeps a fork of the app as the watcher (it
+//!   closes the app's descriptors itself, with `close_range` or up to the limit of open files, at
+//!   most 65536, and holds a copy of the memory the app changes afterwards), and macOS has no
+//!   watcher: a crash of the app leaves the group there.
+//! - macOS has no `pipe2`: the watcher's pipe gets close-on-exec right after it is made, and a
+//!   child another thread starts in that moment holds its write end until it ends.
 //! - A process that leaves its group (`setsid`) or its job on purpose is not ended.
 //! - With [`Leftovers::Keep`], a process the child left running that holds one of the child's
 //!   pipes keeps the call waiting until the time is over.
@@ -229,11 +234,22 @@ impl Start {
             command.creation_flags(0x0800_0000);
         }
         #[cfg(unix)]
-        let guard = Some(unix::prepare(&mut command, self.memory)?);
+        let guard = unix::prepare(&mut command, self.memory)?;
         #[cfg(not(unix))]
         let guard: Guard = None;
         Ok((command, guard))
     }
+}
+
+/// The first call in `main` of an app that starts children (before its runtime and anything
+/// else). On Linux and macOS a program started as the watcher of a child's process group (the
+/// argument `--appkit-child-watcher`, see `docs/PROCESSES.md`) serves as that here and never
+/// returns; any other start returns at once, and from then on the watchers of this app's
+/// children are this program: they keep no copy of the app's memory and hold none of its files.
+/// Nothing on Windows (a job object does that work there).
+pub fn watcher_main() {
+    #[cfg(unix)]
+    unix::watcher_main();
 }
 
 /// Is `path` absolute, on this machine (no network share, no device namespace) and without a

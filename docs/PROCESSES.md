@@ -143,13 +143,24 @@ runs `install` in a terminal sees it there.
   puts itself in a job would end the browser a link starts with it.
 - Linux and macOS: the child leads a process group of its own, and a watcher in that group ends
   it when the app is gone, also when the app was killed (`kill -9`) or crashed. The watcher is
-  forked from the child before its program is loaded (twice, so it is nobody's child there), no
-  program of its own and no shell; it closes everything of the app but one pipe, whose only
-  write end the app holds, and waits on it. End of file (the system closed that end with the
-  app) or an error: it kills its group, itself with it. A byte: the group was released
-  (`Leftovers::Keep`) and it ends alone. While it lives the id of the group stays taken. A
-  watcher that cannot be forked keeps the child from starting. It closes descriptors up to the
-  app's limit of open files, at most 65536 (`crates/appkit-core/tests/group_watcher.rs`).
+  forked from the child before its program is loaded (twice, so it is nobody's child there) and
+  then **loads the app's own program** with one fixed argument, `--appkit-child-watcher` (Linux
+  `/proc/self/exe`, macOS the path of the running program), no environment, its standard
+  streams on `/dev/null` and one pipe on descriptor 3, whose only write end the app holds; every
+  other descriptor of the app is close-on-exec and gone. For that the app calls
+  `appkit_core::child::watcher_main()` first in its `main`: started with that argument, the program
+  only waits on descriptor 3 and never reaches the rest of `main`. End of file (the system closed
+  the write end with the app) or an error: it kills its group, itself with it. A byte: the group
+  was released (`Leftovers::Keep`) and it ends alone. It ignores SIGTERM, SIGINT, SIGHUP and
+  SIGQUIT (a child's `kill 0` to its own group). Started by hand with the argument it does
+  nothing to a group it leads itself or without a pipe on 3. While it lives the id of the group
+  stays taken. A watcher that cannot be forked keeps the child from starting.
+  Without `watcher_main` (a test program): Linux keeps the fork as the watcher, which closes the
+  app's descriptors itself (`close_range`, else up to the limit of open files, at most 65536) and
+  holds a copy of the memory the app changes afterwards; macOS gets no watcher, because closing
+  all descriptors there can hit a guarded one, which ends the process. macOS has no `pipe2`, so a
+  child another thread starts at the moment the pipe is made can hold its write end until it ends
+  (`crates/appkit-core/tests/group_watcher.rs`, both ways).
   Linux also gives the child itself the parent-death signal, as before.
 - A process that leaves its group (`setsid`) or its job on purpose is not ended.
 - With `Leftovers::Keep`, a process the child left running that holds one of the child's pipes

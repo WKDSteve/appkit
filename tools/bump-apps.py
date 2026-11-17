@@ -101,6 +101,12 @@ BY_HAND = [
      "the hub and need its exit code or output wait for it: Start-Process -Wait -NoNewWindow -PassThru, or pipe the "
      "call ($x = (& $exe --version | Out-String); a bare $x = (& $exe ...) does not wait and leaves $LASTEXITCODE "
      "unset); take v0.56.1 or newer, whose install.ps1 waits"),
+    ("v0.64.0", ("full", "kit", "cargo"),
+     "where the app starts children through appkit_core::child (a hub, an engine host): "
+     "appkit_core::child::watcher_main() as the very first call of main, before the runtime (on Linux and macOS the "
+     "watcher of a child's process group is the app's own program started with --appkit-child-watcher; without the "
+     "call Linux forks a copy of the app as the watcher and macOS has none; docs/PROCESSES.md of appkit, 'Limits'); "
+     "a test that kills the hub and checks that its children end, where the app has one"),
 ]
 
 
