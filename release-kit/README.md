@@ -119,6 +119,12 @@ environment instead, which `install.ps1` reads as `-AllowElevated` (only the val
 | `inno` | `install.ps1` | The Inno setup runs with `/VERYSILENT /SUPPRESSMSGBOXES /CURRENTUSER /NORESTART`. It installs for the current user when the setup has `PrivilegesRequired=lowest` (or allows the override on the command line, `PrivilegesRequiredOverridesAllowed=commandline`). |
 | `appimage` | `install.sh` | The AppImage is copied to `${XDG_BIN_HOME:-~/.local/bin}/<program>`. |
 
+The install step also tells the other apps of the family that the app is installed: it writes
+`<family>/installed/<app>.json` (`%LOCALAPPDATA%\appkit-family` on Windows) and its uninstaller removes it
+([docs/FAMILY.md](../docs/FAMILY.md)). `<program> install` of a hub does it by itself; an NSIS or Inno setup does
+it in its own script (ai-desktop's `installer/ai-desktop.iss` is the example). The scripts of the kit do not write
+it: an uninstall from Settings > Apps never runs them, and would leave the entry behind.
+
 Options of both scripts: another release (`-Version vX.Y.Z` / `--version`), the rolling build
 (`-Rolling` / `--rolling`), a file you already have (`-File` / `--file`, with `-Sums` / `-Sha256`),
 more arguments for the install step (`-InstallArgs '--autostart'` / `-- --autostart`), a stop without a
