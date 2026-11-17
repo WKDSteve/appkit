@@ -122,9 +122,11 @@ pointer moves to another element with a hint, the popup of the one it left goes 
 A field of a form explains itself the same way: put the hint on the `<label>` around the field (not on a sibling of
 it), so that the focus in the field finds it. A field one types into or picks from (`ENTRY_FIELD`: a text or date
 input, a `select`, a `textarea`) shows the popup on focus only when Tab brought the focus there (since v0.65.0). A
-field the page focuses (the first field of a dialog, `autofocus`) is only described (`aria-describedby`): the popup
-would cover the dialog, and the first Escape would close the popup instead of the dialog. The pointer resting on it
-still shows the popup. A checkbox or a radio button behaves as a button.
+field the page focuses (the first field of a dialog, `autofocus`) is only described: the popup would cover the
+dialog, and the first Escape would close the popup instead of the dialog. The pointer resting on it still shows the
+popup, which goes with the pointer. Every focused field is described by its hint (`aria-describedby` on the field
+itself, to a hidden node `hint-desc`, `DESC_ID`), also when the hint sits on its label (since v0.65.1). A checkbox or a
+radio button behaves as a button.
 
 To work on the kit and an app at once, point the app at the checkout (`pnpm add link:../path/to/appkit/ui-kit`) and
 put the tag back before committing.

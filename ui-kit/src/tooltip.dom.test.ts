@@ -3,7 +3,7 @@
 // mousedown), and the popup that focus would show lay under the pointer once the browser had scrolled the element into
 // view. The press shows nothing; the keyboard focus does.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { HIDE_DELAY_MS, installTooltips, SHOW_DELAY_MS, TIP_ID } from './tooltip';
+import { DESC_ID, HIDE_DELAY_MS, installTooltips, SHOW_DELAY_MS, TIP_ID } from './tooltip';
 
 let uninstall: (() => void) | undefined;
 
@@ -187,48 +187,83 @@ describe('the popup of a field one types into', () => {
     document.body.innerHTML =
       '<label id="l" data-hint="The name of it."><span>Name</span><input id="f" type="text" /></label>' +
       '<label data-hint="Pick one."><select id="s"><option>a</option></select></label>' +
-      '<label id="c" data-hint="Keep it."><input id="x" type="checkbox" /> Keep</label>';
+      '<label id="c" data-hint="Keep it."><input id="x" type="checkbox" /> Keep</label>' +
+      '<button id="b" data-hint="Other">B</button>';
     uninstall = installTooltips(document, window, { regionLabel: () => 'Hints' });
     const tip = document.getElementById(TIP_ID) as HTMLElement;
     const el = (id: string) => document.getElementById(id) as HTMLElement;
-    const key = (k: string) => document.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
-    return { tip, el, key };
+    const key = (k: string, prevented = false) => {
+      const e = new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true });
+      if (prevented) e.preventDefault();
+      document.dispatchEvent(e);
+      return e;
+    };
+    const fire = (target: Element, type: string) => target.dispatchEvent(new MouseEvent(type, { bubbles: true }));
+    const descText = () => document.getElementById(DESC_ID)?.textContent;
+    return { tip, el, key, fire, descText };
   }
 
-  it('focused by the page (autofocus, a dialog opened by a key) is described, not covered by the popup', () => {
-    const { tip, el, key } = form();
+  it('focused by the page (autofocus, a dialog opened by a key) describes the field itself, without the popup', () => {
+    const { tip, el, key, descText } = form();
     key('c');
     el('f').focus();
     expect(tip.hidden).toBe(true);
-    expect(el('l').getAttribute('aria-describedby')).toBe(TIP_ID);
-    expect(tip.textContent).toBe('The name of it.');
-    // Escape is the dialog's: the popup does not take it.
-    const esc = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
-    document.dispatchEvent(esc);
-    expect(esc.defaultPrevented).toBe(false);
-    el('f').blur();
+    // The field is described, not its label: a screen reader reads the hint on the field it is in.
+    expect(el('f').getAttribute('aria-describedby')).toBe(DESC_ID);
     expect(el('l').hasAttribute('aria-describedby')).toBe(false);
+    expect(descText()).toBe('The name of it.');
+    // Escape is the dialog's: the popup does not take it.
+    expect(key('Escape').defaultPrevented).toBe(false);
+    el('f').blur();
+    expect(el('f').hasAttribute('aria-describedby')).toBe(false);
   });
 
-  it('reached by Tab shows the popup at once, also a select', () => {
+  it('reached by Tab shows the popup at once, also a select, and the field is described', () => {
     const { tip, el, key } = form();
     key('Tab');
     el('f').focus();
     expect(tip.hidden).toBe(false);
     expect(tip.textContent).toBe('The name of it.');
+    expect(el('f').getAttribute('aria-describedby')).toBe(DESC_ID);
     key('Tab');
     el('s').focus();
     expect(tip.textContent).toBe('Pick one.');
     expect(tip.hidden).toBe(false);
+    expect(el('f').hasAttribute('aria-describedby')).toBe(false);
   });
 
-  it('described by the focus still shows the popup when the pointer rests on it', () => {
-    const { tip, el } = form();
+  it('a Tab the page took for itself does not count', () => {
+    const { tip, el, key } = form();
+    key('Tab', true);
     el('f').focus();
     expect(tip.hidden).toBe(true);
-    el('f').dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+  });
+
+  it('described by the focus shows the popup under the pointer, and it goes with the pointer', () => {
+    const { tip, el, key, fire, descText } = form();
+    key('c');
+    el('f').focus();
+    fire(el('f'), 'mouseover');
     vi.advanceTimersByTime(SHOW_DELAY_MS);
     expect(tip.hidden).toBe(false);
+    fire(el('f'), 'mouseout');
+    fire(document.body, 'mouseover');
+    vi.advanceTimersByTime(HIDE_DELAY_MS + 1);
+    expect(tip.hidden).toBe(true);
+    // The field keeps its description, and Escape is the dialog's again.
+    expect(el('f').getAttribute('aria-describedby')).toBe(DESC_ID);
+    expect(descText()).toBe('The name of it.');
+    expect(key('Escape').defaultPrevented).toBe(false);
+  });
+
+  it('keeps the description of the focused field while the pointer shows another hint', () => {
+    const { tip, el, key, fire } = form();
+    key('c');
+    el('f').focus();
+    fire(el('b'), 'mouseover');
+    vi.advanceTimersByTime(SHOW_DELAY_MS);
+    expect(tip.textContent).toBe('Other');
+    expect(el('f').getAttribute('aria-describedby')).toBe(DESC_ID);
   });
 
   it('a checkbox is a control like a button: its focus shows the popup as before', () => {

@@ -118,6 +118,9 @@ export const HIDE_DELAY_MS = 150;
 
 export const TIP_ID = 'hint-tip';
 
+/** The hidden text that describes a focused field (its hint), whether the popup is open or not. */
+export const DESC_ID = 'hint-desc';
+
 /** The longest pause an element may ask for with `data-hint-delay`. */
 export const MAX_DELAY_MS = 5000;
 
@@ -213,8 +216,6 @@ export function installTooltips(
   let current: HTMLElement | null = null;
   let describedBefore: string | null = null;
   let viaFocus = false;
-  // The hint of the element is set as its description, but the popup is not open: a field focused without Tab.
-  let quiet = false;
   // The last key was Tab: the focus that follows is the person moving through the page.
   let tabbed = false;
   // The last hand on the machine was on the keyboard. The focus a dialog gives back after a click of the mouse is also a
@@ -259,7 +260,6 @@ export function installTooltips(
     }
     current = null;
     viaFocus = false;
-    quiet = false;
     pinned = false;
     tip.style.pointerEvents = '';
     tip.hidden = true;
@@ -317,7 +317,7 @@ export function installTooltips(
     tip.style.top = `${at.y}px`;
   }
 
-  function show(el: HTMLElement, byFocus: boolean, describeOnly = false): void {
+  function show(el: HTMLElement, byFocus: boolean): void {
     const text = el.dataset.hint ?? '';
     if (text === '') return hide();
     if (current && current !== el) hide();
@@ -343,9 +343,6 @@ export function installTooltips(
     const parent = el.closest('dialog') ?? doc.body;
     if (host.parentElement !== parent) parent.appendChild(host);
     if (!ownsDescription(el)) el.setAttribute('aria-describedby', withToken(describedBefore, TIP_ID));
-    // A described field keeps the text (a screen reader reads the description of a hidden element) without the popup.
-    quiet = describeOnly;
-    if (describeOnly) return;
     host.hidden = false;
     tip.hidden = false;
     place(el);
@@ -366,8 +363,7 @@ export function installTooltips(
       return;
     }
     cancelHide();
-    // A field that is only described shows its popup when the pointer rests on it, as any other element.
-    if (el === current && !quiet) return;
+    if (el === current) return;
     // The pointer is on another element: the popup of the one it left goes at once, it does not wait for the next.
     if (current && !tip.hidden) hide();
     cancelShow();
@@ -399,15 +395,49 @@ export function installTooltips(
   const onUp = (): void => {
     pressing = false;
   };
+  // The description of the focused field: a node of its own, apart from the popup (whose text is that of whatever the
+  // pointer rests on). It is on the field itself, also when the hint sits on its label.
+  const desc = doc.createElement('div');
+  desc.id = DESC_ID;
+  desc.hidden = true;
+  doc.body.appendChild(desc);
+  let described: HTMLElement | null = null;
+  let describedOwn: string | null = null;
+  function undescribe(): void {
+    if (!described) return;
+    const rest = withoutToken(described.getAttribute('aria-describedby'), DESC_ID);
+    if (rest === '' && describedOwn === null) described.removeAttribute('aria-describedby');
+    else described.setAttribute('aria-describedby', rest);
+    described = null;
+  }
+  function describe(field: HTMLElement, el: HTMLElement): void {
+    undescribe();
+    if (ownsDescription(el)) return;
+    desc.textContent = el.dataset.hint ?? '';
+    // A modal dialog makes the rest of the page inert: the text lives where the field is.
+    const parent = field.closest('dialog') ?? doc.body;
+    if (desc.parentElement !== parent) parent.appendChild(desc);
+    describedOwn = field.getAttribute('aria-describedby');
+    field.setAttribute('aria-describedby', withToken(describedOwn, DESC_ID));
+    described = field;
+  }
+
   const onFocusIn = (e: Event): void => {
-    if (pressing || pinned) return;
     const el = hintOf(e.target);
-    if (!el) return;
     // A document without selectors (a test without a real DOM) has no fields to tell apart.
-    const field = e.target instanceof win.Element && typeof e.target.matches === 'function' && e.target.matches(ENTRY_FIELD);
-    show(el, true, field && !tabbed);
+    const field =
+      e.target instanceof win.Element && typeof e.target.matches === 'function' && e.target.matches(ENTRY_FIELD)
+        ? (e.target as HTMLElement)
+        : null;
+    if (el && field) describe(field, el);
+    if (pressing || pinned || !el) return;
+    // A field the page focused (autofocus, a dialog's first field) is described only: the popup would cover the dialog,
+    // and the first Escape would close the popup instead of the dialog. Tab or the pointer shows it.
+    if (field && !tabbed) return;
+    show(el, true);
   };
   const onFocusOut = (): void => {
+    undescribe();
     if (!pinned) hide();
   };
   // A tap shows the popup at once: a touch screen has no hover to wait for, and not every browser focuses what is
@@ -422,16 +452,22 @@ export function installTooltips(
     } else hide();
   };
   const onChange: Change = (el, gone) => {
+    // The focused field follows the hint around it, also while no popup is open.
+    if (described && el.contains(described)) {
+      if (gone || (el.dataset.hint ?? '') === '') undescribe();
+      else desc.textContent = el.dataset.hint ?? '';
+    }
     if (el !== current) return;
     if (gone || (el.dataset.hint ?? '') === '') hide();
-    else show(el, viaFocus, quiet);
+    else show(el, viaFocus);
   };
   watchers.add(onChange);
   const onKey = (e: KeyboardEvent): void => {
     // A key after a press that never got its release (the button was let go outside the window) is the keyboard again.
     pressing = false;
     keyboard = true;
-    tabbed = e.key === 'Tab';
+    // A Tab the page took for itself (preventDefault) moves no focus.
+    tabbed = e.key === 'Tab' && !e.defaultPrevented;
     // Tab is the keyboard again: a kept popup is a kept one no longer (Ctrl+C copies from it, Escape closes it below).
     if (e.key === 'Tab' && pinned) hide();
     // The popup is closed by this Escape and by nothing else: it is not also the Escape of a dialog or a menu. A
@@ -470,6 +506,8 @@ export function installTooltips(
   doc.addEventListener('close', onDialogClose, true);
   return () => {
     hide();
+    undescribe();
+    desc.remove();
     watchers.delete(onChange);
     doc.removeEventListener('click', onClick);
     doc.removeEventListener('mouseover', onOver);
