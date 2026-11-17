@@ -69,6 +69,17 @@ export const CONTROL =
   '[role="checkbox"], [role="radio"], [role="switch"], [role="option"], [role="tab"], [role="combobox"], ' +
   '[role="slider"], [role="treeitem"]';
 
+/**
+ * A field one types into or picks a value from. Its popup shows on focus only when Tab brought the focus there: a
+ * dialog that puts the focus into its first field (autofocus) would else open with a popup over it, and the first
+ * Escape would close that popup instead of the dialog. A field focused another way is described only
+ * (`aria-describedby`), and the pointer resting on it still shows the popup.
+ */
+export const ENTRY_FIELD =
+  'input:not([type="checkbox"]):not([type="radio"]):not([type="button"]):not([type="submit"]):not([type="reset"])' +
+  ':not([type="range"]):not([type="color"]):not([type="file"]), textarea, select, ' +
+  '[contenteditable]:not([contenteditable="false"])';
+
 /** What a popup must not lie on: a control, or another element with a hint of its own. */
 const KEEP_FREE = `${CONTROL}, [data-hint]`;
 
@@ -202,6 +213,10 @@ export function installTooltips(
   let current: HTMLElement | null = null;
   let describedBefore: string | null = null;
   let viaFocus = false;
+  // The hint of the element is set as its description, but the popup is not open: a field focused without Tab.
+  let quiet = false;
+  // The last key was Tab: the focus that follows is the person moving through the page.
+  let tabbed = false;
   // The last hand on the machine was on the keyboard. The focus a dialog gives back after a click of the mouse is also a
   // focus without a press, and that popup goes with the pointer as any other.
   let keyboard = false;
@@ -244,6 +259,7 @@ export function installTooltips(
     }
     current = null;
     viaFocus = false;
+    quiet = false;
     pinned = false;
     tip.style.pointerEvents = '';
     tip.hidden = true;
@@ -301,7 +317,7 @@ export function installTooltips(
     tip.style.top = `${at.y}px`;
   }
 
-  function show(el: HTMLElement, byFocus: boolean): void {
+  function show(el: HTMLElement, byFocus: boolean, describeOnly = false): void {
     const text = el.dataset.hint ?? '';
     if (text === '') return hide();
     if (current && current !== el) hide();
@@ -326,9 +342,12 @@ export function installTooltips(
     // and could not be reached with the pointer. While a hint of the dialog is open the popup lives in the dialog.
     const parent = el.closest('dialog') ?? doc.body;
     if (host.parentElement !== parent) parent.appendChild(host);
+    if (!ownsDescription(el)) el.setAttribute('aria-describedby', withToken(describedBefore, TIP_ID));
+    // A described field keeps the text (a screen reader reads the description of a hidden element) without the popup.
+    quiet = describeOnly;
+    if (describeOnly) return;
     host.hidden = false;
     tip.hidden = false;
-    if (!ownsDescription(el)) el.setAttribute('aria-describedby', withToken(describedBefore, TIP_ID));
     place(el);
   }
 
@@ -347,7 +366,8 @@ export function installTooltips(
       return;
     }
     cancelHide();
-    if (el === current) return;
+    // A field that is only described shows its popup when the pointer rests on it, as any other element.
+    if (el === current && !quiet) return;
     // The pointer is on another element: the popup of the one it left goes at once, it does not wait for the next.
     if (current && !tip.hidden) hide();
     cancelShow();
@@ -368,6 +388,7 @@ export function installTooltips(
   const onDown = (e: Event): void => {
     pressing = true;
     keyboard = false;
+    tabbed = false;
     // The main button only: another one opens a menu of the browser.
     if ((e as MouseEvent).button !== 0 || tip.hidden) return;
     if (e.target instanceof win.Node && tip.contains(e.target)) {
@@ -381,7 +402,10 @@ export function installTooltips(
   const onFocusIn = (e: Event): void => {
     if (pressing || pinned) return;
     const el = hintOf(e.target);
-    if (el) show(el, true);
+    if (!el) return;
+    // A document without selectors (a test without a real DOM) has no fields to tell apart.
+    const field = e.target instanceof win.Element && typeof e.target.matches === 'function' && e.target.matches(ENTRY_FIELD);
+    show(el, true, field && !tabbed);
   };
   const onFocusOut = (): void => {
     if (!pinned) hide();
@@ -400,13 +424,14 @@ export function installTooltips(
   const onChange: Change = (el, gone) => {
     if (el !== current) return;
     if (gone || (el.dataset.hint ?? '') === '') hide();
-    else show(el, viaFocus);
+    else show(el, viaFocus, quiet);
   };
   watchers.add(onChange);
   const onKey = (e: KeyboardEvent): void => {
     // A key after a press that never got its release (the button was let go outside the window) is the keyboard again.
     pressing = false;
     keyboard = true;
+    tabbed = e.key === 'Tab';
     // Tab is the keyboard again: a kept popup is a kept one no longer (Ctrl+C copies from it, Escape closes it below).
     if (e.key === 'Tab' && pinned) hide();
     // The popup is closed by this Escape and by nothing else: it is not also the Escape of a dialog or a menu. A
