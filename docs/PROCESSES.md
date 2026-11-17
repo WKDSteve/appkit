@@ -92,9 +92,9 @@ What every child gets:
   `KILL_ON_JOB_CLOSE`. The app holds the only handle; when the app ends, crashes or is killed,
   the system closes the job and ends the child and everything it started. On Linux and macOS
   the child leads a process group of its own, and the group is killed when the `Owned` is
-  dropped, when the time is over and when the output is too large. On Linux the child also gets
-  the parent-death signal (`PR_SET_PDEATHSIG`, `SIGKILL`), so the system ends it when the app
-  is killed.
+  dropped, when the time is over and when the output is too large; a watcher in the group kills
+  it when the app is killed or crashes (see "Limits"). On Linux the child also gets the
+  parent-death signal (`PR_SET_PDEATHSIG`, `SIGKILL`).
 - **An argv, never a shell line.** The program is an absolute path to a file on this machine
   (no name searched on `PATH`, no network share, no `..`), the arguments reach it one by one
   as they are. Nothing is quoted, joined or split.
@@ -141,13 +141,16 @@ runs `install` in a terminal sees it there.
   `CreateProcessW` that would also replace the pipes and the waiting of tokio. A suspended start
   that is resumed afterwards is what an endpoint protection reads as injection, and a hub that
   puts itself in a job would end the browser a link starts with it.
-- Linux: when the app is killed, the parent-death signal ends the child itself. What the child
-  started is not signalled; it ends when it follows its parent (a pipe that closes). While the
-  app lives, the whole group is ended.
-- macOS has no parent-death signal. A child ends with the app when the app ends in an orderly
-  way (the runtime is shut down, the `Owned` is dropped). After a crash of the app the child
-  ends when it next reads or writes one of its pipes: an engine host that waits for a question
-  ends at once, a program that only computes runs to its own end.
+- Linux and macOS: the child leads a process group of its own, and a watcher in that group ends
+  it when the app is gone, also when the app was killed (`kill -9`) or crashed. The watcher is
+  forked from the child before its program is loaded (twice, so it is nobody's child there), no
+  program of its own and no shell; it closes everything of the app but one pipe, whose only
+  write end the app holds, and waits on it. End of file (the system closed that end with the
+  app) or an error: it kills its group, itself with it. A byte: the group was released
+  (`Leftovers::Keep`) and it ends alone. While it lives the id of the group stays taken. A
+  watcher that cannot be forked keeps the child from starting. It closes descriptors up to the
+  app's limit of open files, at most 65536 (`crates/appkit-core/tests/group_watcher.rs`).
+  Linux also gives the child itself the parent-death signal, as before.
 - A process that leaves its group (`setsid`) or its job on purpose is not ended.
 - With `Leftovers::Keep`, a process the child left running that holds one of the child's pipes
   keeps the call waiting until the time is over.

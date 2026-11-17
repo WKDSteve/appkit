@@ -8,7 +8,9 @@
 //!   into a job object with `KILL_ON_JOB_CLOSE`; the system closes the job when the app is
 //!   gone and ends every process in it. Linux and macOS: the child leads a process group of
 //!   its own, which is killed when the [`Owned`] is dropped, the time is over or the output is
-//!   too large; on Linux the child also gets the parent-death signal. See "Limits" below.
+//!   too large; a watcher in that group (forked from the child, no program of its own) waits
+//!   on a pipe only the app writes to and kills the group when the app is gone, however it
+//!   ended. On Linux the child also gets the parent-death signal. See "Limits" below.
 //! - Its three standard streams are pipes of the app. It never gets a console, a log handle
 //!   or a terminal of its parent.
 //! - The program is a path and its arguments are an argv. No shell splits a string, and no
@@ -35,12 +37,9 @@
 //! - Windows: the child runs for a moment before it is in its job (it is not started
 //!   suspended). A process it starts in that moment is not in the job. Why it stays so:
 //!   `docs/PROCESSES.md`, "Limits".
-//! - Linux: the parent-death signal ends the child itself when the app dies without cleaning
-//!   up. What the child started is then ended only if it follows its parent (a pipe that
-//!   closes). While the app lives, the whole group is ended.
-//! - macOS has no parent-death signal. A child there ends with the app when the app ends in
-//!   an orderly way (the [`Owned`] is dropped); after a crash of the app it ends when it next
-//!   reads or writes one of its pipes.
+//! - Linux and macOS: the watcher closes the app's descriptors up to its limit of open files, at
+//!   most 65536; one above that would stay open in it. A child the app releases
+//!   ([`Leftovers::Keep`]) is not watched any more.
 //! - A process that leaves its group (`setsid`) or its job on purpose is not ended.
 //! - With [`Leftovers::Keep`], a process the child left running that holds one of the child's
 //!   pipes keeps the call waiting until the time is over.
@@ -200,7 +199,8 @@ impl Start {
         Ok(())
     }
 
-    fn command(&self) -> Command {
+    /// The command, and on Unix the guard of the watcher of its group (`unix::prepare`).
+    fn command(&self) -> io::Result<(Command, Guard)> {
         let mut command = Command::new(&self.program);
         command
             .args(&self.args)
@@ -229,8 +229,10 @@ impl Start {
             command.creation_flags(0x0800_0000);
         }
         #[cfg(unix)]
-        unix::prepare(&mut command, self.memory);
-        command
+        let guard = Some(unix::prepare(&mut command, self.memory)?);
+        #[cfg(not(unix))]
+        let guard: Guard = None;
+        Ok((command, guard))
     }
 }
 
@@ -273,6 +275,12 @@ pub struct Run {
     pub leftovers: Leftovers,
 }
 
+/// The guard of the watcher of a child's group (Unix); nothing elsewhere.
+#[cfg(unix)]
+type Guard = Option<unix::Guard>;
+#[cfg(not(unix))]
+type Guard = Option<std::convert::Infallible>;
+
 /// The processes of one child: ended together, at the latest when this is dropped.
 #[derive(Debug)]
 struct Tree {
@@ -280,10 +288,13 @@ struct Tree {
     job: Option<crate::job::Job>,
     #[cfg(unix)]
     group: Option<u32>,
+    /// While it is held, the watcher waits; dropped (or the app gone), it ends the group.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    guard: Guard,
 }
 
 impl Tree {
-    fn adopt(child: &Child, memory: Option<u64>) -> Self {
+    fn adopt(child: &Child, memory: Option<u64>, guard: Guard) -> Self {
         #[cfg(not(windows))]
         let _ = memory;
         Self {
@@ -292,6 +303,7 @@ impl Tree {
             // The child leads its own group (`unix::prepare`), so its id names the group.
             #[cfg(unix)]
             group: child.id(),
+            guard,
         }
     }
 
@@ -303,6 +315,8 @@ impl Tree {
         if let Some(group) = self.group.take() {
             unix::kill_group(group);
         }
+        // After the signal, which ended the watcher too: no second signal from it.
+        self.guard = None;
     }
 
     /// Let what is left of the tree live on.
@@ -314,6 +328,9 @@ impl Tree {
         #[cfg(unix)]
         {
             self.group = None;
+            if let Some(guard) = self.guard.take() {
+                guard.release();
+            }
         }
     }
 }
@@ -446,7 +463,7 @@ fn start_child(start: &Start) -> Result<Owned, ProcError> {
     start.check().map_err(ProcError::Spawn)?;
     // Without a runtime tokio would panic, not refuse.
     tokio::runtime::Handle::try_current().map_err(|e| ProcError::Spawn(io::Error::other(e)))?;
-    let command = start.command();
+    let (command, guard) = start.command().map_err(ProcError::Spawn)?;
     #[cfg(unix)]
     let child = unix::spawn(command);
     #[cfg(not(unix))]
@@ -454,9 +471,11 @@ fn start_child(start: &Start) -> Result<Owned, ProcError> {
         let mut command = command;
         command.spawn()
     };
+    // A child that did not start drops the guard with this `?`: its watcher, if one was forked,
+    // ends its group, where nothing else is.
     #[cfg_attr(not(windows), allow(unused_mut))]
     let mut child = child.map_err(ProcError::Spawn)?;
-    let tree = Tree::adopt(&child, start.memory);
+    let tree = Tree::adopt(&child, start.memory, guard);
     // A memory limit that was asked for and could not be set is a failure, not a run without
     // one. The child has not been waited for, so killing it by its handle is safe.
     #[cfg(windows)]
