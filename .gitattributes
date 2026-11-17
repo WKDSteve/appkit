@@ -7,3 +7,5 @@
 *.sh text eol=lf
 *.ps1 text eol=lf
 Cargo.lock text eol=lf
+# Files as another program wrote them, byte for byte.
+crates/appkit-core/tests/fixtures/** -text

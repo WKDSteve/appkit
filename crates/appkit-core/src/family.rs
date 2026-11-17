@@ -178,7 +178,8 @@ pub fn remove_manifest(family: &Path, app: &str) {
 }
 
 /// Read the manifest at `path`. `None`: missing, too large, not a manifest of this version, or one
-/// whose `app` is not the name of its file.
+/// whose `app` is not the name of its file. A byte order mark at the start is allowed: a setup
+/// (Inno Setup's `SaveStringsToUTF8File`) writes one.
 #[must_use]
 pub fn read_manifest(path: &Path) -> Option<Manifest> {
     let file = fs::File::open(path).ok()?;
@@ -189,7 +190,8 @@ pub fn read_manifest(path: &Path) -> Option<Manifest> {
     if text.len() as u64 > MAX_MANIFEST_BYTES {
         return None;
     }
-    let manifest: Manifest = serde_json::from_str(&text).ok()?;
+    let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+    let manifest: Manifest = serde_json::from_str(text).ok()?;
     let stem = path.file_stem()?.to_str()?;
     (manifest.schema == MANIFEST_SCHEMA
         && manifest.app == stem
@@ -573,7 +575,8 @@ mod tests {
         let mut later: serde_json::Value =
             serde_json::from_str(&good("f", MANIFEST_SCHEMA)).unwrap();
         later["icon"] = serde_json::json!("f.png");
-        fs::write(dir.join("f.json"), later.to_string()).unwrap();
+        // With a byte order mark, as a setup writes it.
+        fs::write(dir.join("f.json"), format!("\u{feff}{later}\r\n")).unwrap();
         let vars = m.vars();
         let names: Vec<String> = family_apps(&vars, &[]).into_iter().map(|a| a.app).collect();
         assert_eq!(names, ["f"]);
@@ -630,5 +633,36 @@ mod tests {
             !text.contains("program") && !text.contains(".exe"),
             "{text}"
         );
+    }
+
+    /// `hub.json` as ai-desktop (C++, not built on the kit) wrote it in a real run
+    /// (`tests/fixtures/ai-desktop/hub.json`): read with `deny_unknown_fields`, and byte for byte what the kit writes.
+    #[test]
+    fn the_record_of_ai_desktop_is_read_as_one_of_the_kit() {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ai-desktop");
+        let record = registry::read_record(&fixture).unwrap().unwrap();
+        assert_eq!(
+            record,
+            HubRecord {
+                app: "ai-desktop".to_owned(),
+                port: 18093,
+                pid: 46668,
+                version: "0.1.0".to_owned(),
+                instance: "92aed5f0f926392881bab65c665d479e".to_owned(),
+            }
+        );
+        let ours = Scratch::new("family-ai-fixture");
+        registry::write_record(&ours, &record).unwrap();
+        // Git may give the fixture CRLF on Windows; the bytes of the run are LF.
+        let theirs = fs::read_to_string(registry::record_path(&fixture))
+            .unwrap()
+            .replace("\r\n", "\n");
+        assert_eq!(
+            fs::read_to_string(registry::record_path(&ours)).unwrap(),
+            theirs
+        );
+        // Found as running only while that process lives; this one ended long ago.
+        let vars = |name: &str| (name == "AI_DESKTOP_CONFIG_DIR").then(|| fixture.clone());
+        assert!(!family_app(&vars, AI).running || process_alive(46668, None));
     }
 }
