@@ -388,7 +388,28 @@ Parameters (all optional):
             }
             Write-Output "running the setup silently ($($flags -join ' '))"
             $proc = Start-Process -FilePath $path -ArgumentList $flags -Wait -PassThru
-            if ($proc.ExitCode -ne 0) { Exit-Install "the setup failed with exit code $($proc.ExitCode)" }
+            if ($proc.ExitCode -ne 0) {
+                # The usual cause: the app still runs and locks the files the setup replaces. A silent Inno Setup
+                # answers its Abort/Retry/Ignore box itself with Abort (exit code 5), and the bare code says
+                # nothing. Named here, not refused up front: a build of the same name running from elsewhere
+                # (a checkout) locks nothing of the installed copy.
+                $exeName = $program
+                if ($exeName -eq '') { $exeName = "$app.exe" }
+                $running = @(Get-Process -Name ([IO.Path]::GetFileNameWithoutExtension($exeName)) -ErrorAction SilentlyContinue)
+                $hint = ''
+                if ($running.Count -gt 0) {
+                    $where = ($running | ForEach-Object {
+                            $at = $_.Path
+                            if (-not $at) { $at = 'path not readable' }
+                            "pid $($_.Id), $at"
+                        }) -join '; '
+                    $hint = ": $exeName is running ($where) and may lock the files the setup replaces. Stop it (and whatever starts it again, such as a hub) and run this again"
+                }
+                elseif ($kind -eq 'inno' -and $proc.ExitCode -eq 5) {
+                    $hint = ': the setup aborted, most often because a file it replaces is in use (the app or a part of it still running)'
+                }
+                Exit-Install "the setup failed with exit code $($proc.ExitCode)$hint"
+            }
             Write-Output "installed $app"
         }
     }

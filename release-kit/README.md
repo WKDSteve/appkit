@@ -119,6 +119,12 @@ environment instead, which `install.ps1` reads as `-AllowElevated` (only the val
 | `inno` | `install.ps1` | The Inno setup runs with `/VERYSILENT /SUPPRESSMSGBOXES /CURRENTUSER /NORESTART`. It installs for the current user when the setup has `PrivilegesRequired=lowest` (or allows the override on the command line, `PrivilegesRequiredOverridesAllowed=commandline`). |
 | `appimage` | `install.sh` | The AppImage is copied to `${XDG_BIN_HOME:-~/.local/bin}/<program>`. |
 
+A setup that fails while the app still runs (its files locked; a silent Inno setup answers its own
+Abort/Retry/Ignore box with Abort, exit code 5) is named as such: `install.ps1` looks for a running process of the
+program (`-Program`, else `<app>.exe`) and says its pid and path, and to stop it, and whatever starts it again, before
+running the line once more. It does not refuse up front: a build of the same name running from a checkout locks
+nothing of the installed copy.
+
 The install step also tells the other apps of the family that the app is installed: it writes
 `<family>/installed/<app>.json` (`%LOCALAPPDATA%\appkit-family` on Windows) and its uninstaller removes it
 ([docs/FAMILY.md](../docs/FAMILY.md)). `<program> install` of a hub does it by itself; an NSIS or Inno setup does

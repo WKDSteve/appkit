@@ -669,6 +669,14 @@ FAKE_GH_CMD = "@echo off\r\necho %*> \"%GH_ARGS%\"\r\necho %FAKE_GH_SAY% 1>&2\r\
 FAKE_CMD = "@echo off\r\nif \"%~1\"==\"--version\" (echo fake-hub 1.0& exit /b 0)\r\necho %*> \"%OUT%\"\r\nexit /b %FAKE_EXIT%\r\n"
 
 
+def flat(text: str) -> str:
+    """A message as one line: pwsh colours its error record and wraps it at the width of the console, with "| "
+    at the start of each further line."""
+    text = re.sub(r"\x1b\[[0-9;]*m", "", text)
+    text = re.sub(r"\s*\n\s*\|\s*", " ", text)
+    return re.sub(r"\s+", " ", text)
+
+
 ENTRY_PS1 = KIT / "scripts" / "uninstall-entry.ps1"
 
 # Drives uninstall-entry.ps1 in a throw-away key below HKCU\Software that it removes again: the entry of
@@ -916,6 +924,35 @@ class InstallPs1Test(unittest.TestCase):
             res = self.run_ps(shell, PS1, f"-File '{setup}' -Kind nsis", fake_exit="3")
             self.assertNotEqual(res.returncode, 0)
             self.assertIn("exit code 3", res.stdout + res.stderr)
+
+    def test_a_failing_setup_names_the_app_that_still_runs(self) -> None:
+        # ai-desktop on 2026-11-18: started by its hub, it kept ai-desktop.exe locked, the silent Inno Setup
+        # aborted with 5 and the script said only "exit code 5". The app here is this test's own Python: a
+        # process of that name runs for sure, and no program has to be copied under another name for it.
+        setup = self.fake("demo-setup.cmd")
+        write_sums(self.tmp, setup)
+        me = Path(sys.executable).stem
+        for shell in self.each_shell():
+            res = self.run_ps(shell, PS1, f"-File '{setup}' -Kind inno -App {me}", fake_exit="5")
+            said = flat(res.stdout + res.stderr)
+            self.assertNotEqual(res.returncode, 0)
+            self.assertIn("exit code 5", said)
+            self.assertIn(f"{me}.exe is running (pid {os.getpid()}", said)
+            self.assertIn("run this again", said)
+
+    def test_an_aborted_inno_setup_without_the_app_running_says_what_it_most_often_is(self) -> None:
+        setup = self.fake("demo-setup.cmd")
+        write_sums(self.tmp, setup)
+        for shell in self.each_shell():
+            res = self.run_ps(shell, PS1, f"-File '{setup}' -Kind inno -App no-such-app-for-the-tests", fake_exit="5")
+            said = flat(res.stdout + res.stderr)
+            self.assertNotEqual(res.returncode, 0)
+            self.assertIn("exit code 5: the setup aborted, most often because a file it replaces is in use", said)
+            # another code of another kind keeps the bare message
+            res = self.run_ps(shell, PS1, f"-File '{setup}' -Kind nsis -App no-such-app-for-the-tests", fake_exit="5")
+            said = flat(res.stdout + res.stderr)
+            self.assertIn("the setup failed with exit code 5", said)
+            self.assertNotIn("most often", said)
 
     def test_a_wrong_checksum_installs_nothing(self) -> None:
         setup = self.fake("demo-setup.cmd")
