@@ -116,8 +116,78 @@ async fn a_page_that_was_not_let_capture_does_not() {
     .await;
 }
 
+/// An app that sets `GuardRules::with_page_capture` (it is `DemoCapturing`) but does not say so: the subject keeps the
+/// default of `Subject::page_may_capture`.
+struct CapturingUnsaid;
+
+impl appkit_testkit::subject::Subject for CapturingUnsaid {
+    fn identity(&self) -> &'static appkit_core::identity::AppIdentity {
+        appkit_testkit::subject::Subject::identity(&appkit_testkit::subjects::DemoCapturing)
+    }
+
+    fn start(
+        &self,
+        cfg: appkit_testkit::subject::StartConfig,
+    ) -> appkit_hub::BoxFuture<'_, std::io::Result<appkit_hub::RunningServer>> {
+        appkit_testkit::subject::Subject::start(&appkit_testkit::subjects::DemoCapturing, cfg)
+    }
+
+    fn data_routes(&self) -> Vec<&'static str> {
+        appkit_testkit::subject::Subject::data_routes(&appkit_testkit::subjects::DemoCapturing)
+    }
+}
+
+#[tokio::test]
+#[should_panic(expected = "/: ")]
+async fn the_matrix_is_red_for_an_app_that_captures_without_saying_so() {
+    appkit_testkit::security::the_page_captures_as_the_subject_says(&CapturingUnsaid).await;
+}
+
+#[tokio::test]
+#[should_panic(expected = "the permissions of the desktop page")]
+async fn the_installable_check_takes_no_capturing_desktop_page_that_was_not_said() {
+    appkit_testkit::security::the_installable_page_has_its_own_policy_and_nothing_more(
+        &CapturingUnsaid,
+        appkit_testkit::subjects::INSTALLABLE_PREFIX,
+        appkit_testkit::subjects::INSTALLABLE_WORKER_POLICY,
+    )
+    .await;
+}
+
+#[tokio::test]
+#[should_panic(expected = "/: the permissions of the desktop page")]
+async fn the_record_check_takes_no_capturing_desktop_page_that_was_not_said() {
+    appkit_testkit::security::the_installable_page_may_record_and_nothing_else(
+        &CapturingUnsaid,
+        appkit_testkit::subjects::INSTALLABLE_PREFIX,
+    )
+    .await;
+}
+
 mod demo_devices {
     appkit_testkit::security_matrix!(appkit_testkit::subjects::DemoDevices::new());
+}
+
+mod demo_devices_capturing {
+    appkit_testkit::security_matrix!(appkit_testkit::subjects::DemoDevices::capturing());
+}
+
+/// Decided 2026-11-18: the camera and the microphone stay allowed when the shell is served through the tailnet name;
+/// the browser of each device asks its person.
+#[tokio::test]
+async fn a_page_that_was_let_capture_may_capture_through_the_tailnet_too() {
+    appkit_testkit::security::the_page_may_capture(
+        &appkit_testkit::subjects::DemoDevices::capturing(),
+        true,
+        Some(appkit_testkit::subjects::INSTALLABLE_PREFIX),
+    )
+    .await;
+    appkit_testkit::security::the_page_may_capture(
+        &appkit_testkit::subjects::DemoDevices::new(),
+        false,
+        Some(appkit_testkit::subjects::INSTALLABLE_PREFIX),
+    )
+    .await;
 }
 
 #[tokio::test]

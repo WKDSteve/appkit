@@ -754,12 +754,14 @@ pub async fn the_installable_page_has_its_own_policy_and_nothing_more(
         assert_eq!(page.header(header), desk.header(header), "{header}");
     }
     // The permissions are those of a page with everything off; a page that records differs in the microphone only.
-    // The desktop page has them word for word, or with the camera and the microphone when the app let it capture
-    // (`GuardRules::with_page_capture`, `the_page_may_capture`); that switch never reaches the installable page.
+    // The desktop page has them word for word, or with the camera and the microphone when the subject says its app
+    // let it capture (`Subject::page_may_capture`, `GuardRules::with_page_capture`); that switch never reaches the
+    // installable page.
     let desk_perms = desk.header("permissions-policy").unwrap();
-    assert!(
-        desk_perms == PERMISSIONS_OFF || desk_perms == permissions_capturing(),
-        "{desk_perms}"
+    assert_eq!(
+        desk_perms,
+        page_permissions(s),
+        "the permissions of the desktop page"
     );
     let page_perms = page.header("permissions-policy").unwrap();
     let want = if records {
@@ -1243,6 +1245,7 @@ macro_rules! security_matrix {
         an_idle_keep_alive_connection_is_dropped,
         the_routes_that_take_a_few_bytes_take_only_a_few_bytes,
         what_is_not_ours_is_not_found_whatever_is_asked,
+        the_page_captures_as_the_subject_says,
         );
     };
     (@each $subject:expr; $($name:ident),* $(,)?) => {
@@ -1492,12 +1495,18 @@ pub async fn the_installable_page_may_record_and_nothing_else(s: &dyn Subject, p
         "/etc/passwd".to_owned(),
     ] {
         let r = get(&h, &path, &[]).await;
-        // (The desktop page of an app with `with_page_capture` has the microphone by that switch, not by this one.)
+        // (The desktop page of an app with `with_page_capture` has the microphone by that switch, not by this one,
+        // and only when the subject says so.)
         if let Some(perms) = r.header("permissions-policy") {
-            assert!(
-                perms.contains("microphone=()") || perms == permissions_capturing(),
-                "{path}: {perms}"
-            );
+            if path == "/" {
+                assert_eq!(
+                    perms,
+                    page_permissions(s),
+                    "{path}: the permissions of the desktop page"
+                );
+            } else {
+                assert!(perms.contains("microphone=()"), "{path}: {perms}");
+            }
         }
         if let Some(csp) = r.header("content-security-policy") {
             assert!(!directives(csp).contains_key("media-src"), "{path}: {csp}");
@@ -1517,11 +1526,29 @@ fn permissions_capturing() -> String {
         .replace("microphone=()", "microphone=(self)")
 }
 
+/// The permissions the page of the app at `/` has by what the subject says (`Subject::page_may_capture`).
+fn page_permissions(s: &dyn Subject) -> String {
+    if s.page_may_capture() {
+        permissions_capturing()
+    } else {
+        PERMISSIONS_OFF.to_owned()
+    }
+}
+
+/// The page captures exactly as the subject says (`Subject::page_may_capture`): `the_page_may_capture` with that
+/// value. Part of `security_matrix!`, so an app that sets `GuardRules::with_page_capture` by mistake is red.
+pub async fn the_page_captures_as_the_subject_says(s: &dyn Subject) {
+    the_page_may_capture(s, s.page_may_capture(), None).await;
+}
+
 /// The camera and the microphone of the page of the app (`GuardRules::with_page_capture`). With `allowed`, the page
 /// at `/` and the files below `/assets/` say `camera=(self), microphone=(self)` and differ in nothing else from a
-/// page with everything off; without, the permissions are `PERMISSIONS_OFF` byte for byte. Either way the policy of
-/// the page names no `media-src`, an answer of `hello`, of a route of data and of a path that is not ours carries no
-/// permissions at all, and an installable page below `installable` (if the app has one) keeps the camera off.
+/// page with everything off; without, the permissions are `PERMISSIONS_OFF` byte for byte. That holds for the
+/// loopback host and, when the subject names one (`Subject::tailnet_name`), for the shell through the tailnet as well:
+/// a phone in the tailnet gets the same ceiling, and its browser asks the person on that device. Either way the
+/// policy of the page names no `media-src`, an answer of `hello`, of a route of data and of a path that is not ours
+/// carries no permissions at all, and an installable page below `installable` (if the app has one) keeps the camera
+/// off.
 pub async fn the_page_may_capture(s: &dyn Subject, allowed: bool, installable: Option<&str>) {
     let h = Harness::new(s).await;
     let want = if allowed {
@@ -1536,6 +1563,14 @@ pub async fn the_page_may_capture(s: &dyn Subject, allowed: bool, installable: O
             Some(want.as_str()),
             "{path}: {r:?}"
         );
+        if let Some(tailnet) = s.tailnet_name() {
+            let r = through_tailnet(&h, tailnet, "GET", path, &[], "").await;
+            assert_eq!(
+                r.header("permissions-policy"),
+                Some(want.as_str()),
+                "{path} through the tailnet as {tailnet}: {r:?}"
+            );
+        }
     }
     let page = get(&h, "/", &[]).await;
     assert_eq!(page.status, 200, "{page:?}");

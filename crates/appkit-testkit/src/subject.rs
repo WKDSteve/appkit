@@ -34,4 +34,17 @@ pub trait Subject: Send + Sync {
     /// their method. The matrix sends a GET to each of them without one, and with every wrong
     /// kind of one; the guard refuses by the path before the method or the route is looked at.
     fn data_routes(&self) -> Vec<&'static str>;
+
+    /// Whether the app lets its page use the camera and the microphone (`GuardRules::with_page_capture`). The matrix
+    /// holds the page to exactly this (`the_page_captures_as_the_subject_says`): an app that sets the switch without
+    /// saying so here, or says so without setting it, is red. Most apps do not: the default is `false`.
+    fn page_may_capture(&self) -> bool {
+        false
+    }
+
+    /// The name of the machine in the tailnet the hub takes (`GuardRules::with_tailnet_name`), if it takes one. The
+    /// matrix then asks the page through that `Host` too: it carries the same permissions there.
+    fn tailnet_name(&self) -> Option<&'static str> {
+        None
+    }
 }

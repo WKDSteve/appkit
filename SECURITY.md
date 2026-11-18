@@ -70,7 +70,18 @@ not a grant: the browser still asks the person before it hands out either device
 take the answer back in the browser. The policy of the page stays word for word (the preview is a stream set on the
 element, so no `media-src` is needed), the installable page keeps its own permissions, answers of `hello` and of the
 routes of data carry no permissions at all, and an app that does not call the switch keeps both off, byte for byte
-(`the_page_may_capture`, with and without the switch).
+(`the_page_may_capture`, with and without the switch). Each subject of the matrix says whether its app sets the switch
+(`Subject::page_may_capture`, default `false`), and `security_matrix!` holds the page to exactly that
+(`the_page_captures_as_the_subject_says`): an app that sets it by mistake is red.
+
+The same ceiling holds for every host the hub takes (decided 2026-11-18): the loopback names on the PC and, for an app
+with `with_tailnet_name`, the shell served through `https://<pc>.<tailnet>.ts.net` to a phone or another device of the
+tailnet. The camera and the microphone are not limited to loopback there. What protects them is the browser of each
+device: it asks its own person, for that origin, before it hands out the camera or the microphone of that device, and
+an answer given on one device is not one of another (the PC's browser asks for `127.0.0.1`, the phone's for the
+tailnet name). A device that reaches the shell through the tailnet still needs a session of a paired device for every
+route of data. The matrix asks the page through the tailnet name too when the subject names one
+(`Subject::tailnet_name`; `DemoDevices::capturing()` and `a_page_that_was_let_capture_may_capture_through_the_tailnet_too`).
 
 The installable page is opened by other apps too: a share target, a link in a mail, a launcher. The browser then sends
 `Sec-Fetch-Site: cross-site`, which step 3 refuses everywhere else. Below the installable prefix, and only for the page

@@ -82,6 +82,10 @@ mod my_app {
 }
 ```
 
+Its `Subject` says what the app turned on beyond the defaults, and the matrix holds the hub to exactly that:
+`page_may_capture()` returns `true` when the hub calls `GuardRules::with_page_capture` (default `false`), and
+`tailnet_name()` names the name of `GuardRules::with_tailnet_name` (default `None`).
+
 ## A hub without a vault
 
 An app that holds no data and runs no engine (the central hub that only lists and starts other

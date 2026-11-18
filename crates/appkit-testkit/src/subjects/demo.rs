@@ -227,6 +227,7 @@ pub struct DemoDevices {
     dir: appkit_scratch::Scratch,
     push: Arc<appkit_hub::push::Push>,
     sent: Arc<SentPushes>,
+    capture: bool,
 }
 
 /// The push requests a hub made, kept instead of sent (a stand-in for the push services).
@@ -270,7 +271,26 @@ impl DemoDevices {
         let push = Arc::new(
             appkit_hub::push::Push::open(&dir, sent.clone()).expect("the push of the demo hub"),
         );
-        Self { dir, push, sent }
+        Self {
+            dir,
+            push,
+            sent,
+            capture: false,
+        }
+    }
+
+    /// The same, whose page may use the camera and the microphone (`GuardRules::with_page_capture`), on the PC and
+    /// through the tailnet alike.
+    ///
+    /// # Panics
+    ///
+    /// When the folder cannot be written.
+    #[must_use]
+    pub fn capturing() -> Self {
+        Self {
+            capture: true,
+            ..Self::new()
+        }
     }
 
     /// The push of the hub: a test tells devices with it (`Push::notify`).
@@ -304,11 +324,17 @@ impl Subject for DemoDevices {
     }
 
     fn start(&self, cfg: StartConfig) -> BoxFuture<'_, std::io::Result<RunningServer>> {
+        let rules = rules()
+            .with_installable_page(INSTALLABLE_PREFIX, INSTALLABLE_WORKER_POLICY)
+            .with_devices(self.file());
+        let rules = if self.capture {
+            rules.with_page_capture()
+        } else {
+            rules
+        };
         start_with_pages(
             cfg,
-            rules()
-                .with_installable_page(INSTALLABLE_PREFIX, INSTALLABLE_WORKER_POLICY)
-                .with_devices(self.file())
+            rules
                 .with_tailnet_name(TAILNET_NAME)
                 .with_device_route(IDENTITY.route("items"), Level::Read)
                 .with_device_route(IDENTITY.route("item"), Level::Read)
@@ -323,6 +349,14 @@ impl Subject for DemoDevices {
 
     fn data_routes(&self) -> Vec<&'static str> {
         vec!["items", "item", "ops"]
+    }
+
+    fn page_may_capture(&self) -> bool {
+        self.capture
+    }
+
+    fn tailnet_name(&self) -> Option<&'static str> {
+        Some(TAILNET_NAME)
     }
 }
 
@@ -362,6 +396,10 @@ impl Subject for DemoCapturing {
 
     fn data_routes(&self) -> Vec<&'static str> {
         vec!["items", "item", "ops"]
+    }
+
+    fn page_may_capture(&self) -> bool {
+        true
     }
 }
 
