@@ -44,6 +44,11 @@ export interface Menu {
   mnemonic?: string;
   /** What the menu is for: shown by the hint popup (`tooltip.ts`) on hover and focus of the menu in the bar. */
   hint?: string;
+  /**
+   * Called each time the menu opens (click, key, mnemonic, the pointer moving over from an open neighbour), before
+   * its items are drawn: the place to read again what the items show (a list of folders, a state of access).
+   */
+  onopen?: () => void;
   items: MenuItem[];
 }
 

@@ -78,6 +78,15 @@
   }
 
   async function open(id: string, focusItem: 'first' | 'last' | null): Promise<void> {
+    // Told once per opening (not again when the keys move inside the open menu): the app reads again what the
+    // menu shows and what can have changed since the page loaded. A hook that throws does not keep the menu shut.
+    if (openId !== id) {
+      try {
+        menus.find((m) => m.id === id)?.onopen?.();
+      } catch {
+        // the menu opens with what it has
+      }
+    }
     openId = id;
     if (focusItem === null) return;
     await tick();

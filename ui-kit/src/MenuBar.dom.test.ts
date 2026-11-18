@@ -344,3 +344,51 @@ describe('MenuBar shows an item with an address as a link', () => {
     expect(picked).toEqual(['Board']);
   });
 });
+
+describe('MenuBar tells a menu that it opens', () => {
+  const opened: string[] = [];
+  const told: Menu[] = [
+    { id: 'project', label: 'Project', mnemonic: 'o', onopen: () => opened.push('project'), items: [{ kind: 'action', label: 'New', onselect: () => {} }, { kind: 'action', label: 'Old', onselect: () => {} }] },
+    {
+      id: 'view',
+      label: 'View',
+      onopen: () => {
+        opened.push('view');
+        throw new Error('a hook that fails');
+      },
+      items: [{ kind: 'action', label: 'Zoom', onselect: () => {} }],
+    },
+  ];
+
+  beforeEach(async () => {
+    if (app) await unmount(app);
+    opened.length = 0;
+    document.body.innerHTML = '';
+    app = mount(MenuBar, { target: document.body, props: { menus: told, label: 'Menu' } });
+    flushSync();
+  });
+
+  it('once per opening, not for the keys inside it, and again when it opens again', async () => {
+    trigger('project').click();
+    await settle();
+    expect(opened).toEqual(['project']);
+    key(trigger('project'), 'ArrowDown');
+    await settle();
+    key(document.activeElement!, 'ArrowDown');
+    await settle();
+    expect(opened).toEqual(['project']);
+    trigger('project').click();
+    await settle();
+    expect(popup('project')).toBeNull();
+    trigger('project').click();
+    await settle();
+    expect(opened).toEqual(['project', 'project']);
+  });
+
+  it('a hook that throws does not keep the menu shut', async () => {
+    trigger('view').click();
+    await settle();
+    expect(opened).toEqual(['view']);
+    expect(popup('view')).not.toBeNull();
+  });
+});
