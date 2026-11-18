@@ -46,7 +46,9 @@ export interface Menu {
   hint?: string;
   /**
    * Called each time the menu opens (click, key, mnemonic, the pointer moving over from an open neighbour), before
-   * its items are drawn: the place to read again what the items show (a list of folders, a state of access).
+   * its items are drawn: the place to read again what the items show (a list of folders, a state of access). A menu
+   * that is open from the start (`initialOpen` of the menu bar) is told once when the bar is mounted, after its items
+   * were drawn the first time; what the hook changes then is drawn at once.
    */
   onopen?: () => void;
   items: MenuItem[];

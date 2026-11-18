@@ -391,4 +391,28 @@ describe('MenuBar tells a menu that it opens', () => {
     expect(opened).toEqual(['view']);
     expect(popup('view')).not.toBeNull();
   });
+
+  it('a menu open from the start (initialOpen) is told once, and again only when it opens again', async () => {
+    if (app) await unmount(app);
+    opened.length = 0;
+    document.body.innerHTML = '';
+    app = mount(MenuBar, { target: document.body, props: { menus: told, label: 'Menu', initialOpen: 'project' } });
+    flushSync();
+    await settle();
+    expect(popup('project')).not.toBeNull();
+    expect(opened).toEqual(['project']);
+    key(trigger('project'), 'ArrowDown');
+    await settle();
+    expect(opened).toEqual(['project']);
+    trigger('project').click();
+    await settle();
+    trigger('project').click();
+    await settle();
+    expect(opened).toEqual(['project', 'project']);
+  });
+
+  it('a bar with no menu open from the start tells none', async () => {
+    await settle();
+    expect(opened).toEqual([]);
+  });
 });

@@ -11,7 +11,7 @@
   // An item with `href` is a link (`<a>`): what the page does not take itself (the context menu, Shift+click, a middle
   // click or Ctrl+click without `onopennew`) the browser does with the address, a plain click stays in the page.
 
-  import { tick, untrack } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
   import { tooltip } from './tooltip';
   import {
     ariaShortcut,
@@ -77,16 +77,25 @@
     pick(item);
   }
 
+  /** Tells the menu `id` that it opens (`Menu.onopen`). A hook that throws does not keep the menu shut. */
+  function tell(id: string): void {
+    try {
+      menus.find((m) => m.id === id)?.onopen?.();
+    } catch {
+      // the menu opens with what it has
+    }
+  }
+
+  // A menu that is open from the start (`initialOpen`) opened too: told once, when the bar is in the page (not on the
+  // server, where nothing opens).
+  onMount(() => {
+    if (openId !== null) tell(openId);
+  });
+
   async function open(id: string, focusItem: 'first' | 'last' | null): Promise<void> {
     // Told once per opening (not again when the keys move inside the open menu): the app reads again what the
-    // menu shows and what can have changed since the page loaded. A hook that throws does not keep the menu shut.
-    if (openId !== id) {
-      try {
-        menus.find((m) => m.id === id)?.onopen?.();
-      } catch {
-        // the menu opens with what it has
-      }
-    }
+    // menu shows and what can have changed since the page loaded.
+    if (openId !== id) tell(id);
     openId = id;
     if (focusItem === null) return;
     await tick();
