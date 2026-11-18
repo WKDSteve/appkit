@@ -107,6 +107,11 @@ BY_HAND = [
      "watcher of a child's process group is the app's own program started with --appkit-child-watcher; without the "
      "call Linux forks a copy of the app as the watcher and macOS has none; docs/PROCESSES.md of appkit, 'Limits'); "
      "a test that kills the hub and checks that its children end, where the app has one"),
+    ("v0.68.0", ("full",),
+     "the Subject of the app's security matrix says what its hub turned on (appkit_testkit::subject::Subject): "
+     "fn page_may_capture() -> true where the hub calls GuardRules::with_page_capture (tasks-desktop), else the "
+     "matrix is red on the_page_captures_as_the_subject_says; fn tailnet_name() -> Some(<name>) where a subject "
+     "starts the hub with GuardRules::with_tailnet_name, so the matrix asks the page through that host too"),
 ]
 
 
