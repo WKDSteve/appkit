@@ -63,6 +63,15 @@ tasks-mobile). Below the prefix the permissions then say `microphone=(self)`, an
 The browser still asks the person, and the desktop page and every other answer keep the microphone off and play
 nothing (`the_installable_page_may_record_and_nothing_else`).
 
+Every page says `camera=()` too. An app may let its own page (`/` and its files, never the installable one) use the
+camera and the microphone, for a photo or a video the person takes as an attachment: `GuardRules::with_page_capture()`
+(today: tasks-desktop). The permissions of that page then say `camera=(self), microphone=(self)`; they are a ceiling,
+not a grant: the browser still asks the person before it hands out either device, for this origin, and the person can
+take the answer back in the browser. The policy of the page stays word for word (the preview is a stream set on the
+element, so no `media-src` is needed), the installable page keeps its own permissions, answers of `hello` and of the
+routes of data carry no permissions at all, and an app that does not call the switch keeps both off, byte for byte
+(`the_page_may_capture`, with and without the switch).
+
 The installable page is opened by other apps too: a share target, a link in a mail, a launcher. The browser then sends
 `Sec-Fetch-Site: cross-site`, which step 3 refuses everywhere else. Below the installable prefix, and only for the page
 itself (`GET`, `Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`), that is let through: the page is static and

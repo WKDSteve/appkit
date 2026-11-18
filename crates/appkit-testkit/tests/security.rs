@@ -67,6 +67,55 @@ async fn an_installable_page_that_was_not_let_record_does_not() {
     .await;
 }
 
+mod demo_capturing {
+    appkit_testkit::security_matrix!(appkit_testkit::subjects::DemoCapturing);
+}
+
+#[tokio::test]
+async fn a_page_that_was_let_capture_differs_in_camera_and_microphone_only() {
+    appkit_testkit::security::the_page_may_capture(
+        &appkit_testkit::subjects::DemoCapturing,
+        true,
+        Some(appkit_testkit::subjects::INSTALLABLE_PREFIX),
+    )
+    .await;
+    // The installable page of that app is the one of an app without the switch, recording included.
+    appkit_testkit::security::the_installable_page_has_its_own_policy_and_nothing_more(
+        &appkit_testkit::subjects::DemoCapturing,
+        appkit_testkit::subjects::INSTALLABLE_PREFIX,
+        appkit_testkit::subjects::INSTALLABLE_WORKER_POLICY,
+    )
+    .await;
+    appkit_testkit::security::the_installable_page_may_record_and_nothing_else(
+        &appkit_testkit::subjects::DemoCapturing,
+        appkit_testkit::subjects::INSTALLABLE_PREFIX,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_page_that_was_not_let_capture_keeps_camera_and_microphone_off() {
+    appkit_testkit::security::the_page_may_capture(&appkit_testkit::subjects::Demo, false, None)
+        .await;
+    appkit_testkit::security::the_page_may_capture(
+        &appkit_testkit::subjects::DemoInstallableRecording,
+        false,
+        Some(appkit_testkit::subjects::INSTALLABLE_PREFIX),
+    )
+    .await;
+}
+
+#[tokio::test]
+#[should_panic(expected = "/: ")]
+async fn a_page_that_was_not_let_capture_does_not() {
+    appkit_testkit::security::the_page_may_capture(
+        &appkit_testkit::subjects::DemoInstallableRecording,
+        true,
+        Some(appkit_testkit::subjects::INSTALLABLE_PREFIX),
+    )
+    .await;
+}
+
 mod demo_devices {
     appkit_testkit::security_matrix!(appkit_testkit::subjects::DemoDevices::new());
 }

@@ -753,14 +753,19 @@ pub async fn the_installable_page_has_its_own_policy_and_nothing_more(
     for header in ["x-content-type-options", "referrer-policy", "cache-control"] {
         assert_eq!(page.header(header), desk.header(header), "{header}");
     }
-    // The permissions are the desktop page's; a page that records differs in the microphone only.
+    // The permissions are those of a page with everything off; a page that records differs in the microphone only.
+    // The desktop page has them word for word, or with the camera and the microphone when the app let it capture
+    // (`GuardRules::with_page_capture`, `the_page_may_capture`); that switch never reaches the installable page.
     let desk_perms = desk.header("permissions-policy").unwrap();
-    assert!(desk_perms.contains("microphone=()"), "{desk_perms}");
+    assert!(
+        desk_perms == PERMISSIONS_OFF || desk_perms == permissions_capturing(),
+        "{desk_perms}"
+    );
     let page_perms = page.header("permissions-policy").unwrap();
     let want = if records {
-        desk_perms.replace("microphone=()", "microphone=(self)")
+        PERMISSIONS_OFF.replace("microphone=()", "microphone=(self)")
     } else {
-        desk_perms.to_owned()
+        PERMISSIONS_OFF.to_owned()
     };
     assert_eq!(page_perms, want, "permissions-policy");
     // A file below the prefix carries the same policy.
@@ -1487,11 +1492,72 @@ pub async fn the_installable_page_may_record_and_nothing_else(s: &dyn Subject, p
         "/etc/passwd".to_owned(),
     ] {
         let r = get(&h, &path, &[]).await;
+        // (The desktop page of an app with `with_page_capture` has the microphone by that switch, not by this one.)
         if let Some(perms) = r.header("permissions-policy") {
-            assert!(perms.contains("microphone=()"), "{path}: {perms}");
+            assert!(
+                perms.contains("microphone=()") || perms == permissions_capturing(),
+                "{path}: {perms}"
+            );
         }
         if let Some(csp) = r.header("content-security-policy") {
             assert!(!directives(csp).contains_key("media-src"), "{path}: {csp}");
+        }
+    }
+}
+
+/// The permissions of a page of an app that asked for nothing: every device off, the clipboard write-only.
+pub const PERMISSIONS_OFF: &str = "camera=(), microphone=(), geolocation=(), payment=(), usb=(), \
+                                   clipboard-read=(), clipboard-write=(self)";
+
+/// The permissions of the page of an app that let it capture (`GuardRules::with_page_capture`): the same, with the
+/// camera and the microphone for this origin.
+fn permissions_capturing() -> String {
+    PERMISSIONS_OFF
+        .replace("camera=()", "camera=(self)")
+        .replace("microphone=()", "microphone=(self)")
+}
+
+/// The camera and the microphone of the page of the app (`GuardRules::with_page_capture`). With `allowed`, the page
+/// at `/` and the files below `/assets/` say `camera=(self), microphone=(self)` and differ in nothing else from a
+/// page with everything off; without, the permissions are `PERMISSIONS_OFF` byte for byte. Either way the policy of
+/// the page names no `media-src`, an answer of `hello`, of a route of data and of a path that is not ours carries no
+/// permissions at all, and an installable page below `installable` (if the app has one) keeps the camera off.
+pub async fn the_page_may_capture(s: &dyn Subject, allowed: bool, installable: Option<&str>) {
+    let h = Harness::new(s).await;
+    let want = if allowed {
+        permissions_capturing()
+    } else {
+        PERMISSIONS_OFF.to_owned()
+    };
+    for path in ["/", "/index.html", "/assets/nothing.js"] {
+        let r = get(&h, path, &[]).await;
+        assert_eq!(
+            r.header("permissions-policy"),
+            Some(want.as_str()),
+            "{path}: {r:?}"
+        );
+    }
+    let page = get(&h, "/", &[]).await;
+    assert_eq!(page.status, 200, "{page:?}");
+    let csp = directives(page.header("content-security-policy").unwrap());
+    assert!(
+        !csp.contains_key("media-src"),
+        "capturing shows a stream, it plays no address: {csp:?}"
+    );
+    assert_eq!(csp.get("default-src").map(String::as_str), Some("'none'"));
+    // The other classes of answers: no permissions, switch or not.
+    let mut others = vec![h.route("hello"), "/etc/passwd".to_owned()];
+    others.extend(s.data_routes().iter().map(|n| h.route(n)));
+    for path in others {
+        let r = get(&h, &path, &[]).await;
+        assert_eq!(r.header("permissions-policy"), None, "{path}: {r:?}");
+    }
+    if let Some(prefix) = installable {
+        for path in [format!("{prefix}/"), format!("{prefix}/sw.js")] {
+            let r = get(&h, &path, &[]).await;
+            assert_eq!(r.status, 200, "{path}: {r:?}");
+            let perms = r.header("permissions-policy").unwrap();
+            assert!(perms.contains("camera=()"), "{path}: {perms}");
         }
     }
 }

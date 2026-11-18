@@ -48,6 +48,8 @@ pub struct GuardRules {
     device_default: Level,
     /// Web Push to devices (`with_push`).
     push: Option<std::sync::Arc<crate::push::Push>>,
+    /// The page of the app may use the camera and the microphone (`with_page_capture`).
+    page_capture: bool,
 }
 
 /// The routes of device keys (`with_devices`): pair with a code and a public key, ask a challenge, open a session.
@@ -212,6 +214,7 @@ impl GuardRules {
             device_routes: Vec::new(),
             device_default: Level::Create,
             push: None,
+            page_capture: false,
         }
     }
 
@@ -413,6 +416,24 @@ impl GuardRules {
         self
     }
 
+    /// Let the page of the app (`/`, not the installable one) use the camera and the microphone: a photo or a video
+    /// taken for an attachment. On the answers of that page only, the permissions say `camera=(self)` and
+    /// `microphone=(self)` instead of `camera=()` and `microphone=()`. Nothing else changes: the policy of the page
+    /// stays word for word (a live preview is a stream on the element, not an address), the installable page keeps
+    /// its own permissions, and an answer of a route of data carries no permissions at all. The browser still asks
+    /// the person before it hands out either device. An app that does not call this keeps both off.
+    #[must_use]
+    pub fn with_page_capture(mut self) -> Self {
+        self.page_capture = true;
+        self
+    }
+
+    /// May the answer for `path` allow the camera and the microphone: the app asked for it (`with_page_capture`)
+    /// and the path is not on the installable page?
+    fn captures(&self, path: &str) -> bool {
+        self.page_capture && !self.is_installable(path)
+    }
+
     /// The prefix of the installable page, if the app has one (`/m`).
     #[must_use]
     pub fn installable_prefix(&self) -> Option<&str> {
@@ -594,13 +615,15 @@ pub async fn guard<R: Runtime>(
 ) -> Response {
     let class = classify(req.uri().path(), &st.guard_rules);
     let page = st.guard_rules.installable_for(req.uri().path()).cloned();
+    let capture = st.guard_rules.captures(req.uri().path());
     let mut response = judge(&st, class, req, next).await;
-    set_page_headers(
+    page_headers(
         &mut response,
         class,
         st.guard_rules.connect_src(),
         page.as_ref().map(|p| p.worker_policy.as_str()),
         page.as_ref().is_some_and(|p| p.microphone),
+        capture,
     );
     response
 }
@@ -988,7 +1011,29 @@ pub fn set_page_headers(
     worker_policy: Option<&str>,
     microphone: bool,
 ) {
+    page_headers(
+        response,
+        class,
+        connect_src,
+        worker_policy,
+        microphone,
+        false,
+    );
+}
+
+/// `set_page_headers`, and with `capture` the page of the app (never the installable one, which has a
+/// `worker_policy`) may use the camera and the microphone (`GuardRules::with_page_capture`). The policy of the page
+/// is the same either way.
+fn page_headers(
+    response: &mut Response,
+    class: Class,
+    connect_src: Option<&str>,
+    worker_policy: Option<&str>,
+    microphone: bool,
+    capture: bool,
+) {
     let microphone = microphone && worker_policy.is_some();
+    let capture = capture && worker_policy.is_none();
     let h = response.headers_mut();
     h.insert(
         HeaderName::from_static("x-content-type-options"),
@@ -1019,7 +1064,10 @@ pub fn set_page_headers(
         );
         h.insert(
             HeaderName::from_static("permissions-policy"),
-            HeaderValue::from_static(if microphone {
+            HeaderValue::from_static(if capture {
+                "camera=(self), microphone=(self), geolocation=(), payment=(), usb=(), \
+                 clipboard-read=(), clipboard-write=(self)"
+            } else if microphone {
                 "camera=(), microphone=(self), geolocation=(), payment=(), usb=(), \
                  clipboard-read=(), clipboard-write=(self)"
             } else {
@@ -1240,6 +1288,60 @@ mod tests {
         let on = permissions_of(Some("w1"), true);
         assert!(on.contains("microphone=(self)"));
         assert!(on.contains("camera=()"));
+    }
+
+    fn headers_of(worker_policy: Option<&str>, capture: bool) -> axum::http::HeaderMap {
+        let mut response = axum::response::Response::new(axum::body::Body::empty());
+        super::page_headers(
+            &mut response,
+            Class::Shell,
+            None,
+            worker_policy,
+            false,
+            capture,
+        );
+        response.headers().clone()
+    }
+
+    #[test]
+    fn page_capture_changes_camera_and_microphone_of_the_page_and_nothing_else() {
+        let off = headers_of(None, false);
+        let on = headers_of(None, true);
+        let perms =
+            |h: &axum::http::HeaderMap| h["permissions-policy"].to_str().unwrap().to_owned();
+        assert_eq!(
+            perms(&off),
+            "camera=(), microphone=(), geolocation=(), payment=(), usb=(), \
+             clipboard-read=(), clipboard-write=(self)",
+            "without the switch the permissions stay byte for byte"
+        );
+        assert_eq!(
+            perms(&on),
+            perms(&off)
+                .replace("camera=()", "camera=(self)")
+                .replace("microphone=()", "microphone=(self)")
+        );
+        for (name, value) in &off {
+            if name != "permissions-policy" {
+                assert_eq!(on.get(name), Some(value), "{name}");
+            }
+        }
+        assert_eq!(on.len(), off.len());
+        // The installable page is not the page of the app: the switch does not reach it.
+        assert_eq!(headers_of(Some("w1"), true), headers_of(Some("w1"), false));
+    }
+
+    #[test]
+    fn page_capture_reaches_the_page_only() {
+        let plain = rules().with_installable_page("/m", "w1");
+        assert!(!plain.captures("/"));
+        let on = plain.with_page_capture();
+        assert!(on.captures("/") && on.captures("/assets/app.js"));
+        assert!(!on.captures("/m/") && !on.captures("/m/sw.js"));
+        // An answer of another class carries no permissions, switch or not.
+        let mut response = axum::response::Response::new(axum::body::Body::empty());
+        super::page_headers(&mut response, Class::Api, None, None, false, true);
+        assert!(response.headers().get("permissions-policy").is_none());
     }
 
     #[test]
