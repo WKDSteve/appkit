@@ -2,25 +2,31 @@
 //! that starts the tools of the system to change rights is a pattern an endpoint protection reads as an attack, see
 //! appkit/edr-ausloeser-aus-allen-nativen-apps-entfernen).
 //!
-//! The rights the file inherits from its folder are taken off (a protected list) and the current user gets full
-//! control, as the only entry. The SID is the one of the token of this process, not a name looked up in the
-//! environment (`USERNAME`, `USERDOMAIN` can say anything).
+//! The file is created new with its rights from the first moment: a protected list (nothing inherited from the
+//! folder) whose only entry gives the current user full control. Changing the rights of an existing file afterwards
+//! is not enough: a program that opened it before keeps its handle. The SID is the one of the token of this process,
+//! not a name looked up in the environment (`USERNAME`, `USERDOMAIN` can say anything).
 #![allow(unsafe_code)]
 
 use std::io;
 use std::os::windows::ffi::OsStrExt as _;
 use std::path::Path;
 
-use windows_sys::Win32::Foundation::{CloseHandle, LocalFree, ERROR_SUCCESS, HANDLE};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, LocalFree, ERROR_SUCCESS, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
+};
 use windows_sys::Win32::Security::Authorization::{
-    SetEntriesInAclW, SetNamedSecurityInfoW, EXPLICIT_ACCESS_W, NO_MULTIPLE_TRUSTEE, SET_ACCESS,
-    SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W,
+    SetEntriesInAclW, EXPLICIT_ACCESS_W, NO_MULTIPLE_TRUSTEE, SET_ACCESS, TRUSTEE_IS_SID,
+    TRUSTEE_IS_USER, TRUSTEE_W,
 };
 use windows_sys::Win32::Security::{
-    GetTokenInformation, TokenUser, ACL, DACL_SECURITY_INFORMATION, NO_INHERITANCE,
-    PROTECTED_DACL_SECURITY_INFORMATION, TOKEN_QUERY, TOKEN_USER,
+    GetTokenInformation, InitializeSecurityDescriptor, SetSecurityDescriptorControl,
+    SetSecurityDescriptorDacl, TokenUser, ACL, NO_INHERITANCE, PSECURITY_DESCRIPTOR,
+    SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR, SE_DACL_PROTECTED, TOKEN_QUERY, TOKEN_USER,
 };
-use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+use windows_sys::Win32::Storage::FileSystem::{
+    CreateFileW, CREATE_NEW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL,
+};
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
 /// The user of the token of this process, as the bytes of its `TOKEN_USER` (the SID lives inside them).
@@ -77,14 +83,33 @@ fn wide(path: &Path) -> Vec<u16> {
         .collect()
 }
 
-/// Take every inherited right off `path` and give full control to the current user alone.
-///
-/// # Errors
-///
-/// What the system said; the file is then as it was.
-pub fn restrict_to_user(path: &Path) -> io::Result<()> {
-    let user = TokenUserBuf::of_this_process()?;
-    let access = EXPLICIT_ACCESS_W {
+/// The list of rights "the current user, full control, nothing else", made by `SetEntriesInAclW`; freed on drop.
+struct UserOnlyAcl(*mut ACL);
+
+impl UserOnlyAcl {
+    fn new() -> io::Result<Self> {
+        let user = TokenUserBuf::of_this_process()?;
+        let access = user_only_access(&user);
+        let mut acl: *mut ACL = std::ptr::null_mut();
+        // SAFETY: one entry, no old list; `acl` receives a list freed in Drop. The SID in `access` points into `user`,
+        // which lives until the call returns (the list copies it).
+        let made = unsafe { SetEntriesInAclW(1, &access, std::ptr::null(), &mut acl) };
+        if made != ERROR_SUCCESS {
+            return Err(io::Error::from_raw_os_error(made as i32));
+        }
+        Ok(Self(acl))
+    }
+}
+
+impl Drop for UserOnlyAcl {
+    fn drop(&mut self) {
+        // SAFETY: the list came from SetEntriesInAclW and is freed once.
+        unsafe { LocalFree(self.0.cast()) };
+    }
+}
+
+fn user_only_access(user: &TokenUserBuf) -> EXPLICIT_ACCESS_W {
+    EXPLICIT_ACCESS_W {
         grfAccessPermissions: FILE_ALL_ACCESS,
         grfAccessMode: SET_ACCESS,
         grfInheritance: NO_INHERITANCE,
@@ -95,39 +120,74 @@ pub fn restrict_to_user(path: &Path) -> io::Result<()> {
             TrusteeType: TRUSTEE_IS_USER,
             ptstrName: user.sid().cast(),
         },
-    };
-    let mut acl: *mut ACL = std::ptr::null_mut();
-    // SAFETY: one entry, no old list; `acl` receives a list we free with LocalFree.
-    let made = unsafe { SetEntriesInAclW(1, &access, std::ptr::null(), &mut acl) };
-    if made != ERROR_SUCCESS {
-        return Err(io::Error::from_raw_os_error(made as i32));
     }
+}
+
+/// `SECURITY_DESCRIPTOR_REVISION` (winnt.h); its feature module of `windows-sys` is not one this crate pulls in.
+const SECURITY_DESCRIPTOR_REVISION: u32 = 1;
+
+/// Create `path` as a NEW file that is the current user's alone from its first moment, and write `content` into it.
+///
+/// Never an old file: a program that opened it before (the folder's inherited rights may let it) keeps its handle when
+/// the rights change afterwards and would read what is written through it. `CREATE_NEW` fails when a file of that
+/// name is there; nobody may share the file while it is written. A failed write removes the new file.
+///
+/// # Errors
+///
+/// What the system said (a file of that name exists: `AlreadyExists`).
+pub fn create_user_only(path: &Path, content: &[u8]) -> io::Result<()> {
+    use std::io::Write as _;
+    use std::os::windows::io::FromRawHandle as _;
+
+    let acl = UserOnlyAcl::new()?;
+    // SAFETY: an all-zero SECURITY_DESCRIPTOR is plain data that InitializeSecurityDescriptor fills.
+    let mut descriptor: SECURITY_DESCRIPTOR = unsafe { std::mem::zeroed() };
+    let sd: PSECURITY_DESCRIPTOR = std::ptr::addr_of_mut!(descriptor).cast();
+    // SAFETY: `sd` points at `descriptor`, which outlives CreateFileW; the DACL is `acl`, which does too.
+    let described = unsafe {
+        InitializeSecurityDescriptor(sd, SECURITY_DESCRIPTOR_REVISION) != 0
+            && SetSecurityDescriptorDacl(sd, 1, acl.0, 0) != 0
+            && SetSecurityDescriptorControl(sd, SE_DACL_PROTECTED, SE_DACL_PROTECTED) != 0
+    };
+    if !described {
+        return Err(io::Error::last_os_error());
+    }
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: sd,
+        bInheritHandle: 0,
+    };
     let name = wide(path);
-    // SAFETY: `name` ends with a NUL; only the DACL is set, protected so that nothing is inherited.
-    let set = unsafe {
-        SetNamedSecurityInfoW(
+    // SAFETY: `name` ends with a NUL; `attributes` and the descriptor it names live on this stack frame.
+    let handle = unsafe {
+        CreateFileW(
             name.as_ptr(),
-            SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            GENERIC_WRITE,
+            0,
+            &attributes,
+            CREATE_NEW,
+            FILE_ATTRIBUTE_NORMAL,
             std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            acl,
-            std::ptr::null(),
         )
     };
-    // SAFETY: `acl` came from SetEntriesInAclW and is freed once.
-    unsafe { LocalFree(acl.cast()) };
-    if set == ERROR_SUCCESS {
-        Ok(())
-    } else {
-        Err(io::Error::from_raw_os_error(set as i32))
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
     }
+    // SAFETY: a valid handle CreateFileW just gave us; the File owns and closes it.
+    let mut file = unsafe { std::fs::File::from_raw_handle(handle) };
+    let written = file.write_all(content);
+    drop(file);
+    if written.is_err() {
+        let _ = std::fs::remove_file(path);
+    }
+    written
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use windows_sys::Win32::Security::Authorization::GetNamedSecurityInfoW;
+    use windows_sys::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
+    use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
     use windows_sys::Win32::Security::{
         EqualSid, GetAce, GetSecurityDescriptorControl, ACCESS_ALLOWED_ACE, PSECURITY_DESCRIPTOR,
         SE_DACL_PROTECTED,
