@@ -1,32 +1,38 @@
 <script lang="ts">
-  import type { Block } from './markdown';
+  import type { Block, ImageSource } from './markdown';
   import { markHidden } from './text';
   import Blocks from './Blocks.svelte';
   import Inlines from './Inlines.svelte';
 
   // `headingBase` is the level of the heading the text sits under: its own headings start one level below it, so the
   // page keeps one order of headings (a text under an h2 starts at h3).
-  let { blocks, headingBase = 1 }: { blocks: Block[]; headingBase?: number } = $props();
+  // `images`: the app's way to the files below `assets/` of a text read with `parseMarkdown(…, { assets: true })`;
+  // without it every image stays its description.
+  let {
+    blocks,
+    headingBase = 1,
+    images,
+  }: { blocks: Block[]; headingBase?: number; images?: ImageSource } = $props();
 
   const heading = (level: number) => Math.min(6, level + headingBase);
 </script>
 
 {#each blocks as block, i (i)}
   {#if block.t === 'p'}
-    <p><Inlines items={block.children} /></p>
+    <p><Inlines items={block.children} {images} /></p>
   {:else if block.t === 'h'}
     {@const level = heading(block.level)}
     <svelte:element this={`h${level}`} class="md-h"
-      ><Inlines items={block.children} /></svelte:element
+      ><Inlines items={block.children} {images} /></svelte:element
     >
   {:else if block.t === 'list'}
     <svelte:element this={block.ordered ? 'ol' : 'ul'} start={block.ordered ? block.start : undefined}>
       {#each block.items as item, j (j)}
-        <li><Blocks blocks={item} {headingBase} /></li>
+        <li><Blocks blocks={item} {headingBase} {images} /></li>
       {/each}
     </svelte:element>
   {:else if block.t === 'quote'}
-    <blockquote><Blocks blocks={block.children} {headingBase} /></blockquote>
+    <blockquote><Blocks blocks={block.children} {headingBase} {images} /></blockquote>
   {:else if block.t === 'pre'}
     <!-- A scrolling block is reached with the keyboard. -->
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
@@ -41,7 +47,7 @@
           <thead>
             <tr>
               {#each block.head as cell, j (j)}
-                <th><Inlines items={cell} /></th>
+                <th><Inlines items={cell} {images} /></th>
               {/each}
             </tr>
           </thead>
@@ -50,7 +56,7 @@
           {#each block.rows as row, j (j)}
             <tr>
               {#each row as cell, k (k)}
-                <td><Inlines items={cell} /></td>
+                <td><Inlines items={cell} {images} /></td>
               {/each}
             </tr>
           {/each}

@@ -93,7 +93,19 @@ export {
   type PaletteOptions,
 } from './palette';
 export type { ToastKind, ToastMessage } from './toast';
-export { hostOf, MAX_SOURCE, parseMarkdown, safeHref, type Block, type Inline } from './markdown';
+export {
+  ASSET_IMAGE_TYPES,
+  drawableImageUrl,
+  hostOf,
+  MAX_SOURCE,
+  parseMarkdown,
+  safeAssetPath,
+  safeHref,
+  type Block,
+  type ImageSource,
+  type Inline,
+  type ParseOptions,
+} from './markdown';
 export {
   installNav,
   placeOf,
