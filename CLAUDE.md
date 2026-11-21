@@ -36,11 +36,11 @@ Commits: `type(scope): what changed` (scopes such as `hub`, `ui-kit`, `web-kit`,
   `npx -y modern-web-guidance@latest search "<topic>"`, then `retrieve <id>`. Prefer the platform feature (dialog,
   popover, anchor positioning, `:has()`, container queries) over a script that imitates it, with a fallback when the
   feature is below the target.
-- Feature detection, not browser sniffing. Polyfills where browsers still in use need them (rather one too many), run only after the check (rules-vault `BASE-02`). Nothing that the CSP (`script-src 'self'`, Trusted Types) would refuse:
+- Feature detection, not browser sniffing. Polyfills where browsers still in use need them (rather one too many), run only after the check. Nothing that the CSP (`script-src 'self'`, Trusted Types) would refuse:
   no `innerHTML` with strings, no inline `<script>` or `<style>`, no `eval`.
 - `legacy-scan` finds a part of the legacy patterns (0 findings on 2026-11-21; a new finding is a reason to look). The
   scanner is an exact devDependency of `ui-kit` (the pnpm supply-chain policy applies):
   `DISABLE_TELEMETRY=1 pnpm -C ui-kit exec modern-web-guidance legacy-scan src --json`, the same for `../web-kit/src`.
   CI runs it as an informative step in the `ui-kit` and `web-kit` jobs. Raise its version on purpose.
 - `.claude/settings.json` sets `DISABLE_TELEMETRY=1` and allows only `npx -y modern-web-guidance@latest *`.
-- Rules: rules-vault ruleset `web` (plus the app rules `WEB-*` in ruleset `native`).
+- Rules: the maintainer's ruleset for the web platform (private, so not named or cited here by id).
