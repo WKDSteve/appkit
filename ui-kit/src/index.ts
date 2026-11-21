@@ -53,15 +53,20 @@ export {
 } from './keymap';
 export {
   ariaShortcut,
+  flatItems,
   letterOfCode,
   menuForMnemonic,
   splitMnemonic,
+  subItems,
+  submenuCurrent,
   toBlocks,
   TYPE_AHEAD_MS,
   typeAheadIndex,
   type Menu,
   type MenuBlock,
   type MenuItem,
+  type PlainItem,
+  type SubmenuItem,
 } from './menu';
 export {
   CONFLICT_CODES,

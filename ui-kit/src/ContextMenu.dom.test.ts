@@ -233,4 +233,16 @@ describe('ContextMenu', () => {
     await settle();
     expect(menu()).toBeNull();
   });
+
+  it('lays a submenu open in its list, under a heading of its label (no submenu opens here)', async () => {
+    const extra = registry.provide('tile', () => [
+      { kind: 'submenu', label: 'Move to', items: [{ kind: 'action', label: 'Inbox', onselect: () => chosen('inbox') }] },
+    ]);
+    rightClick(document.getElementById('card')!);
+    await settle();
+    extra();
+    expect(names()).toEqual(['Open', 'Delete', 'Inbox', 'Compact']);
+    expect([...document.querySelectorAll('[role="menu"] .cm-section')].map((p) => p.textContent)).toContain('Move to');
+    expect(document.querySelector('[role="menu"] [aria-haspopup]')).toBeNull();
+  });
 });

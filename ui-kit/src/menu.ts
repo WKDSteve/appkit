@@ -35,7 +35,131 @@ export type MenuItem =
   | { kind: 'check'; label: string; checked: boolean; onselect: () => void; shortcut?: string; hint?: string }
   | { kind: 'info'; label: string }
   | { kind: 'section'; label: string }
-  | { kind: 'separator' };
+  | { kind: 'separator' }
+  | SubmenuItem;
+
+/**
+ * An item that opens a list of its own (one level: a submenu inside it is shown flat, `subItems`). Beside the menu
+ * where there is room, folded open inside it in a narrow window. When one of its `radio` items is checked, the item
+ * shows the dot and its name says which (`submenuCurrent`).
+ */
+export interface SubmenuItem {
+  kind: 'submenu';
+  label: string;
+  items: MenuItem[];
+  disabled?: boolean;
+  hint?: string;
+}
+
+/**
+ * The items of a submenu, one level deep: a submenu inside it gives way to a section with its label and its items
+ * (flat, at any depth), so nothing is lost and no third level opens.
+ */
+export function subItems(item: SubmenuItem): PlainItem[] {
+  return flatItems(item.items);
+}
+
+/** An item that opens no list of its own. */
+export type PlainItem = Exclude<MenuItem, SubmenuItem>;
+
+/**
+ * The items with every submenu laid open: a section with its label, then its items (at any depth). For a list that
+ * opens no submenu (the context menu), and for the level below a submenu.
+ */
+export function flatItems(items: readonly MenuItem[]): PlainItem[] {
+  const out: PlainItem[] = [];
+  const add = (list: readonly MenuItem[]): void => {
+    for (const it of list) {
+      if (it.kind === 'submenu') {
+        out.push({ kind: 'section', label: it.label });
+        add(it.items);
+      } else out.push(it);
+    }
+  };
+  add(items);
+  return out;
+}
+
+/** The label of the checked `radio` item of a submenu (the first, at any depth), or null. */
+export function submenuCurrent(item: SubmenuItem): string | null {
+  for (const it of subItems(item)) if (it.kind === 'radio' && it.checked) return it.label;
+  return null;
+}
+
+/** Whether a submenu has something that can be chosen; one without is shown as disabled. */
+export function submenuUsable(item: SubmenuItem): boolean {
+  if (item.disabled) return false;
+  return subItems(item).some(
+    (it) =>
+      it.kind === 'check' || ((it.kind === 'action' || it.kind === 'radio') && !it.disabled),
+  );
+}
+
+/** Below this width of the window (pixels) a submenu folds open inside its menu instead of beside it. */
+export const SUBMENU_NARROW = 410;
+
+/** How long the pointer rests on a submenu item before it opens (milliseconds). */
+export const SUBMENU_OPEN_MS = 150;
+
+/** How long a submenu stays open while the pointer crosses a neighbour on its way to it (milliseconds). */
+export const SUBMENU_GRACE_MS = 300;
+
+interface Box {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
+
+/**
+ * Where a submenu `size` big goes beside its item `parent` in a window `view` big: to the right where it fits, else
+ * to the left, else to the side with more room, kept inside the window. Its first item lines up with the parent
+ * (`lift`: the padding and border above it).
+ */
+export function flyoutPlace(
+  parent: Box,
+  size: { width: number; height: number },
+  view: { width: number; height: number },
+  lift = 0,
+  margin = POPUP_MARGIN,
+): { left: number; top: number; side: 'right' | 'left' } {
+  const roomRight = view.width - margin - parent.right;
+  const roomLeft = parent.left - margin;
+  const side = size.width <= roomRight || (size.width > roomLeft && roomRight >= roomLeft) ? 'right' : 'left';
+  let left = side === 'right' ? parent.right : parent.left - size.width;
+  left = Math.max(margin, Math.min(left, view.width - margin - size.width));
+  let top = parent.top - lift;
+  top = Math.max(margin, Math.min(top, view.height - margin - size.height));
+  return { left, top, side };
+}
+
+/**
+ * Whether the pointer at `point`, coming from `origin` (where it left the submenu's item), is on its way to the
+ * submenu `target` on `side`: inside the triangle from `origin` to the near edge of the submenu. Then crossing a
+ * neighbouring item does not close the submenu at once. The tip stays where the pointer left (a tip that follows the
+ * pointer would close the submenu on the first step off a straight line), moved `slack` pixels away from the submenu
+ * so that the pointer's own place is inside rather than on the edge.
+ */
+export function inCorridor(
+  origin: { x: number; y: number },
+  point: { x: number; y: number },
+  target: Box,
+  side: 'right' | 'left',
+  slack = 5,
+): boolean {
+  const x = side === 'right' ? target.left : target.right;
+  const a = { x: origin.x + (side === 'right' ? -slack : slack), y: origin.y };
+  const b = { x, y: target.top };
+  const c = { x, y: target.bottom };
+  const cross = (p: { x: number; y: number }, q: { x: number; y: number }, r: { x: number; y: number }): number =>
+    (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+  const d1 = cross(a, b, point);
+  const d2 = cross(b, c, point);
+  const d3 = cross(c, a, point);
+  const neg = d1 < 0 || d2 < 0 || d3 < 0;
+  const pos = d1 > 0 || d2 > 0 || d3 > 0;
+  return !(neg && pos);
+}
 
 export interface Menu {
   id: string;
@@ -54,14 +178,16 @@ export interface Menu {
   items: MenuItem[];
 }
 
-export type MenuBlock = { kind: 'divider' } | { kind: 'group'; heading: string | null; items: MenuItem[] };
+export type MenuBlock<T extends MenuItem = MenuItem> =
+  | { kind: 'divider' }
+  | { kind: 'group'; heading: string | null; items: T[] };
 
 /**
  * The items as blocks. A section starts a group with its heading and a divider before it; a separator is a divider
  * of its own. A section without items is dropped, and no divider stands first, last or next to another.
  */
-export function toBlocks(items: readonly MenuItem[]): MenuBlock[] {
-  const raw: MenuBlock[] = [];
+export function toBlocks<T extends MenuItem>(items: readonly T[]): MenuBlock<T>[] {
+  const raw: MenuBlock<T>[] = [];
   for (const item of items) {
     if (item.kind === 'separator') {
       raw.push({ kind: 'divider' });
@@ -73,7 +199,7 @@ export function toBlocks(items: readonly MenuItem[]): MenuBlock[] {
       else raw.push({ kind: 'group', heading: null, items: [item] });
     }
   }
-  const out: MenuBlock[] = [];
+  const out: MenuBlock<T>[] = [];
   for (const block of raw) {
     if (block.kind === 'group' && block.items.length === 0) continue;
     if (block.kind === 'divider' && (out.length === 0 || out.at(-1)?.kind === 'divider')) continue;

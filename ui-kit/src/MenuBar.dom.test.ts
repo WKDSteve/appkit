@@ -154,17 +154,23 @@ describe('MenuBar in a narrow window', () => {
     // Where the browser would draw it: View at 173 px, the popup 13rem wide, in a window of 375 px.
     vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(375);
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
-      const shifted = this.style.translate ? parseFloat(this.style.translate) : 0;
+      const shifted = this.style.left ? parseFloat(this.style.left) : 0;
       return new DOMRect(173 + shifted, 40, 237, 200);
     });
     trigger('view').click();
     await settle();
     const box = popup('view') as HTMLElement;
-    expect(box.style.translate).toBe('-43px 0');
+    // jsdom has no layout: the popup's own offset is 0, so `left` is the shift.
+    expect(box.style.left).toBe('-43px');
+    expect(box.style.right).toBe('auto');
+    // Never by a transform: that would make the popup the frame of a fixed submenu inside it, clipped by its scroll.
+    expect(box.style.translate).toBe('');
+    expect(box.style.transform).toBe('');
     // A wider window: it goes back where the bar puts it.
     vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(1024);
     window.dispatchEvent(new Event('resize'));
-    expect(box.style.translate).toBe('');
+    expect(box.style.left).toBe('');
+    expect(box.style.right).toBe('');
   });
 });
 

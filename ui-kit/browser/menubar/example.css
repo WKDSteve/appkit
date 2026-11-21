@@ -1,0 +1,9 @@
+/* The page around the bar. `end`: the bar at the right edge of the window, where a submenu of its last menu has no
+   room on the right (set by the check of the flip to the left). */
+main {
+  padding: 1rem;
+}
+#bar.end {
+  display: flex;
+  justify-content: flex-end;
+}

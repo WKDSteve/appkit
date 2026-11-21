@@ -1,5 +1,5 @@
 <script lang="ts" module>
-  export type { Menu, MenuItem } from './menu';
+  export type { Menu, MenuItem, SubmenuItem } from './menu';
 </script>
 
 <script lang="ts">
@@ -10,17 +10,29 @@
   // binds the key itself. An item with `onopennew` opens apart like a link: middle click, Ctrl+click, Ctrl+Enter.
   // An item with `href` is a link (`<a>`): what the page does not take itself (the context menu, Shift+click, a middle
   // click or Ctrl+click without `onopennew`) the browser does with the address, a plain click stays in the page.
+  // A `submenu` item opens a list of its own (the ARIA menu pattern, one level): Right, Enter or Space open it and go
+  // to its first item, Left and Escape close it and go back to its item; the pointer opens it after a short rest and
+  // keeps it open on its way there. Beside the menu where there is room; folded open inside it in a narrow window.
 
   import { onMount, tick, untrack } from 'svelte';
+  import { fill } from './i18n';
   import { tooltip } from './tooltip';
   import {
     anchorName,
     ariaShortcut,
     canAnchorPopover,
+    flyoutPlace,
+    inCorridor,
     letterOfCode,
     menuForMnemonic,
     popupShift,
     splitMnemonic,
+    subItems,
+    SUBMENU_GRACE_MS,
+    SUBMENU_NARROW,
+    SUBMENU_OPEN_MS,
+    submenuCurrent,
+    submenuUsable,
     toBlocks,
     TYPE_AHEAD_MS,
     typeAheadIndex,
@@ -32,11 +44,17 @@
     menus,
     label,
     initialOpen = null,
+    labels = {},
   }: {
     menus: readonly Menu[];
     label: string;
     /** The id of a menu that is open from the start (a page that renders the list at once, a test). */
     initialOpen?: string | null;
+    /**
+     * Words of the bar. `submenuCurrent`: the name of a submenu item whose list has a checked radio item, with the
+     * holes `{label}` and `{current}` (default `{label}, {current}`; German for instance `{label}, aktuell: {current}`).
+     */
+    labels?: { submenuCurrent?: string };
   } = $props();
 
   // Stable between the server and the client (Math.random would differ on hydration).
@@ -55,6 +73,25 @@
   const stopId = $derived(stop !== null && menus.some((m) => m.id === stop) ? stop : (menus[0]?.id ?? null));
   let root: HTMLElement | undefined = $state();
 
+  // The open submenu, by the place of its item (`menu/block/index`), or null. One at a time, in the open menu only.
+  let subOpen = $state<string | null>(null);
+  const viewWidth = (): number =>
+    typeof window === 'undefined' ? 1024 : document.documentElement.clientWidth || window.innerWidth;
+  let vw = $state(viewWidth());
+  // A narrow window folds a submenu open inside its menu: beside it, it would reach past the edge.
+  const narrow = $derived(vw < SUBMENU_NARROW);
+  // A submenu beside its menu is a popover in the top layer where the browser has one (no scrolling menu clips it);
+  // elsewhere it is fixed to the window all the same, placed by `flyout`.
+  const canPopover = typeof HTMLElement !== 'undefined' && typeof HTMLElement.prototype.showPopover === 'function';
+  let openTimer: ReturnType<typeof setTimeout> | undefined;
+  let openTimerKey: string | null = null;
+  let graceTimer: ReturnType<typeof setTimeout> | undefined;
+  // Where the pointer last was on the item of the open submenu: the tip of its corridor (`inCorridor`); and where it
+  // was a move ago (a turn away from the submenu closes it at once).
+  let origin = { x: 0, y: 0 };
+  let last = { x: 0, y: 0 };
+  const currentText = $derived(labels.submenuCurrent ?? '{label}, {current}');
+
   const roleOf = (item: MenuItem): string =>
     item.kind === 'radio' ? 'menuitemradio' : item.kind === 'check' ? 'menuitemcheckbox' : 'menuitem';
 
@@ -62,9 +99,161 @@
     return root ? [...root.querySelectorAll<HTMLButtonElement>('button.mb-trigger')] : [];
   }
 
-  function itemButtons(id: string): HTMLElement[] {
-    return root ? [...root.querySelectorAll<HTMLElement>(`[data-menu="${id}"] .mb-item:not(:disabled)`)] : [];
+  /** The items of one list (a menu or a submenu) that can take the focus, without those of a submenu inside it. */
+  function itemsIn(list: Element | null | undefined): HTMLElement[] {
+    if (!list) return [];
+    return [...list.querySelectorAll<HTMLElement>('.mb-item:not(:disabled)')].filter(
+      (el) => el.closest('[role="menu"]') === list,
+    );
   }
+
+  function itemButtons(id: string): HTMLElement[] {
+    return itemsIn(root?.querySelector(`[data-menu="${id}"]`));
+  }
+
+  // Found by comparing the data, not by a selector: a key holds the id of a menu, which may hold any character.
+  const subList = (key: string): HTMLElement | undefined =>
+    root ? [...root.querySelectorAll<HTMLElement>('[data-sub]')].find((el) => el.dataset.sub === key) : undefined;
+  const subParent = (key: string): HTMLElement | undefined =>
+    root
+      ? [...root.querySelectorAll<HTMLElement>('[data-sub-for]')].find((el) => el.dataset.subFor === key)
+      : undefined;
+
+  function clearSubTimers(): void {
+    clearTimeout(openTimer);
+    clearTimeout(graceTimer);
+    openTimer = undefined;
+    graceTimer = undefined;
+    openTimerKey = null;
+  }
+
+  async function openSub(key: string, focusItem: 'first' | 'last' | null): Promise<void> {
+    clearSubTimers();
+    // Read now too: the resize event of a window that just changed may still be on its way.
+    vw = viewWidth();
+    subOpen = key;
+    if (focusItem === null) return;
+    await tick();
+    const items = itemsIn(subList(key));
+    (focusItem === 'first' ? items[0] : items[items.length - 1])?.focus();
+  }
+
+  function closeSub(focusParent: boolean): void {
+    const was = subOpen;
+    clearSubTimers();
+    subOpen = null;
+    if (focusParent && was !== null) subParent(was)?.focus();
+  }
+
+  function onParentClick(event: MouseEvent, key: string): void {
+    // A click of the pointer folds an open list shut again in a narrow window; beside the menu it only opens (the
+    // pointer may have opened it already by resting). Enter and Space are the keys' (`onItemKey`).
+    if (narrow && subOpen === key && event.detail > 0) closeSub(false);
+    else void openSub(key, null);
+  }
+
+  /** The focus on an item of a menu (not of a submenu) other than the open submenu's: the submenu beside it closes. */
+  function onItemFocus(key: string, sub: string | null): void {
+    if (sub === null && subOpen !== null && subOpen !== key && !narrow) closeSub(false);
+  }
+
+  /**
+   * The pointer over an item of a menu: the item of a submenu opens it after a short rest; another item closes the
+   * open submenu, unless the pointer crosses it on the way there: then it closes once the pointer rests that long
+   * without arriving, or at once when it turns away.
+   */
+  function onItemPointer(event: PointerEvent, item: MenuItem, key: string, sub: string | null): void {
+    if (sub !== null || event.pointerType === 'touch' || narrow) return;
+    const point = { x: event.clientX, y: event.clientY };
+    const before = last;
+    last = point;
+    const parent = item.kind === 'submenu' && submenuUsable(item);
+    if (parent && subOpen === key) {
+      clearTimeout(graceTimer);
+      graceTimer = undefined;
+      origin = point;
+      return;
+    }
+    if (subOpen !== null) {
+      const list = subList(subOpen);
+      const side = list?.dataset.side === 'left' ? 'left' : 'right';
+      const away = side === 'right' ? point.x < before.x : point.x > before.x;
+      if (list && !away && inCorridor(origin, point, list.getBoundingClientRect(), side)) {
+        clearTimeout(graceTimer);
+        graceTimer = setTimeout(() => {
+          graceTimer = undefined;
+          closeSub(false);
+        }, SUBMENU_GRACE_MS);
+      } else {
+        closeSub(false);
+      }
+    }
+    if (parent && openTimerKey !== key && !(subOpen !== null && graceTimer !== undefined)) {
+      clearTimeout(openTimer);
+      openTimerKey = key;
+      origin = point;
+      openTimer = setTimeout(() => {
+        openTimer = undefined;
+        openTimerKey = null;
+        void openSub(key, null);
+      }, SUBMENU_OPEN_MS);
+    }
+  }
+
+  function onParentLeave(key: string): void {
+    if (openTimerKey !== key) return;
+    clearTimeout(openTimer);
+    openTimer = undefined;
+    openTimerKey = null;
+  }
+
+  /**
+   * Places a submenu beside its item (`flyoutPlace`), fixed to the window: once it is drawn, and again when the
+   * window changes size or something scrolls under it.
+   */
+  function flyout(list: HTMLElement, key: string): { destroy: () => void } {
+    if (canPopover) {
+      try {
+        list.showPopover();
+      } catch {
+        // stays a fixed box of the page
+      }
+    }
+    const place = (): void => {
+      const parent = subParent(key);
+      if (!parent) return;
+      list.style.left = '0px';
+      list.style.top = '0px';
+      // Where 0, 0 lands: a transformed ancestor (a menu moved into the window by `fit`) is the frame of a fixed box.
+      const at0 = list.getBoundingClientRect();
+      const style = getComputedStyle(list);
+      const lift = list.clientTop + (parseFloat(style.paddingTop) || 0);
+      const view = {
+        width: document.documentElement.clientWidth || window.innerWidth,
+        height: document.documentElement.clientHeight || window.innerHeight,
+      };
+      const at = flyoutPlace(parent.getBoundingClientRect(), at0, view, lift);
+      list.style.left = `${at.left - at0.left}px`;
+      list.style.top = `${at.top - at0.top}px`;
+      list.dataset.side = at.side;
+    };
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return {
+      destroy: () => {
+        window.removeEventListener('resize', place);
+        window.removeEventListener('scroll', place, true);
+        try {
+          if (list.matches(':popover-open')) list.hidePopover();
+        } catch {
+          // no popover
+        }
+      },
+    };
+  }
+
+  onMount(() => () => clearSubTimers());
 
   /** The address of an item that is a link, or null: it has none, or it cannot be chosen now (then it is a button). */
   function linkOf(item: MenuItem): string | null {
@@ -102,7 +291,10 @@
   async function open(id: string, focusItem: 'first' | 'last' | null): Promise<void> {
     // Told once per opening (not again when the keys move inside the open menu): the app reads again what the
     // menu shows and what can have changed since the page loaded.
-    if (openId !== id) tell(id);
+    if (openId !== id) {
+      tell(id);
+      closeSub(false);
+    }
     openId = id;
     if (focusItem === null) return;
     await tick();
@@ -125,11 +317,17 @@
         },
       };
     }
+    // Moved by `left`, never by a transform: a transformed popup would be the frame of the fixed submenu inside it
+    // (`flyout`), which it would then clip and scroll.
     const place = (): void => {
-      popup.style.translate = '';
+      popup.style.left = '';
+      popup.style.right = '';
       const box = popup.getBoundingClientRect();
       const shift = popupShift(box.left, box.right, document.documentElement.clientWidth || window.innerWidth);
-      if (shift !== 0) popup.style.translate = `${shift}px 0`;
+      if (shift !== 0) {
+        popup.style.left = `${popup.offsetLeft + shift}px`;
+        popup.style.right = 'auto';
+      }
     };
     place();
     window.addEventListener('resize', place);
@@ -138,12 +336,13 @@
 
   function close(focusTrigger: boolean): void {
     const was = openId;
+    closeSub(false);
     openId = null;
     if (focusTrigger && was) triggers().find((t) => t.dataset.for === was)?.focus();
   }
 
   function pick(item: MenuItem): void {
-    if (item.kind === 'separator' || item.kind === 'info' || item.kind === 'section') return;
+    if (item.kind === 'separator' || item.kind === 'info' || item.kind === 'section' || item.kind === 'submenu') return;
     if ((item.kind === 'action' || item.kind === 'radio') && item.disabled) return;
     close(true);
     item.onselect();
@@ -208,13 +407,35 @@
     }
   }
 
-  function onItemKey(event: KeyboardEvent, id: string, item: MenuItem): void {
+  /**
+   * The keys on an item of the menu `id`. `sub`: the key of the submenu the item is in (null in the menu itself);
+   * `key`: the item's own place, which names its submenu when it has one.
+   */
+  function onItemKey(event: KeyboardEvent, id: string, item: MenuItem, sub: string | null, key: string): void {
     if (event.key === 'Enter' && apartKey(event) && pickApart(item)) {
       event.preventDefault();
       return;
     }
-    const items = itemButtons(id);
-    const at = items.indexOf(event.currentTarget as HTMLElement);
+    if (item.kind === 'submenu' && (event.key === 'ArrowRight' || event.key === 'Enter' || event.key === ' ')) {
+      event.preventDefault();
+      if (submenuUsable(item)) void openSub(key, 'first');
+      return;
+    }
+    if (sub !== null && event.key === 'ArrowLeft') {
+      event.preventDefault();
+      closeSub(true);
+      return;
+    }
+    if (event.key === 'Escape' && (sub !== null || subOpen !== null)) {
+      // The first Escape closes the submenu (back to its item), the next one the menu.
+      event.preventDefault();
+      event.stopPropagation();
+      closeSub(sub !== null);
+      return;
+    }
+    const self = event.currentTarget as HTMLElement;
+    const items = itemsIn(self.closest('[role="menu"]'));
+    const at = items.indexOf(self);
     const focus = (i: number) => items[(i + items.length) % items.length]?.focus();
     switch (event.key) {
       case 'ArrowDown':
@@ -245,6 +466,8 @@
         const here = list.findIndex((t) => t.dataset.for === id);
         const step = event.key === 'ArrowRight' ? 1 : -1;
         const next = list[(here + step + list.length) % list.length];
+        // Closed here too: a bar of one menu opens the same menu again, which keeps what is open in it.
+        closeSub(false);
         if (next?.dataset.for) void open(next.dataset.for, 'first');
         break;
       }
@@ -302,10 +525,75 @@
   {parts.before}{#if parts.mark}<u>{parts.mark}</u>{/if}{parts.after}
 {/snippet}
 
-{#snippet rows(items: MenuItem[], id: string)}
+{#snippet blocks(items: readonly MenuItem[], id: string, prefix: string, sub: string | null)}
+  {#each toBlocks(items) as block, b (b)}
+    {#if block.kind === 'divider'}
+      <hr />
+    {:else if block.heading !== null}
+      <div role="group" aria-labelledby="{uid}-{prefix}-{b}">
+        <p class="mb-section" id="{uid}-{prefix}-{b}" role="presentation">{block.heading}</p>
+        {@render rows(block.items, id, `${prefix}/${b}`, sub)}
+      </div>
+    {:else}
+      {@render rows(block.items, id, `${prefix}/${b}`, sub)}
+    {/if}
+  {/each}
+{/snippet}
+
+{#snippet rows(items: MenuItem[], id: string, prefix: string, sub: string | null)}
   {#each items as item, i (i)}
+    {@const key = `${prefix}/${i}`}
     {#if item.kind === 'info'}
       <p class="mb-note" role="none">{item.label}</p>
+    {:else if item.kind === 'submenu'}
+      {@const usable = submenuUsable(item)}
+      {@const current = submenuCurrent(item)}
+      {@const expanded = subOpen === key}
+      <!-- The item and its list side by side under one node without a role, as in the ARIA menu pattern. -->
+      <div class="mb-sub" role="none">
+        <button
+          type="button"
+          class="mb-item mb-parent"
+          role="menuitem"
+          aria-haspopup="menu"
+          aria-expanded={expanded}
+          aria-label={current !== null ? fill(currentText, { label: item.label, current }) : undefined}
+          data-sub-for={key}
+          disabled={!usable}
+          tabindex="-1"
+          use:tooltip={expanded ? '' : (item.hint ?? '')}
+          onclick={(e: MouseEvent) => onParentClick(e, key)}
+          onfocus={() => onItemFocus(key, sub)}
+          onpointermove={(e: PointerEvent) => onItemPointer(e, item, key, sub)}
+          onpointerleave={() => onParentLeave(key)}
+          onkeydown={(e: KeyboardEvent) => onItemKey(e, id, item, sub, key)}
+        >
+          <span class="mb-mark" aria-hidden="true">{current !== null ? '●' : ''}</span>
+          <span class="mb-text">{item.label}</span>
+          <span class="mb-arrow" aria-hidden="true">{narrow && expanded ? '▾' : '▸'}</span>
+        </button>
+        {#if expanded && narrow}
+          <div class="mb-subpopup mb-fold" role="menu" tabindex="-1" aria-label={item.label} data-sub={key}>
+            {@render blocks(subItems(item), id, key, key)}
+          </div>
+        {:else if expanded}
+          <div
+            class="mb-subpopup mb-fly"
+            role="menu"
+            tabindex="-1"
+            aria-label={item.label}
+            data-sub={key}
+            popover={canPopover ? 'manual' : undefined}
+            use:flyout={key}
+            onpointerenter={() => {
+              clearTimeout(graceTimer);
+              graceTimer = undefined;
+            }}
+          >
+            {@render blocks(subItems(item), id, key, key)}
+          </div>
+        {/if}
+      </div>
     {:else if item.kind !== 'separator' && item.kind !== 'section'}
       {@const href = linkOf(item)}
       <svelte:element
@@ -327,7 +615,9 @@
         onauxclick={(e: MouseEvent) => {
           if (e.button === 1 && pickApart(item)) e.preventDefault();
         }}
-        onkeydown={(e: KeyboardEvent) => onItemKey(e, id, item)}
+        onfocus={() => onItemFocus(key, sub)}
+        onpointermove={(e: PointerEvent) => onItemPointer(e, item, key, sub)}
+        onkeydown={(e: KeyboardEvent) => onItemKey(e, id, item, sub, key)}
       >
         <span class="mb-mark" aria-hidden="true"
           >{item.kind === 'radio' ? (item.checked ? '●' : '') : item.kind === 'check' ? (item.checked ? '✓' : '') : ''}</span
@@ -339,7 +629,7 @@
   {/each}
 {/snippet}
 
-<svelte:window onclick={onWindowClick} onkeydown={onWindowKey} />
+<svelte:window onclick={onWindowClick} onkeydown={onWindowKey} onresize={() => (vw = viewWidth())} />
 
 <!-- Focus that leaves the bar (Tab) closes the menu: it must not stay open behind. -->
 <div
@@ -385,18 +675,7 @@
           style:position-anchor={anchored ? anchorName(`mb-${uid}`, menu.id) : undefined}
           use:fit
         >
-          {#each toBlocks(menu.items) as block, b (b)}
-            {#if block.kind === 'divider'}
-              <hr />
-            {:else if block.heading !== null}
-              <div role="group" aria-labelledby="{uid}-{menu.id}-{b}">
-                <p class="mb-section" id="{uid}-{menu.id}-{b}" role="presentation">{block.heading}</p>
-                {@render rows(block.items, menu.id)}
-              </div>
-            {:else}
-              {@render rows(block.items, menu.id)}
-            {/if}
-          {/each}
+          {@render blocks(menu.items, menu.id, menu.id, null)}
         </div>
       {/if}
     </div>
@@ -510,6 +789,44 @@
   .mb-item:hover:not(:disabled) .mb-shortcut,
   .mb-item:focus-visible .mb-shortcut {
     color: inherit;
+  }
+  .mb-arrow {
+    margin-left: 1.5rem;
+    color: var(--muted);
+  }
+  .mb-item:hover:not(:disabled) .mb-arrow,
+  .mb-item:focus-visible .mb-arrow {
+    color: inherit;
+  }
+  /* The item of an open submenu stays marked while the keys or the pointer are in its list. */
+  .mb-parent[aria-expanded='true']:not(:hover):not(:focus-visible) {
+    background: var(--surface-2);
+  }
+  /* Beside the menu: fixed to the window and placed by `flyout`; a popover in the top layer where there is one
+     (its own placement of the browser, centred with a border, is taken back). */
+  .mb-fly {
+    position: fixed;
+    z-index: 21;
+    min-width: 11rem;
+    max-height: calc(100vh - 1rem);
+    overflow-y: auto;
+    box-sizing: border-box;
+    margin: 0;
+    inset: auto;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 0.3rem;
+  }
+  /* Folded open inside the menu (a narrow window): indented under its item; long labels wrap rather than make the
+     menu scroll sideways. */
+  .mb-fold {
+    padding-left: 1rem;
+  }
+  .mb-fold .mb-item {
+    white-space: normal;
   }
   .mb-section {
     margin: 0;

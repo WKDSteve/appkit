@@ -6,7 +6,13 @@ import {
   popupShift,
   canAnchorPopover,
   anchorName,
+  flatItems,
+  flyoutPlace,
+  inCorridor,
   splitMnemonic,
+  subItems,
+  submenuCurrent,
+  submenuUsable,
   toBlocks,
   typeAheadIndex,
   type Menu,
@@ -151,5 +157,93 @@ describe('anchorName', () => {
   it('is a dashed ident, whatever the id holds', () => {
     expect(anchorName('mb-x1', 'file')).toBe('--mb-x1-file');
     expect(anchorName('mb', 'a b/c:d')).toBe('--mb-a_b_c_d');
+  });
+});
+
+describe('submenu items', () => {
+  const radio = (label: string, checked: boolean): MenuItem => ({ kind: 'radio', label, checked, onselect: () => {} });
+  const sub = (label: string, items: MenuItem[]): MenuItem & { kind: 'submenu' } => ({ kind: 'submenu', label, items });
+
+  it('lays a submenu inside a submenu open under its label: one level, nothing lost', () => {
+    const inner = sub('Inner', [act('Deep'), sub('Deeper', [act('Deepest')])]);
+    const items = subItems(sub('Outer', [act('A'), inner]));
+    expect(items.map((i) => `${i.kind}:${'label' in i ? i.label : ''}`)).toEqual([
+      'action:A',
+      'section:Inner',
+      'action:Deep',
+      'section:Deeper',
+      'action:Deepest',
+    ]);
+    expect(items.some((i) => (i as MenuItem).kind === 'submenu')).toBe(false);
+  });
+
+  it('lays every submenu of a list open for a list that opens none (the context menu)', () => {
+    const items = flatItems([act('A'), sub('Views', [act('Plan')]), act('B')]);
+    expect(labelsOf(items)).toEqual(['A', 'Views', 'Plan', 'B']);
+    expect(items[1]?.kind).toBe('section');
+  });
+
+  it('names the checked radio item inside, at any depth, or null', () => {
+    expect(submenuCurrent(sub('Plans', [radio('Map', false), radio('Paths', true)]))).toBe('Paths');
+    expect(submenuCurrent(sub('Plans', [sub('More', [radio('Map', true)])]))).toBe('Map');
+    expect(submenuCurrent(sub('Plans', [radio('Map', false), act('Paths')]))).toBeNull();
+  });
+
+  it('is usable with an item that can be chosen, not when disabled or without one', () => {
+    expect(submenuUsable(sub('Plans', [act('Map')]))).toBe(true);
+    expect(submenuUsable({ ...sub('Plans', [act('Map')]), disabled: true })).toBe(false);
+    expect(submenuUsable(sub('Plans', [{ kind: 'info', label: 'none yet' }]))).toBe(false);
+    expect(submenuUsable(sub('Plans', [{ kind: 'action', label: 'Off', onselect: () => {}, disabled: true }]))).toBe(
+      false,
+    );
+  });
+});
+
+describe('flyoutPlace', () => {
+  const view = { width: 1000, height: 600 };
+  const size = { width: 200, height: 100 };
+  const parent = (left: number, right: number, top = 100) => ({ left, right, top, bottom: top + 24 });
+
+  it('goes to the right of its item where it fits, its first item level with the item', () => {
+    expect(flyoutPlace(parent(100, 300), size, view, 5)).toEqual({ left: 300, top: 95, side: 'right' });
+  });
+  it('goes to the left where the right has no room', () => {
+    expect(flyoutPlace(parent(700, 900), size, view)).toEqual({ left: 500, top: 100, side: 'left' });
+  });
+  it('takes the side with more room when neither fits, and stays in the window', () => {
+    const wide = { width: 400, height: 100 };
+    const narrowView = { width: 500, height: 600 };
+    const at = flyoutPlace(parent(150, 350), wide, narrowView);
+    expect(at.side).toBe('right');
+    expect(at.left).toBe(500 - 8 - 400);
+    const left = flyoutPlace(parent(200, 450), wide, narrowView);
+    expect(left.side).toBe('left');
+    expect(left.left).toBe(8);
+  });
+  it('moves up at the bottom of the window, and keeps the margin at the top', () => {
+    expect(flyoutPlace(parent(100, 300, 550), size, view).top).toBe(600 - 8 - 100);
+    expect(flyoutPlace(parent(100, 300, 2), size, view, 5).top).toBe(8);
+  });
+});
+
+describe('inCorridor', () => {
+  const target = { left: 300, right: 500, top: 100, bottom: 300 };
+  it('is true on the way from the item to the near edge of the submenu', () => {
+    expect(inCorridor({ x: 200, y: 110 }, { x: 260, y: 150 }, target, 'right')).toBe(true);
+    expect(inCorridor({ x: 200, y: 110 }, { x: 280, y: 250 }, target, 'right')).toBe(true);
+  });
+  it('is false straight down to a neighbour, or away from the submenu', () => {
+    expect(inCorridor({ x: 200, y: 110 }, { x: 202, y: 140 }, target, 'right')).toBe(false);
+    expect(inCorridor({ x: 200, y: 110 }, { x: 150, y: 130 }, target, 'right')).toBe(false);
+  });
+  it('keeps its tip where the pointer left, with a few pixels of room around it', () => {
+    expect(inCorridor({ x: 200, y: 110 }, { x: 197, y: 110 }, target, 'right')).toBe(true);
+    expect(inCorridor({ x: 200, y: 110 }, { x: 190, y: 110 }, target, 'right')).toBe(false);
+    expect(inCorridor({ x: 200, y: 110 }, { x: 197, y: 110 }, target, 'right', 0)).toBe(false);
+  });
+  it('looks to the far edge of a submenu on the left', () => {
+    const left = { left: 0, right: 150, top: 100, bottom: 300 };
+    expect(inCorridor({ x: 250, y: 110 }, { x: 200, y: 160 }, left, 'left')).toBe(true);
+    expect(inCorridor({ x: 250, y: 110 }, { x: 300, y: 160 }, left, 'left')).toBe(false);
   });
 });

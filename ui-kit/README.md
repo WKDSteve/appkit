@@ -7,7 +7,7 @@ bundler (Vite with the Svelte plugin) compiles them, there is no build here.
 |---|---|
 | The design tokens in ten groups: surfaces, text, lines and accent (`--line`, `--accent-soft`, `--focus`), meaning colours, the colours of areas (`--area-1` to `--area-8`: the band beside the name of an area, such as a group of lists, never without the name; at least 3:1 on both surfaces in both themes, next ones apart for red-green blindness too, checked by `tokens.test.ts`; the app picks one per area, a palette leaves them as they are), depth and marks (`--shadow`, `--shadow-sm`, `--backdrop`, `--mark`), shape, type (`--font-size`, `--line-height`), the palette of an app (`--accent-hover`, `--secondary`, `--tertiary`, `--chart-1` to `--chart-6`, `--accent-50` to `--accent-900`; see "The palette of an app"), the theme (`light-dark()` follows the system, `data-theme` on the root overrides it), the base rules, and the check `tools/check-color-literals.py` (which every app runs over its own page too): no hex colour or colour function where the CSS of a page states a colour, outside the tokens; scripts, `.ts` and `.svg` files and named colours are not looked at. `--border` is an alias of `--line` while the pages move | `tokens.css` |
 | The base rules that come with them: box model, page, focus ring, headings, the hint popup, the info button, `.sr-only`, reduced motion | `base.css` |
-| The menu bar of an application (a row of menus with the keys of the ARIA pattern, sections with a heading and a line, shortcuts on the right, Alt+letter mnemonics, type-ahead) | `MenuBar.svelte`, `menu.ts` |
+| The menu bar of an application (a row of menus with the keys of the ARIA pattern, sections with a heading and a line, submenus one level deep, shortcuts on the right, Alt+letter mnemonics, type-ahead) | `MenuBar.svelte`, `menu.ts` |
 | The command palette (Ctrl+K): the box, the list and the keys in `Palette.svelte`; the loose matching, the frecency (what was chosen before comes first) and the list of actions and entries (tasks, rules) as plain functions in `palette.ts`. The page builds the list, runs the choice and keeps the frecency, so the component knows neither `App` nor a data contract | `Palette.svelte`, `palette.ts` |
 | The conflict center: the changes the engine refused because the file moved on, kept in one place; for each what was wanted next to what is there now, and the actions the app offers (try again, look, let go). The person chooses how it is shown, every conflict in a list (the default) or one at a time with a count of the rest; the app stores that choice (`parseConflictMode`). The kit writes and merges nothing | `ConflictCenter.svelte`, `conflicts.ts` |
 | The one-line message of a page with the way back (an error is announced as an alert, the rest in the status region); the page keeps the message and its timer | `Toast.svelte`, `toast.ts` |
@@ -103,6 +103,22 @@ Alt+letter is left alone while a modal dialog is open or when another handler to
 writes another character, the physical key counts. Changed since the first version of the menu: `MenuItem` has a
 member more (`section`), so an exhaustive `switch` over `kind` needs a case for it, and a separator at the start or the
 end of a list, or two in a row, is no longer drawn.
+
+`{ kind: 'submenu', label, items, hint?, disabled? }` opens a list of its own, one level deep (a submenu inside it is
+shown flat: a heading with its label, then its items; `subItems`). It follows the ARIA menu pattern: the item is a
+`menuitem` with `aria-haspopup="menu"` and `aria-expanded`, the list a `menu` named by the label. Right, Enter or Space
+open it and go to its first item; Up, Down, Home, End and a letter walk it; Left or Escape close it and go back to its
+item, a second Escape closes the menu; Right on one of its items goes on to the next menu of the bar. The pointer opens
+it after resting 150 ms on the item, and a move toward the list over a neighbouring item keeps it open for a moment;
+a click opens it at once. It opens beside the menu on the right, on the left where the right has no room; in a window
+narrower than 410 px it folds open inside the menu instead (indented, `▾`). Its items are items like any other (`href`,
+`onopennew`, `hint`, `shortcut`). When one of its `radio` items is checked, the item shows the dot and its name says
+which: `labels.submenuCurrent` of the bar, with the holes `{label}` and `{current}` (default `{label}, {current}`; for
+German `{label}, aktuell: {current}`). A submenu without an item that can be chosen is disabled. The context menu opens
+no submenu: it shows one flat (`flatItems`). `MenuItem` has a member more (`submenu`), so an exhaustive `switch` over
+`kind` needs a case for it. `node ui-kit/browser/menubar.browser.cjs` builds an example page and checks it in Chromium,
+light and dark, with and without the Popover API: beside, on the left, the pointer's way, folded, and axe (needs
+Playwright and `@axe-core/playwright`, for instance `NODE_PATH` set to the `node_modules` of an app's ui).
 
 A hint is the text of the app, from its dictionary. Set it as `data-hint` (optionally `data-hint-title`, and
 `data-hint-delay` in milliseconds), or with the action, which sets exactly these:

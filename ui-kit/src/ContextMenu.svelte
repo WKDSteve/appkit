@@ -5,7 +5,7 @@
   // Keys: Up, Down, Home and End walk the entries, Enter and Space choose, Escape closes and gives the focus back to the
   // element the menu was opened on. A click beside it, a scroll that moves its target and a resize close it.
   import { tick } from 'svelte';
-  import { ariaShortcut, toBlocks, TYPE_AHEAD_MS, typeAheadIndex, type MenuItem } from './menu';
+  import { ariaShortcut, flatItems, toBlocks, TYPE_AHEAD_MS, typeAheadIndex, type MenuItem, type PlainItem } from './menu';
   import {
     buildContextMenu,
     isEditable,
@@ -28,7 +28,7 @@
     selection?: () => readonly ContextTarget[];
   } = $props();
 
-  let shown = $state<{ x: number; y: number; items: MenuItem[]; back: HTMLElement | null; placed: boolean } | null>(null);
+  let shown = $state<{ x: number; y: number; items: PlainItem[]; back: HTMLElement | null; placed: boolean } | null>(null);
   let menu: HTMLElement | undefined = $state();
   // A list longer than the window scrolls inside itself; a scroll box needs a way in for the keyboard (WCAG 2.1.1).
   let scrolls = $state(false);
@@ -50,7 +50,8 @@
    * width (a box at the right edge would be squeezed), measured, and then put where it fits.
    */
   async function show(items: MenuItem[], at: { x: number; y: number }, back: HTMLElement | null): Promise<void> {
-    shown = { x: 0, y: 0, items, back, placed: false };
+    // A submenu does not open here: its items stand in the list under its label.
+    shown = { x: 0, y: 0, items: flatItems(items), back, placed: false };
     anchor = back && { el: back, box: back.getBoundingClientRect() };
     await tick();
     if (menu) {
@@ -167,7 +168,7 @@
     }
   }
 
-  function pick(item: MenuItem): void {
+  function pick(item: PlainItem): void {
     if (item.kind === 'info' || item.kind === 'section' || item.kind === 'separator') return;
     if ((item.kind === 'action' || item.kind === 'radio') && item.disabled) return;
     close(true);
@@ -189,7 +190,7 @@
   }}
 />
 
-{#snippet rows(items: MenuItem[])}
+{#snippet rows(items: PlainItem[])}
   {#each items as item, i (i)}
     {#if item.kind === 'info'}
       <p class="cm-note" role="none">{item.label}</p>
