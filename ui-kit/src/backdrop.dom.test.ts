@@ -1,8 +1,11 @@
 // @vitest-environment jsdom
 // A dialog that closes on a click beside it, in a real DOM. The box is mocked (jsdom has no layout): it is 100 x 100
-// at 50, 50, so (10, 10) is the backdrop and (80, 80) is the dialog.
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { closeOnBackdrop, isOutside, type BackdropOptions } from './backdrop';
+// at 50, 50, so (10, 10) is the backdrop and (80, 80) is the dialog. jsdom does not know `closedby`: the listeners are
+// the way of such a browser; a browser that knows it is stood in for by a `closedBy` on the prototype. What the browser
+// then does itself (a click beside the dialog closes it, a selection out of it does not) is shown in Chromium by
+// `ui-kit/browser/backdrop.browser.cjs`.
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { closeOnBackdrop, hasClosedBy, isOutside, type BackdropOptions } from './backdrop';
 
 const box = { left: 50, right: 150, top: 50, bottom: 150 };
 
@@ -36,7 +39,13 @@ describe('isOutside', () => {
   });
 });
 
-describe('closeOnBackdrop', () => {
+describe('closeOnBackdrop without closedby', () => {
+  it('runs in a DOM that does not know closedby', () => {
+    expect(hasClosedBy()).toBe(false);
+    const { dialog } = page();
+    expect(dialog.hasAttribute('closedby')).toBe(false);
+  });
+
   it('closes the dialog for a click on the backdrop', () => {
     const { dialog, close, click } = page();
     click(dialog, 10, 10);
@@ -90,5 +99,51 @@ describe('closeOnBackdrop', () => {
     action.destroy();
     click(dialog, 10, 10);
     expect(close).not.toHaveBeenCalled();
+  });
+});
+
+describe('closeOnBackdrop where the browser knows closedby', () => {
+  beforeEach(() => {
+    Object.defineProperty(HTMLDialogElement.prototype, 'closedBy', { configurable: true, value: 'auto' });
+  });
+  afterEach(() => {
+    delete (HTMLDialogElement.prototype as { closedBy?: string }).closedBy;
+  });
+
+  it('sets closedby="any" and leaves the click to the browser', () => {
+    expect(hasClosedBy()).toBe(true);
+    const { dialog, close, click } = page();
+    expect(dialog.getAttribute('closedby')).toBe('any');
+    const seen = vi.fn();
+    dialog.addEventListener('cancel', seen);
+    click(dialog, 10, 10);
+    expect(seen).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it('keeps the listeners for a dialog with closeable, and moves between the ways on update', () => {
+    const closeable = vi.fn(() => false);
+    const { dialog, close, click, action } = page({ closeable });
+    expect(dialog.hasAttribute('closedby')).toBe(false);
+    click(dialog, 10, 10);
+    expect(closeable).toHaveBeenCalledTimes(1);
+    expect(close).not.toHaveBeenCalled();
+
+    action.update({});
+    expect(dialog.getAttribute('closedby')).toBe('any');
+    click(dialog, 10, 10);
+    expect(closeable).toHaveBeenCalledTimes(1);
+    expect(close).not.toHaveBeenCalled();
+
+    action.update({ closeable: () => true });
+    expect(dialog.hasAttribute('closedby')).toBe(false);
+    click(dialog, 10, 10);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('takes the attribute away on destroy', () => {
+    const { dialog, action } = page();
+    action.destroy();
+    expect(dialog.hasAttribute('closedby')).toBe(false);
   });
 });
