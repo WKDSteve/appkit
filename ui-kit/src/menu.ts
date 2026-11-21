@@ -177,6 +177,28 @@ export function typeAheadIndex(labels: readonly string[], from: number, typed: s
   return -1;
 }
 
+/**
+ * Whether a popup can be anchored to its trigger by the platform: the Popover API (top layer) and CSS anchor
+ * positioning together. Where either is missing (Chrome before 125, an older Safari or Firefox, jsdom) the popup stays
+ * where the page puts it, inside the window by `popupShift`. Feature detection, never the user agent.
+ */
+export function canAnchorPopover(env: {
+  showPopover?: unknown;
+  supports?: (condition: string) => boolean;
+}): boolean {
+  if (typeof env.showPopover !== 'function' || typeof env.supports !== 'function') return false;
+  try {
+    return env.supports('position-area: block-end') && env.supports('anchor-name: --a');
+  } catch {
+    return false;
+  }
+}
+
+/** The anchor name of a trigger: a dashed ident made of what an id can hold. */
+export function anchorName(prefix: string, id: string): string {
+  return `--${prefix}-${id}`.replace(/[^A-Za-z0-9_-]/g, '_');
+}
+
 /** How far a popup keeps from the edges of the window, in pixels. */
 export const POPUP_MARGIN = 8;
 

@@ -73,6 +73,22 @@
     return Math.abs(now.top - anchor.box.top) > 1 || Math.abs(now.left - anchor.box.left) > 1;
   }
 
+  /**
+   * The menu lives where its target lives: in an open dialog it is drawn inside that dialog. A modal dialog lies in the
+   * top layer and makes the rest of the page inert, so a menu in the body would be behind it and could not be reached
+   * (not even as a popover, which would be drawn on top but stay inert). The tooltip does the same (`tooltip.ts`).
+   * The node is the only one of its block, so Svelte removes it wherever it is.
+   */
+  function inDialogOf(node: HTMLElement, back: HTMLElement | null): { destroy: () => void } {
+    const dialog = back?.closest('dialog');
+    if (!dialog?.open) return { destroy: () => {} };
+    if (dialog !== node.parentElement) dialog.append(node);
+    // The dialog closes under the open menu (its own button, the app): the menu goes with it.
+    const gone = (): void => close(false);
+    dialog.addEventListener('close', gone);
+    return { destroy: () => dialog.removeEventListener('close', gone) };
+  }
+
   function close(restore: boolean): void {
     const back = shown?.back ?? null;
     shown = null;
@@ -205,6 +221,7 @@
     role="menu"
     aria-label={label}
     bind:this={menu}
+    use:inDialogOf={shown.back}
     tabindex={scrolls ? 0 : undefined}
     style:left="{shown.x}px"
     style:top="{shown.y}px"

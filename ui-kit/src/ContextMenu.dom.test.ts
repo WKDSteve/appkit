@@ -175,6 +175,57 @@ describe('ContextMenu', () => {
     expect(menu()).toBeNull();
   });
 
+  it('opens inside the open dialog its target is in, so a modal dialog does not cover it (the page behind is inert)', async () => {
+    const dialog = document.createElement('dialog');
+    dialog.innerHTML = '<button id="chip">Tag</button>';
+    document.body.append(dialog);
+    dialog.setAttribute('open', '');
+    const chip = document.getElementById('chip') as HTMLElement;
+    contextTarget(chip, { kind: 'tile', id: 't2' });
+    rightClick(chip);
+    await settle();
+    expect(menu()?.parentElement).toBe(dialog);
+    // It still works there: the first entry has the focus, a choice runs and closes it.
+    expect(document.activeElement?.textContent).toContain('Open');
+    (document.activeElement as HTMLButtonElement).click();
+    await settle();
+    expect(chosen).toHaveBeenCalledWith('open', 't2');
+    expect(menu()).toBeNull();
+    // A target outside any dialog opens the menu where it always opened.
+    rightClick(document.getElementById('card')!);
+    await settle();
+    expect(menu()?.parentElement).not.toBe(dialog);
+    expect(dialog.contains(menu())).toBe(false);
+  });
+
+  it('closes when the dialog it lives in closes', async () => {
+    const dialog = document.createElement('dialog');
+    dialog.innerHTML = '<button id="chip3">Tag</button>';
+    document.body.append(dialog);
+    dialog.setAttribute('open', '');
+    const chip = document.getElementById('chip3') as HTMLElement;
+    contextTarget(chip, { kind: 'tile', id: 't4' });
+    rightClick(chip);
+    await settle();
+    expect(menu()).not.toBeNull();
+    dialog.removeAttribute('open');
+    dialog.dispatchEvent(new Event('close'));
+    await settle();
+    expect(menu()).toBeNull();
+  });
+
+  it('opens in the page when the dialog of its target is closed', async () => {
+    const dialog = document.createElement('dialog');
+    dialog.innerHTML = '<button id="chip2">Tag</button>';
+    document.body.append(dialog);
+    const chip = document.getElementById('chip2') as HTMLElement;
+    contextTarget(chip, { kind: 'tile', id: 't3' });
+    chip.focus();
+    chip.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true, cancelable: true }));
+    await settle();
+    expect(dialog.contains(menu())).toBe(false);
+  });
+
   it('closes on a press beside it', async () => {
     rightClick(document.getElementById('card')!);
     await settle();

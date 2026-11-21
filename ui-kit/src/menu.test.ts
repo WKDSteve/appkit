@@ -4,6 +4,8 @@ import {
   letterOfCode,
   menuForMnemonic,
   popupShift,
+  canAnchorPopover,
+  anchorName,
   splitMnemonic,
   toBlocks,
   typeAheadIndex,
@@ -122,5 +124,32 @@ describe('popupShift', () => {
   });
   it('keeps the left edge of one wider than the window at the margin', () => {
     expect(popupShift(100, 500, 320)).toBe(-92);
+  });
+});
+
+describe('canAnchorPopover', () => {
+  const all = () => true;
+  it('needs the Popover API and anchor positioning together', () => {
+    expect(canAnchorPopover({ showPopover: () => {}, supports: all })).toBe(true);
+    expect(canAnchorPopover({ supports: all })).toBe(false);
+    expect(canAnchorPopover({ showPopover: () => {}, supports: (c) => !c.startsWith('position-area') })).toBe(false);
+    expect(canAnchorPopover({ showPopover: () => {} })).toBe(false);
+  });
+  it('is false when the check itself throws', () => {
+    expect(
+      canAnchorPopover({
+        showPopover: () => {},
+        supports: () => {
+          throw new Error('no CSS');
+        },
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('anchorName', () => {
+  it('is a dashed ident, whatever the id holds', () => {
+    expect(anchorName('mb-x1', 'file')).toBe('--mb-x1-file');
+    expect(anchorName('mb', 'a b/c:d')).toBe('--mb-a_b_c_d');
   });
 });

@@ -14,7 +14,9 @@
   import { onMount, tick, untrack } from 'svelte';
   import { tooltip } from './tooltip';
   import {
+    anchorName,
     ariaShortcut,
+    canAnchorPopover,
     letterOfCode,
     menuForMnemonic,
     popupShift,
@@ -39,6 +41,11 @@
 
   // Stable between the server and the client (Math.random would differ on hydration).
   const uid = $props.id();
+  // Where the platform can do it, the open popup is a popover in the top layer, anchored to its title by CSS (it flips
+  // to stay in the window, and no box of the page clips or covers it). Elsewhere it stays where the page puts it.
+  const anchored =
+    typeof window !== 'undefined' &&
+    canAnchorPopover({ showPopover: HTMLElement.prototype.showPopover, supports: (c) => CSS.supports(c) });
   let openId = $state<string | null>(untrack(() => initialOpen));
   let typed = '';
   let typedTimer: ReturnType<typeof setTimeout> | undefined;
@@ -109,6 +116,15 @@
    * is drawn and again when the window changes size.
    */
   function fit(popup: HTMLElement): { destroy: () => void } {
+    if (anchored) {
+      // Anchored by CSS (see `anchored`): shown in the top layer, kept in the window by its fallbacks.
+      popup.showPopover();
+      return {
+        destroy: () => {
+          if (popup.matches(':popover-open')) popup.hidePopover();
+        },
+      };
+    }
     const place = (): void => {
       popup.style.translate = '';
       const box = popup.getBoundingClientRect();
@@ -344,6 +360,7 @@
         class="mb-trigger"
         role="menuitem"
         data-for={menu.id}
+        style:anchor-name={anchored ? anchorName(`mb-${uid}`, menu.id) : undefined}
         use:tooltip={openId === menu.id ? '' : (menu.hint ?? '')}
         tabindex={stopId === menu.id ? 0 : -1}
         onfocus={() => (stop = menu.id)}
@@ -359,7 +376,15 @@
         }}>{@render triggerText(menu)}</button
       >
       {#if openId === menu.id}
-        <div class="mb-popup" role="menu" aria-label={menu.label} data-menu={menu.id} use:fit>
+        <div
+          class="mb-popup"
+          role="menu"
+          aria-label={menu.label}
+          data-menu={menu.id}
+          popover={anchored ? 'manual' : undefined}
+          style:position-anchor={anchored ? anchorName(`mb-${uid}`, menu.id) : undefined}
+          use:fit
+        >
           {#each toBlocks(menu.items) as block, b (b)}
             {#if block.kind === 'divider'}
               <hr />
@@ -427,6 +452,17 @@
   .mb-menu:last-child .mb-popup {
     left: auto;
     right: 0;
+  }
+  /* Anchored to its title (see `anchored`): a popover in the top layer, below the title, flipped to the other side
+     where the window ends. The popover's own placement of the browser (centred, with a border) is taken back. */
+  .mb-menu .mb-popup[popover],
+  .mb-menu:last-child .mb-popup[popover] {
+    position: fixed;
+    inset: auto;
+    margin: 0.2rem 0 0;
+    color: inherit;
+    position-area: block-end span-inline-end;
+    position-try-fallbacks: flip-inline, flip-block, flip-block flip-inline;
   }
   .mb-item {
     display: flex;
