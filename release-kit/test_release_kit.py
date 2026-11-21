@@ -677,6 +677,17 @@ def flat(text: str) -> str:
     return re.sub(r"\s+", " ", text)
 
 
+def running_pids(said: str, exe: str) -> list[int]:
+    """The pids install.ps1 names in "<exe> is running (pid 1, C:\\a.exe; pid 2, path not readable) and may lock".
+
+    In the order Get-Process gives them, which is not the order of the test: on a runner another process of the same
+    name runs too (a second Python), and its pid may come first (appkit CI, run 44914631335)."""
+    found = re.search(re.escape(exe) + r" is running \((.*?)\) and may lock", said)
+    if not found:
+        return []
+    return [int(pid) for pid in re.findall(r"(?:^|; )pid (\d+),", found.group(1))]
+
+
 ENTRY_PS1 = KIT / "scripts" / "uninstall-entry.ps1"
 
 # Drives uninstall-entry.ps1 in a throw-away key below HKCU\Software that it removes again: the entry of
@@ -770,6 +781,45 @@ class UninstallEntryPs1Test(unittest.TestCase):
                 self.assertEqual(check.stdout.strip(), "False")
 
 
+class RunningPidsTest(unittest.TestCase):
+    # The message of appkit CI run 44914631335: the test's own Python (69824) came second.
+    SAID = ("the setup failed with exit code 5: python.exe is running (pid 68876, C:\\Python314\\python.exe; "
+            "pid 69824, C:\\Program Files (x86)\\Python\\python.exe) and may lock the files the setup replaces. "
+            "Stop it (and whatever starts it again, such as a hub) and run this again")
+
+    def test_every_pid_counts_not_only_the_first(self) -> None:
+        self.assertEqual(running_pids(self.SAID, "python.exe"), [68876, 69824])
+        # What the test asked before: the own pid right after the bracket. It fails on this message.
+        self.assertNotIn("python.exe is running (pid 69824", self.SAID)
+
+    def test_a_path_that_is_not_readable_and_no_message(self) -> None:
+        said = "x.exe is running (pid 7, path not readable) and may lock the files"
+        self.assertEqual(running_pids(said, "x.exe"), [7])
+        self.assertEqual(running_pids("the setup failed with exit code 5", "x.exe"), [])
+        self.assertEqual(running_pids(said, "y.exe"), [])
+
+
+class EachShellTest(unittest.TestCase):
+    def test_a_loop_body_that_raises_leaves_no_generator_exit_behind(self) -> None:
+        # When the body of `for shell in self.each_shell()` raises, the generator is closed by Python with a
+        # GeneratorExit at its `yield`, inside the subTest. That must end the generator, not count as an error of
+        # the subTest and go on to the next shell ("generator ignored GeneratorExit", run 44914631335).
+        class Probe(InstallPs1Test):
+            __unittest_skip__ = False  # InstallPs1Test is skipped without Windows; this probe needs no shell
+
+            def runTest(self) -> None:
+                shells = self.each_shell()
+                self.assertEqual(next(shells), "x/pwsh")
+                shells.close()  # what Python does with the generator when the body raised
+
+        result = unittest.TestResult()
+        with unittest.mock.patch.object(sys.modules[__name__], "POWERSHELLS", ["x/pwsh", "x/powershell"]):
+            Probe().run(result)
+        self.assertEqual([text for _, text in result.errors + result.failures + result.skipped], [])
+        self.assertEqual(result.testsRun, 1)
+        self.assertTrue(result.wasSuccessful())
+
+
 @unittest.skipUnless(POWERSHELLS, "install.ps1 runs on Windows")
 class InstallPs1Test(unittest.TestCase):
     def setUp(self) -> None:
@@ -860,7 +910,13 @@ class InstallPs1Test(unittest.TestCase):
             if self.out.exists():
                 self.out.unlink()
             with self.subTest(shell=Path(shell).name):
-                yield shell
+                try:
+                    yield shell
+                except GeneratorExit:
+                    # The loop body raised (or broke off) outside this generator; the test reports that failure
+                    # itself. Without the return, the subTest takes the GeneratorExit as an error of its own, the
+                    # loop goes on to the next shell and Python ends with "generator ignored GeneratorExit".
+                    return
 
     def test_hub_zip_runs_install_with_the_arguments(self) -> None:
         program = self.fake("demo-hub.cmd")
@@ -929,15 +985,24 @@ class InstallPs1Test(unittest.TestCase):
         # ai-desktop on 2026-11-18: started by its hub, it kept ai-desktop.exe locked, the silent Inno Setup
         # aborted with 5 and the script said only "exit code 5". The app here is this test's own Python: a
         # process of that name runs for sure, and no program has to be copied under another name for it.
+        # A second Python of the test's own runs beside it, so the message always names more than one process and
+        # the test never counts on which comes first (another Python on the runner came first: run 44914631335).
         setup = self.fake("demo-setup.cmd")
         write_sums(self.tmp, setup)
         me = Path(sys.executable).stem
+        other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Cleanups run last in, first out: kill, then wait, also when an assertion below failed.
+        self.addCleanup(other.wait, 30)
+        self.addCleanup(other.kill)
         for shell in self.each_shell():
             res = self.run_ps(shell, PS1, f"-File '{setup}' -Kind inno -App {me}", fake_exit="5")
             said = flat(res.stdout + res.stderr)
             self.assertNotEqual(res.returncode, 0)
             self.assertIn("exit code 5", said)
-            self.assertIn(f"{me}.exe is running (pid {os.getpid()}", said)
+            pids = running_pids(said, f"{me}.exe")
+            self.assertIn(os.getpid(), pids, said)
+            self.assertIn(other.pid, pids, said)
             self.assertIn("run this again", said)
 
     def test_an_aborted_inno_setup_without_the_app_running_says_what_it_most_often_is(self) -> None:
