@@ -154,8 +154,17 @@ export function checkPartIds(partIds) {
   return partIds;
 }
 
-/** Bytes as the text of a part: gzip at the highest level, base64, lines of 120. */
-export const packPart = (data) => gzipSync(data, { level: 9 }).toString('base64').replace(/.{1,120}/g, '$&\n');
+/**
+ * Bytes as the text of a part: gzip at the highest level, base64, lines of 120. The header names the operating system
+ * of the machine that compressed (byte 9: 3 on Linux, 11 on Windows), so the same input gave another page on another
+ * machine and `--check` of a Windows runner refused a page built elsewhere. The byte is set to 255 (unknown), the one
+ * value of the format that says nothing about the machine: the page is the same on every system.
+ */
+export const packPart = (data) => {
+  const zipped = gzipSync(data, { level: 9 });
+  zipped[9] = 255;
+  return zipped.toString('base64').replace(/.{1,120}/g, '$&\n');
+};
 
 /** Text as the content of an inline script: `</script` and `<!--` would end it or start a comment. */
 export function inlineScript(js) {

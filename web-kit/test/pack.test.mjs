@@ -16,6 +16,7 @@ import {
   CSP_WASM_WORKER,
   inlineScript,
   inlineStyle,
+  packPart,
   policyProblems,
   readDist,
   verify,
@@ -170,6 +171,15 @@ test('a policy that lets the page load or reach something is refused by assemble
   const twice = plain().replace('</head>', `<meta http-equiv="Content-Security-Policy" content="${LOOSE[0][0]}"></head>`);
   assert.match(verifyShell(twice).join('\n'), /too loose: connect-src is not 'none' alone/);
   assert.match(policyProblems('').join('\n'), /empty/);
+});
+
+test('a packed part does not carry the operating system of the machine that made it, and still unpacks', async () => {
+  const data = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  const bytes = Buffer.from(packPart(data).replace(/\n/g, ''), 'base64');
+  assert.deepEqual([bytes[0], bytes[1]], [0x1f, 0x8b], 'gzip magic');
+  assert.equal(bytes[9], 255, 'the OS byte of the header is "unknown", not 3 (Linux) or 11 (Windows)');
+  const { gunzipSync } = await import('node:zlib');
+  assert.deepEqual([...gunzipSync(bytes)], [...data]);
 });
 
 test('Trusted Types may be required, with named policies only: no wildcard, no duplicates, no other value', () => {
