@@ -29,9 +29,11 @@ Commits: `type(scope): what changed` (scopes such as `hub`, `ui-kit`, `web-kit`,
 
 ## Web platform
 
-- Browser Support: Baseline `widely` available (`.mwgrc`, `browserslist` in `ui-kit` and `web-kit`). An app built on
-  the kit may hold a stricter policy of its own (tasks-desktop: Chrome/Edge 86+, see its README); code in
-  `ui-kit` / `web-kit` that an app with such a policy uses must work there too, or come with a fallback.
+- Browser Support: Baseline `widely` available (`.mwgrc`, `browserslist` in `ui-kit` and `web-kit`). Every app on the
+  kit holds `widely` or newer (pult: `newly`) since 2026-11-21, no app keeps an older floor any more. A feature that is
+  not `widely` yet (`closedby`, anchor positioning, the File System Access API) only with feature detection and a
+  fallback; a check that only a test environment needs (jsdom lacks `elementsFromPoint`, `showPopover`) is not a fallback
+  for a browser and stays.
 - Before you write browser code, ask the modern-web guidance for the feature (run it with `DISABLE_TELEMETRY=1`):
   `npx -y modern-web-guidance@latest search "<topic>"`, then `retrieve <id>`. Prefer the platform feature (dialog,
   popover, anchor positioning, `:has()`, container queries) over a script that imitates it, with a fallback when the

@@ -2,8 +2,7 @@
 // The backdrop is part of the dialog element for the events: a click on it has the dialog itself as its target, so
 // the click counts only when it lies outside the box of the dialog (a click on the padding of the box is inside).
 //
-// A browser that knows `closedby` (Chrome/Edge 134, Firefox 141; Limited availability, not Safari, not the Chrome 86
-// of tasks-desktop) does the same itself with `closedby="any"`: a press and release on the backdrop sends a cancelable
+// A browser that knows `closedby` (Chrome/Edge 134, Firefox 141; Limited availability, not Safari yet) does the same itself with `closedby="any"`: a press and release on the backdrop sends a cancelable
 // `cancel` and then closes; a press in the dialog that ends on the backdrop (a text selection) does not. There the
 // action only sets the attribute. Not with `closeable`: the browser's `cancel` reaches the dialog's own `oncancel`
 // before anything could ask, and it cannot be told from the `cancel` of Escape, which `closeable` must not keep;
