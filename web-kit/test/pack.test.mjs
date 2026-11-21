@@ -172,6 +172,35 @@ test('a policy that lets the page load or reach something is refused by assemble
   assert.match(policyProblems('').join('\n'), /empty/);
 });
 
+test('Trusted Types may be required, with named policies only: no wildcard, no duplicates, no other value', () => {
+  const base = "default-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none'";
+  for (const tt of [
+    "require-trusted-types-for 'script'; trusted-types docmap",
+    "require-trusted-types-for 'script'; trusted-types 'none'",
+    "require-trusted-types-for 'script'; trusted-types app#1 other.policy",
+    "require-trusted-types-for 'script'",
+  ]) {
+    assert.deepEqual(policyProblems(`${base}; ${tt}`), [], tt);
+    // assemble takes it as well, and the check of the built page does too
+    assert.doesNotThrow(() => plain({ csp: `${base}; ${tt}` }), tt);
+  }
+  for (const [tt, pattern] of [
+    ["require-trusted-types-for 'style'", /require-trusted-types-for is not 'script' alone/],
+    ["require-trusted-types-for", /require-trusted-types-for is not 'script' alone/],
+    ["require-trusted-types-for 'script' 'script'", /require-trusted-types-for is not 'script' alone/],
+    ["trusted-types", /trusted-types names no policy/],
+    ["trusted-types *", /not a policy name/],
+    ["trusted-types docmap 'allow-duplicates'", /not a policy name/],
+    ["trusted-types 'none' docmap", /'none' next to policies/],
+    ["trusted-types https://evil.example", /not a policy name/],
+  ]) {
+    assert.match(policyProblems(`${base}; ${tt}`).join('\n'), pattern, tt);
+    assert.throws(() => plain({ csp: `${base}; ${tt}` }), /policy lets the page load or reach something/, tt);
+  }
+  // given twice, like every other directive
+  assert.match(policyProblems(`${base}; trusted-types a; trusted-types b`).join('\n'), /trusted-types is given twice/);
+});
+
 test('a script tag is compared as a whole: an attribute inside another one does not make a script the module or a part', () => {
   for (const [name, make, partIds] of [
     ['with the parts of an engine', engine, ENGINE],

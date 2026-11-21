@@ -78,6 +78,17 @@ const POLICY_DIRECTIVES = new Set([
   'manifest-src',
 ]);
 
+/**
+ * The two directives of Trusted Types. They only narrow what a page may do (every sink that takes a script or markup
+ * as a string is refused unless a named policy made it), so they are allowed beside the others, with a fixed shape:
+ * `require-trusted-types-for 'script'` and `trusted-types` naming policies, never `*` (any policy) and never
+ * `'allow-duplicates'`.
+ */
+const POLICY_TRUSTED_TYPES = ['require-trusted-types-for', 'trusted-types'];
+
+/** A policy name as the Trusted Types spec spells it (letters, digits and `-#=_/@.%`). */
+const POLICY_NAME = /^[A-Za-z0-9\-#=_/@.%]+$/;
+
 /** The sources a directive may name: what the page holds itself, never an address, a wildcard or eval. */
 const POLICY_SOURCES = new Set(["'unsafe-inline'", "'wasm-unsafe-eval'", 'data:', 'blob:']);
 
@@ -95,6 +106,17 @@ export function policyProblems(csp) {
       continue;
     }
     seen.set(directive, sources);
+    if (directive === 'require-trusted-types-for') {
+      if (sources.length !== 1 || sources[0] !== "'script'") problems.push(`${directive} is not 'script' alone: ${sources.join(' ')}`);
+      continue;
+    }
+    if (directive === 'trusted-types') {
+      if (sources.length === 0) problems.push(`${directive} names no policy (write 'none' for no policy at all)`);
+      if (sources.includes("'none'") && sources.length > 1) problems.push(`${directive} names 'none' next to policies`);
+      const odd = sources.filter((x) => x !== "'none'" && !POLICY_NAME.test(x));
+      if (odd.length) problems.push(`${directive} names something that is not a policy name (no '*', no 'allow-duplicates'): ${odd.join(' ')}`);
+      continue;
+    }
     if (!POLICY_DIRECTIVES.has(directive)) {
       problems.push(`the directive ${directive} is not allowed`);
       continue;

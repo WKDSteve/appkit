@@ -17,7 +17,8 @@ export interface PageInput {
   parts?: Readonly<Record<string, Bytes>>;
   /**
    * The Content-Security-Policy of the page: `default-src`, `connect-src`, `base-uri` and `form-action` 'none' alone,
-   * no other source than `'unsafe-inline'`, `'wasm-unsafe-eval'`, `data:` and `blob:` (see `policyProblems`).
+   * no other source than `'unsafe-inline'`, `'wasm-unsafe-eval'`, `data:` and `blob:` (see `policyProblems`). Trusted Types may be
+   * required: `require-trusted-types-for 'script'` and `trusted-types <policy names>` (or `'none'`), never `*`.
    */
   csp: string;
   /** The title of the page (plain text). */
