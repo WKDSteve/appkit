@@ -40,3 +40,6 @@ Commits: `type(scope): what changed` (scopes such as `hub`, `ui-kit`, `web-kit`,
   no `innerHTML` with strings, no inline `<script>` or `<style>`, no `eval`.
 - `legacy-scan` (`DISABLE_TELEMETRY=1 npx -y modern-web-guidance@1.0.1 legacy-scan ui-kit/src --json`, the same for
   `web-kit/src`) finds a part of the legacy patterns; 0 findings on 2026-11-21. A new finding is a reason to look.
+  CI runs it as an informative step in the `ui-kit` and `web-kit` jobs.
+- `.claude/settings.json` sets `DISABLE_TELEMETRY=1` and allows only `npx -y modern-web-guidance@latest *`.
+- Rules: rules-vault ruleset `web` (plus the app rules `WEB-*` in ruleset `native`).

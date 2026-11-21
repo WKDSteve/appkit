@@ -184,6 +184,13 @@ jobs:
       - run: pnpm check
       - run: pnpm test
       - run: pnpm audit --audit-level high
+      # Informative only (never red): legacy web-platform patterns that a newer platform feature replaces, judged against
+      # the target in .mwgrc (Baseline widely available). Version pinned, no telemetry; raise it on purpose.
+      - name: legacy-scan (informative)
+        continue-on-error: true
+        env:
+          DISABLE_TELEMETRY: "1"
+        run: npx -y modern-web-guidance@1.0.1 legacy-scan src --json
 
   # The parts of a web variant (web-kit, appkit-web): plain JavaScript without dependencies; Node's own test runner.
   # The hand-written declarations (src/*.d.ts) are type-checked against a consumer (test/types/consumer.ts) with the
@@ -202,3 +209,10 @@ jobs:
       - run: pnpm test
       - run: pnpm -C ../ui-kit install --frozen-lockfile
       - run: pnpm check
+      # Informative only (never red): legacy web-platform patterns that a newer platform feature replaces, judged against
+      # the target in .mwgrc (Baseline widely available). Version pinned, no telemetry; raise it on purpose.
+      - name: legacy-scan (informative)
+        continue-on-error: true
+        env:
+          DISABLE_TELEMETRY: "1"
+        run: npx -y modern-web-guidance@1.0.1 legacy-scan src --json
