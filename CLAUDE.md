@@ -36,7 +36,7 @@ Commits: `type(scope): what changed` (scopes such as `hub`, `ui-kit`, `web-kit`,
   `npx -y modern-web-guidance@latest search "<topic>"`, then `retrieve <id>`. Prefer the platform feature (dialog,
   popover, anchor positioning, `:has()`, container queries) over a script that imitates it, with a fallback when the
   feature is below the target.
-- Feature detection, not browser sniffing. Nothing that the CSP (`script-src 'self'`, Trusted Types) would refuse:
+- Feature detection, not browser sniffing. Polyfills where browsers still in use need them (rather one too many), run only after the check (rules-vault `BASE-02`). Nothing that the CSP (`script-src 'self'`, Trusted Types) would refuse:
   no `innerHTML` with strings, no inline `<script>` or `<style>`, no `eval`.
 - `legacy-scan` finds a part of the legacy patterns (0 findings on 2026-11-21; a new finding is a reason to look). The
   scanner is an exact devDependency of `ui-kit` (the pnpm supply-chain policy applies):
