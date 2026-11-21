@@ -18,6 +18,9 @@
     "src",
     "README.md"
   ],
+  "browserslist": [
+    "baseline widely available"
+  ],
   "engines": {
     "node": ">=22"
   },

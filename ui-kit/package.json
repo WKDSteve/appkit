@@ -47,6 +47,9 @@
     "src",
     "README.md"
   ],
+  "browserslist": [
+    "baseline widely available"
+  ],
   "scripts": {
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run"
