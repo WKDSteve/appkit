@@ -31,7 +31,8 @@ for a few days, each entry with its reason and an end:
     [{"crate": "url", "version": "2.5.9", "advisory": "RUSTSEC-2026-0592",
       "reason": "fixes the advisory; no older fixed version", "until": "2026-11-27"}]
 
-An entry holds up to and including its day `until` and is printed on every run. Once that day is over, the entry fails
+An entry holds up to and including its day `until` (a day of UTC), at most 14 days ahead (a typo of the year must
+not let a version through for years), and is printed on every run while its version is young. Once that day is over, the entry fails
 the check (exit 1) until it is taken out, whether or not the version is still young: an allowance does not stay behind
 unnoticed. A file that is not such a list fails with exit 2.
 """
@@ -155,12 +156,16 @@ def too_young(age, min_days):
 ADVISORY = re.compile(r"^RUSTSEC-\d{4}-\d{4}$")
 DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 ALLOW_FIELDS = ("crate", "version", "advisory", "reason", "until")
+# The farthest an allowance may reach: a week for the version to grow old, and a week to spare.
+MAX_ALLOW_DAYS = 14
 
 
-def load_allow(path):
+def load_allow(path, today=None):
     """The entries of the allow-list of security fixes, or [] without the file. A file that is not a list of entries
     with every field (`crate`, `version`, an advisory id `RUSTSEC-YYYY-NNNN`, a `reason`, an `until` day) raises
-    ValueError: a broken list lets nothing through by mistake."""
+    ValueError: a broken list lets nothing through by mistake. So does an `until` more than MAX_ALLOW_DAYS after
+    `today` (default: the day of UTC now)."""
+    today = today or datetime.now(timezone.utc).date()
     if not os.path.exists(path):
         return []
     with open(path, encoding="utf-8") as handle:
@@ -175,7 +180,9 @@ def load_allow(path):
             raise ValueError(f"entry {i}: advisory {entry['advisory']!r} is no RUSTSEC id")
         if not DAY.match(entry["until"]):
             raise ValueError(f"entry {i}: until {entry['until']!r} is no day YYYY-MM-DD")
-        datetime.strptime(entry["until"], "%Y-%m-%d")
+        until = datetime.strptime(entry["until"], "%Y-%m-%d").date()
+        if until > today + timedelta(days=MAX_ALLOW_DAYS):
+            raise ValueError(f"entry {i}: until {entry['until']} is more than {MAX_ALLOW_DAYS} days ahead")
         entries.append(entry)
     return entries
 
@@ -208,7 +215,8 @@ def main():
     cache = load_cache(cache_path)
     allow_path = args.allow or default_allow(args.lock)
     try:
-        allowed, expired = split_allow(load_allow(allow_path), datetime.now(timezone.utc).date())
+        today = datetime.now(timezone.utc).date()
+        allowed, expired = split_allow(load_allow(allow_path, today), today)
     except (OSError, ValueError) as err:
         print(f"cannot read the allow-list {allow_path}: {err}", file=sys.stderr)
         return 2

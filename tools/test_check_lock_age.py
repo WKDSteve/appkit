@@ -270,6 +270,9 @@ class Allow(unittest.TestCase):
         self.assertEqual(self.run_main(self.young, [self.entry(self.today() + timedelta(days=3))], printed), 0)
         self.assertTrue(any("allowed while young: serde 1.0.0" in line and "RUSTSEC-2026-0592" in line for line in printed))
 
+    def test_an_entry_may_reach_the_farthest_day(self):
+        self.assertEqual(self.run_main(self.young, [self.entry(self.today() + timedelta(days=age_check.MAX_ALLOW_DAYS))]), 0)
+
     def test_the_entry_holds_on_its_last_day(self):
         self.assertEqual(self.run_main(self.young, [self.entry(self.today())]), 0)
 
@@ -298,6 +301,8 @@ class Allow(unittest.TestCase):
             [{**self.entry(self.today()), "advisory": "CVE-2026-1"}],
             [{**self.entry(self.today()), "until": "27.11.2026"}],
             [{**self.entry(self.today()), "reason": " "}],
+            # A typo of the year (2062 for 2026) would let the version through for years.
+            [self.entry(self.today() + timedelta(days=age_check.MAX_ALLOW_DAYS + 1))],
         ):
             with self.subTest(broken=broken):
                 self.assertEqual(self.run_main(self.old, broken), 2)
