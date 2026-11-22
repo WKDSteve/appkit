@@ -71,6 +71,37 @@ pub fn get(key: &str, value: &str) -> Result<Option<String>, String> {
 ///
 /// The key is not one of the user or the machine.
 pub fn get_typed(key: &str, value: &str) -> Result<Option<(String, bool)>, String> {
+    Ok(match read_value(key, value)? {
+        Read::Found(text, expand) => Some((text, expand)),
+        Read::Missing | Read::Failed(_) => None,
+    })
+}
+
+/// Like [`get_typed`], but `None` only when the key or the value is not there. Whoever writes the value back after
+/// changing it reads with this: a value that is there and could not be read (no right to it, too large, not a
+/// string) is an error, never "nothing there", or the write would replace what it could not see.
+///
+/// # Errors
+///
+/// The key is not one of the user or the machine, or the value is there and could not be read.
+pub fn get_typed_strict(key: &str, value: &str) -> Result<Option<(String, bool)>, String> {
+    match read_value(key, value)? {
+        Read::Found(text, expand) => Ok(Some((text, expand))),
+        Read::Missing => Ok(None),
+        Read::Failed(why) => Err(why),
+    }
+}
+
+/// What reading a string value came to.
+enum Read {
+    Found(String, bool),
+    /// The key or the value is not there.
+    Missing,
+    /// It is there and could not be read: why.
+    Failed(String),
+}
+
+fn read_value(key: &str, value: &str) -> Result<Read, String> {
     let (root, sub) = split(key)?;
     let name = wide(value);
     let flags = RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND;
@@ -88,8 +119,15 @@ pub fn get_typed(key: &str, value: &str) -> Result<Option<(String, bool)>, Strin
             &mut bytes,
         )
     };
-    if code != ERROR_SUCCESS || bytes as usize > MAX_VALUE_UNITS * 2 {
-        return Ok(None);
+    match code {
+        ERROR_SUCCESS => {}
+        ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND => return Ok(Read::Missing),
+        other => return Ok(Read::Failed(os_error(other))),
+    }
+    if bytes as usize > MAX_VALUE_UNITS * 2 {
+        return Ok(Read::Failed(format!(
+            "the value is larger than {MAX_VALUE_UNITS} characters"
+        )));
     }
     let mut buf = vec![0u16; (bytes as usize).div_ceil(2) + 1];
     let mut size =
@@ -107,15 +145,15 @@ pub fn get_typed(key: &str, value: &str) -> Result<Option<(String, bool)>, Strin
         )
     };
     if code != ERROR_SUCCESS {
-        return Ok(None);
+        return Ok(Read::Failed(os_error(code)));
     }
     let units = (size as usize / 2).min(buf.len());
     let text = &buf[..units];
     let end = text.iter().position(|&u| u == 0).unwrap_or(text.len());
-    Ok(Some((
+    Ok(Read::Found(
         String::from_utf16_lossy(&text[..end]),
         kind == REG_EXPAND_SZ,
-    )))
+    ))
 }
 
 /// Write the string `value` of `key` (the key is made when it is not there).
@@ -222,5 +260,22 @@ mod tests {
             delete(r"HKCU\Software\appkit-test-no-such-key-6f1c", "x"),
             Ok(false)
         );
+    }
+
+    /// The strict read tells a value that is not there from one that is there and cannot be read as a string: the
+    /// number `CurrentMajorVersionNumber` (a `REG_DWORD` of every Windows 10 and 11). A writer that took the second
+    /// for "nothing there" would replace a whole value (the `PATH` of the user) with one entry.
+    #[test]
+    fn a_value_that_is_there_but_cannot_be_read_is_an_error_not_nothing() {
+        let key = r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion";
+        assert_eq!(get(key, "CurrentMajorVersionNumber").unwrap(), None);
+        assert!(get_typed_strict(key, "CurrentMajorVersionNumber").is_err());
+        assert_eq!(get_typed_strict(key, "appkit-no-such-value-6f1c"), Ok(None));
+        assert_eq!(
+            get_typed_strict(r"HKCU\Software\appkit-test-no-such-key-6f1c", "x"),
+            Ok(None)
+        );
+        let (root, expand) = get_typed_strict(key, "SystemRoot").unwrap().unwrap();
+        assert!(root.len() > 3 && !expand);
     }
 }

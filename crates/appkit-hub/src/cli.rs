@@ -425,35 +425,55 @@ pub async fn logs(app: &Background<'_>, lines: usize, follow: bool) -> Result<()
     let env = Env::from_process();
     let config = instance::config_folder(&env, app.login.identity)?;
     let path = log_path(&config);
-    let text = std::fs::read(&path).map_err(|e| {
+    let raw = std::fs::read(&path).map_err(|e| {
         format!(
             "no log at {} ({e}): the hub has not run in the background yet",
             path.display()
         )
     })?;
-    let text = String::from_utf8_lossy(&text);
-    print!("{}", last_lines(&text, lines));
+    print!("{}", last_lines(&String::from_utf8_lossy(&raw), lines));
     if !follow {
         return Ok(());
     }
-    let mut at = text.len() as u64;
+    let mut tail = Tail::after(&raw);
     loop {
         tokio::time::sleep(FOLLOW_PAUSE).await;
-        let Ok(mut file) = std::fs::File::open(&path) else {
-            continue;
-        };
-        let len = file.metadata().map(|m| m.len()).unwrap_or(at);
-        if len < at {
-            at = 0;
-        }
-        if len == at || file.seek(SeekFrom::Start(at)).is_err() {
-            continue;
-        }
-        let mut added = Vec::new();
-        if file.read_to_end(&mut added).is_ok() {
-            at += added.len() as u64;
+        if let Some(added) = tail.added(&path) {
             print!("{}", String::from_utf8_lossy(&added));
         }
+    }
+}
+
+/// Where `logs -f` is in the log: a count of bytes of the file, never of the text it was decoded to (a byte that is
+/// not UTF-8 becomes three).
+struct Tail {
+    at: u64,
+}
+
+impl Tail {
+    /// After all of `read`, the bytes read so far.
+    fn after(read: &[u8]) -> Self {
+        Self {
+            at: read.len() as u64,
+        }
+    }
+
+    /// What was added to the file at `path` since the last look; from its start when it is shorter than before (a
+    /// log started anew). `None`: nothing new, or it cannot be read now.
+    fn added(&mut self, path: &Path) -> Option<Vec<u8>> {
+        let mut file = std::fs::File::open(path).ok()?;
+        let len = file.metadata().ok()?.len();
+        if len < self.at {
+            self.at = 0;
+        }
+        if len == self.at {
+            return None;
+        }
+        file.seek(SeekFrom::Start(self.at)).ok()?;
+        let mut added = Vec::new();
+        file.read_to_end(&mut added).ok()?;
+        self.at += added.len() as u64;
+        Some(added)
     }
 }
 
@@ -633,6 +653,27 @@ mod tests {
         assert_eq!(doc["port"], 8123);
         assert_eq!(doc["program_version"], "1.2.3");
         assert_eq!(doc["log"], "/cfg/hub.log");
+    }
+
+    /// `logs -f` goes on after the bytes it read, also when the log holds a byte that is not UTF-8 (decoded, it would
+    /// be longer, and the log would look started anew and be printed again from the top).
+    #[test]
+    fn following_a_log_prints_only_what_was_added() {
+        let root = appkit_scratch::Scratch::new("cli-logs-follow");
+        std::fs::create_dir_all(&*root).unwrap();
+        let log = root.join("hub.log");
+        let first = b"one \xff\xfe two\n".to_vec();
+        std::fs::write(&log, &first).unwrap();
+        let mut tail = Tail::after(&std::fs::read(&log).unwrap());
+        assert_eq!(tail.added(&log), None);
+        let mut more = first.clone();
+        more.extend_from_slice(b"three\n");
+        std::fs::write(&log, &more).unwrap();
+        assert_eq!(tail.added(&log), Some(b"three\n".to_vec()));
+        assert_eq!(tail.added(&log), None);
+        // Started anew (shorter): from its start.
+        std::fs::write(&log, b"new\n").unwrap();
+        assert_eq!(tail.added(&log), Some(b"new\n".to_vec()));
     }
 
     #[test]

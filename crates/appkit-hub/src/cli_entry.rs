@@ -58,7 +58,8 @@ const ENVIRONMENT_KEY: &str = r"HKCU\Environment";
 impl UserPath for SystemPath {
     #[cfg(windows)]
     fn read(&self) -> Result<Option<(String, bool)>, String> {
-        crate::winreg::get_typed(ENVIRONMENT_KEY, "Path")
+        // Strict: a `PATH` that is there and cannot be read must not look like none, or the write would replace it.
+        crate::winreg::get_typed_strict(ENVIRONMENT_KEY, "Path")
     }
 
     #[cfg(not(windows))]
@@ -214,6 +215,30 @@ fn is_starter(path: &Path) -> bool {
     std::fs::read(path).is_ok_and(|bytes| bytes.windows(MARK.len()).any(|w| w == MARK.as_bytes()))
 }
 
+/// The ending of the file a starter is written to before it is moved over the old one.
+const PART: &str = ".appkit-new";
+
+/// The file a starter is written to first: its own name with [`PART`] added (so the `.cmd` and the shell script of a
+/// command never share one).
+fn part_of(path: &Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(PART);
+    path.with_file_name(name)
+}
+
+/// Remove what a write that was cut off left in `dir` (files ending in [`PART`]), so that they do not keep the folder
+/// from being empty.
+fn sweep_parts(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry.file_name().to_string_lossy().ends_with(PART) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 /// Write `text` to `path` (beside, then moved over), executable elsewhere than on Windows. A file there that is not
 /// a starter is left as it is.
 fn write_starter(path: &Path, text: &str) -> Result<(), String> {
@@ -223,8 +248,12 @@ fn write_starter(path: &Path, text: &str) -> Result<(), String> {
             path.display()
         ));
     }
-    let part = path.with_extension("appkit-new");
-    std::fs::write(&part, text).map_err(|e| format!("cannot write {}: {e}", part.display()))?;
+    let part = part_of(path);
+    if let Err(e) = std::fs::write(&part, text) {
+        // A write cut short (a full disk) leaves no part behind: it would keep the folder from ever being empty.
+        let _ = std::fs::remove_file(&part);
+        return Err(format!("cannot write {}: {e}", part.display()));
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -442,6 +471,7 @@ pub fn uninstall(command: &str, env: &Env, path: Option<&dyn UserPath>) -> Resul
     if !owns_dir(env) {
         return Ok(out);
     }
+    sweep_parts(&dir);
     let empty = std::fs::read_dir(&dir).is_ok_and(|mut d| d.next().is_none());
     if !empty {
         return Ok(out);
@@ -686,6 +716,27 @@ mod tests {
 
         // Nothing there: nothing to say, no error.
         assert_eq!(uninstall("rules-desktop", &env, Some(&store)).unwrap(), "");
+    }
+
+    /// A write that was cut off (a full disk, a crash) left its part file: it does not keep the folder, and the `PATH`
+    /// entry with it, there for ever once the last starter is gone.
+    #[test]
+    fn a_part_left_by_a_cut_off_write_does_not_keep_the_folder_on_the_path() {
+        let root = Scratch::new("cli-entry-part");
+        let env = scratch_env(&root);
+        let store = FakePath::default();
+        install("tasks-desktop", &root.join("t.exe"), &env, Some(&store)).unwrap();
+        let dir = starter_dir(&env).unwrap();
+        let file = starter_files(&dir, "tasks-desktop")[0].clone();
+        std::fs::write(part_of(&file), "half a starter").unwrap();
+        // The parts of the two files of one command are not the same file.
+        let files = starter_files(&dir, "tasks-desktop");
+        if files.len() == 2 {
+            assert_ne!(part_of(&files[0]), part_of(&files[1]));
+        }
+        let said = uninstall("tasks-desktop", &env, Some(&store)).unwrap();
+        assert!(said.contains("off the PATH"), "{said}");
+        assert!(!dir.exists());
     }
 
     #[test]
