@@ -998,6 +998,9 @@ fn page_policy(connect_src: Option<&str>, worker_policy: Option<&str>, media: bo
         .unwrap_or_else(|_| HeaderValue::from_static("default-src 'none'"))
 }
 
+/// The policy of an answer that is no document: nothing runs in it, nothing embeds it (`SRV-26`).
+const NON_DOCUMENT_POLICY: &str = "default-src 'none'; frame-ancestors 'none'; sandbox";
+
 pub fn set_security_headers(response: &mut Response, class: Class, connect_src: Option<&str>) {
     set_page_headers(response, class, connect_src, None, false);
 }
@@ -1034,6 +1037,9 @@ fn page_headers(
 ) {
     let microphone = microphone && worker_policy.is_some();
     let capture = capture && worker_policy.is_none();
+    // An error on the path of the page (a wrong method, a missing asset) is no document: it keeps the opener and
+    // permissions policy of the page but gets the policy of an answer that runs nothing.
+    let document = response.status().is_success();
     let h = response.headers_mut();
     h.insert(
         HeaderName::from_static("x-content-type-options"),
@@ -1056,7 +1062,11 @@ fn page_headers(
         // nothing a task's text could reach (the body is drawn as elements).
         h.insert(
             header::CONTENT_SECURITY_POLICY,
-            page_policy(connect_src, worker_policy, microphone),
+            if document {
+                page_policy(connect_src, worker_policy, microphone)
+            } else {
+                HeaderValue::from_static(NON_DOCUMENT_POLICY)
+            },
         );
         h.insert(
             HeaderName::from_static("cross-origin-opener-policy"),
@@ -1074,6 +1084,13 @@ fn page_headers(
                 "camera=(), microphone=(), geolocation=(), payment=(), usb=(), \
                  clipboard-read=(), clipboard-write=(self)"
             }),
+        );
+    } else {
+        // An answer that is no document (JSON, a stream, an error, a 404): if a browser opens or embeds it
+        // directly, nothing may run in it (SRV-26).
+        h.insert(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(NON_DOCUMENT_POLICY),
         );
     }
 }

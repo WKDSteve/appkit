@@ -834,6 +834,113 @@ pub async fn every_answer_carries_the_security_headers(s: &dyn Subject) {
     }
 }
 
+/// `SRV-26`: an answer says what it is and betrays nothing. One answer of each kind the guard can give without an
+/// engine (the page, JSON, an error of the guard, a refusal, a 404, a method it does not know) is read raw.
+pub async fn answers_say_what_they_are_and_betray_nothing(s: &dyn Subject) {
+    let h = Harness::new(s).await;
+    let host = h.host();
+    let page = get(&h, "/", &[]).await;
+    let json = get(&h, h.route("hello").as_str(), &[]).await;
+    let two_hosts = send(
+        h.addr(),
+        request(
+            "GET",
+            h.route("hello").as_str(),
+            &[("Host", &host), ("Host", &host)],
+            b"",
+        ),
+    )
+    .await;
+    let wrong_host = send(
+        h.addr(),
+        request(
+            "GET",
+            h.route("hello").as_str(),
+            &[("Host", "evil.example")],
+            b"",
+        ),
+    )
+    .await;
+    let unknown_method = send(h.addr(), request("TRACE", "/", &[("Host", &host)], b"")).await;
+    let no_session = get(&h, h.route("snapshot").as_str(), &[]).await;
+    let not_found = get(&h, "/nope", &[]).await;
+    let refused = post(&h, "/auth/exchange", &[], "{}").await;
+    let others = [
+        ("json", &json),
+        ("401 without a session", &no_session),
+        ("404", &not_found),
+        ("403 wrong host", &wrong_host),
+        ("400 two hosts", &two_hosts),
+        ("405 unknown method", &unknown_method),
+        ("exchange refused", &refused),
+    ];
+    // Content-Type: a type that fits and, for text, a charset.
+    let ct = page.header("content-type").expect("the page has a type");
+    assert!(
+        ct.starts_with("text/html") && ct.contains("charset=utf-8"),
+        "page: {ct}"
+    );
+    for (kind, r) in others.iter().chain([("page", &page)].iter()) {
+        assert!(
+            r.header("set-cookie").is_none(),
+            "{kind} sets a cookie: {r:?}"
+        );
+        if !r.body.is_empty() {
+            let ct = r
+                .header("content-type")
+                .unwrap_or_else(|| panic!("{kind} has no type: {r:?}"));
+            assert!(
+                ct.starts_with("application/json") || ct.contains("charset=utf-8"),
+                "{kind}: {ct}"
+            );
+        }
+    }
+    // Everything that is not a document says nothing may run in it.
+    for (kind, r) in &others {
+        let csp = r
+            .header("content-security-policy")
+            .unwrap_or_else(|| panic!("{kind} has no policy: {r:?}"));
+        let d = directives(csp);
+        assert_eq!(
+            d.get("default-src").map(String::as_str),
+            Some("'none'"),
+            "{kind}: {csp}"
+        );
+        assert_eq!(
+            d.get("frame-ancestors").map(String::as_str),
+            Some("'none'"),
+            "{kind}: {csp}"
+        );
+        assert!(d.contains_key("sandbox"), "{kind}: {csp}");
+    }
+    // The page alone has the opener policy and a permissions policy.
+    assert_eq!(
+        page.header("cross-origin-opener-policy"),
+        Some("same-origin"),
+        "{page:?}"
+    );
+    assert!(page.header("permissions-policy").is_some(), "{page:?}");
+    // No answer tells a path, a system text or a stack.
+    for (kind, r) in &others {
+        for needle in [
+            "\\",
+            "/home/",
+            "/Users/",
+            "C:",
+            "os error",
+            "panicked",
+            "at src/",
+            "BACKTRACE",
+        ] {
+            assert!(
+                !r.body.contains(needle),
+                "{kind} holds {needle:?}: {}",
+                r.body
+            );
+        }
+    }
+}
+
 // ── 11 to 14, 17: pairing ───────────────────────────────────────────────────
 
 pub async fn a_pairing_code_is_good_once(s: &dyn Subject) {
@@ -1232,6 +1339,7 @@ macro_rules! security_matrix {
         hello_needs_no_token_and_carries_no_data,
         the_page_needs_no_token_and_has_its_headers,
         every_answer_carries_the_security_headers,
+        answers_say_what_they_are_and_betray_nothing,
         a_pairing_code_is_good_once,
         a_pairing_code_expires,
         a_pairing_code_cannot_be_got_without_the_control_secret,
