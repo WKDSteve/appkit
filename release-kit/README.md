@@ -6,7 +6,7 @@ install script that installs exactly that build.
 
 | Part | What it does |
 |---|---|
-| `prepare/` | A GitHub Action: is the commit of a green CI run the tip of `main`? Makes the pre-release `latest` once. |
+| `prepare/` | A GitHub Action: which commit is built: the newest one of `main` with a green CI run (or one named by hand). Makes the pre-release `latest` once. |
 | `publish/` | A GitHub Action: puts the built files, the stamped install scripts and `SHA256SUMS` on `latest` (and moves it) or on a release draft, and attests them (see "Attestation"). Its steps are `publish.sh`. |
 | `scripts/install.ps1` | Windows: downloads the build, checks it against `SHA256SUMS`, installs it for the current user. |
 | `scripts/install.sh` | Linux and macOS: the same. |
@@ -20,9 +20,10 @@ uploading, checking, naming.
 ## The two channels
 
 - **`latest`** is a pre-release that is never marked "Latest". After every green CI run on `main`,
-  the build of that commit replaces its files, which keep **fixed names without a version**
-  (`releases/download/latest/<file>` always works). Only the tip of `main` is built, so a late run
-  of an older commit never moves it backwards. `SHA256SUMS` goes first, files of an earlier build that
+  the build of the newest green commit of `main` (not of the tip: a red tip, or one still in CI, does not keep it
+  from being built) replaces its files, which keep **fixed names without a version**
+  (`releases/download/latest/<file>` always works). A channel only moves forward: a target that is not a descendant of the commit
+  in `version.json` of the build that is up builds nothing, so a late run never moves it backwards. `SHA256SUMS` goes first, files of an earlier build that
   this one no longer has go, and only at the end does the tag move to the commit and the page name it:
   a run that stops in between leaves the page naming the previous commit.
 - **`vX.Y.Z`** is a release from a tag, left as a **draft** (NREL-07): a person installs it, opens it,
@@ -162,16 +163,22 @@ on:
     workflows: [ci]
     types: [completed]
     branches: [main]
-# Only the run of the tip may build; a newer tip replaces a build that is still running.
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: A green commit of main to build again (full id); empty - the newest green commit
+        required: false
+# One group, nothing cancelled: a run decides at its own start (prepare), so an older run neither replaces nor
+# cancels a newer build, and a waiting run is replaced by a newer one of the same group.
 concurrency:
-  group: rolling-${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha }}
-  cancel-in-progress: true
+  group: rolling
+  cancel-in-progress: false
 permissions:
   contents: read
 
 jobs:
   prepare:
-    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -183,7 +190,7 @@ jobs:
       - id: prepare
         uses: WKDSteve/appkit/release-kit/prepare@<sha> # vX.Y.Z
         with:
-          sha: ${{ github.event.workflow_run.head_sha }}
+          sha: ${{ github.event.inputs.sha }}
           token: ${{ github.token }}
 
   build:

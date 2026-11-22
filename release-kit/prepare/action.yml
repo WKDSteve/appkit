@@ -1,19 +1,22 @@
-# release-kit/prepare: is this commit worth a rolling build?
+# release-kit/prepare: which commit gets the rolling build `latest`?
 #
-# Only the tip of the default branch is built: a CI run of an older commit (finished late, or run
-# again by hand) does not move `latest` backwards. When it is the tip and the pre-release `latest`
-# does not exist yet, it is made once (at this commit, marked "starting"); its files and, last, its
-# words are changed by release-kit/publish.
+# The newest commit of the branch whose CI run is green (rule GIT-08), not the tip: a red tip, or one whose CI is
+# still running, must not keep the newest green commit from being built. `latest` only moves forward: a target that
+# is not a descendant of the commit in `version.json` of the built `latest` builds nothing. The decision is
+# release-kit/pick_target.py. When the pre-release `latest` does not exist yet, it is made once (at the target,
+# marked "starting"); its files and, last, its words are changed by release-kit/publish.
 #
-# Used in the job that decides, with `contents: write` and the commit of the CI run:
+# Used in the job that decides, with `contents: write`, after a green CI run (or by hand, with a commit):
 #
 #   - id: prepare
 #     uses: WKDSteve/appkit/release-kit/prepare@<sha> # vX.Y.Z
 #     with:
-#       sha: ${{ github.event.workflow_run.head_sha }}
+#       sha: ${{ github.event.inputs.sha }}   # empty for a workflow_run: the newest green commit
 #       token: ${{ github.token }}
 #
-# The job hands `steps.prepare.outputs.current` (and `sha`, `short`) on to the build jobs.
+# The job hands `steps.prepare.outputs.current` (and `sha`, `short`) on to the build jobs. Several runs may be
+# waiting at once: give the workflow ONE concurrency group without cancel-in-progress, so an older run neither
+# replaces nor cancels a newer build (each run decides on the state at its own start).
 #
 # Linux, macOS, hosted Windows and a self-hosted Windows runner: the work is release-kit/prepare.sh, run by `bash`
 # where `bash` is bash and by Git Bash (full path, 8.3 form) on Windows, where `bash` of a self-hosted runner is the
@@ -24,8 +27,13 @@ description: Decide whether a commit gets a rolling build, and make the pre-rele
 
 inputs:
   sha:
-    description: The commit the CI run was about.
-    required: true
+    description: A full commit id to build by hand (it must be green and on the branch). Empty - the newest green commit.
+    required: false
+    default: ""
+  ci-workflow:
+    description: The file name of the CI workflow whose green runs count.
+    required: false
+    default: ci.yml
   token:
     description: A token with contents write (github.token).
     required: true
@@ -36,7 +44,7 @@ inputs:
 
 outputs:
   current:
-    description: "'true' when the commit is the tip of the branch."
+    description: "'true' when a commit is to be built."
     value: ${{ steps.facts.outputs.current || steps.facts_windows.outputs.current }}
   sha:
     description: The commit.
@@ -48,7 +56,7 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: Is this the tip of the branch, and does the pre-release exist
+    - name: Which commit is built, and does the pre-release exist
       id: facts
       if: runner.os != 'Windows'
       shell: bash
@@ -56,9 +64,10 @@ runs:
         GH_TOKEN: ${{ inputs.token }}
         SHA: ${{ inputs.sha }}
         BRANCH: ${{ inputs.branch }}
+        CI_WORKFLOW: ${{ inputs.ci-workflow }}
         KIT: ${{ github.action_path }}/..
       run: bash "$KIT/prepare.sh"
-    - name: Is this the tip of the branch, and does the pre-release exist (Windows)
+    - name: Which commit is built, and does the pre-release exist (Windows)
       id: facts_windows
       if: runner.os == 'Windows'
       shell: C:\PROGRA~1\Git\bin\bash.exe --noprofile --norc -e -o pipefail {0}
@@ -66,5 +75,6 @@ runs:
         GH_TOKEN: ${{ inputs.token }}
         SHA: ${{ inputs.sha }}
         BRANCH: ${{ inputs.branch }}
+        CI_WORKFLOW: ${{ inputs.ci-workflow }}
         KIT: ${{ github.action_path }}/..
       run: bash "$(cygpath -u "$KIT")/prepare.sh"
