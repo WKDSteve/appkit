@@ -404,6 +404,24 @@
           close(true);
         }
         break;
+      default:
+        // A typed letter goes to the next title that starts with it (ARIA menubar pattern); an open menu moves along.
+        if (event.key.length === 1 && event.key !== ' ' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+          clearTimeout(typedTimer);
+          typed += event.key;
+          typedTimer = setTimeout(() => (typed = ''), TYPE_AHEAD_MS);
+          const to = typeAheadIndex(
+            list.map((t) => t.textContent?.trim() ?? ''),
+            at,
+            typed,
+          );
+          if (to >= 0) {
+            event.preventDefault();
+            const next = list[to];
+            next?.focus();
+            if (openId !== null && next?.dataset.for) void open(next.dataset.for, null);
+          }
+        }
     }
   }
 
