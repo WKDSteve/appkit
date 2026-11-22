@@ -5,6 +5,7 @@ check that cannot ask crates.io is no pass. crates.io is never asked: `published
 """
 
 import importlib.util
+import json
 import os
 import sys
 import tempfile
@@ -225,6 +226,81 @@ class CacheTrust(unittest.TestCase):
                     path = age_check.default_cache(lock)
                     self.assertEqual(path, os.path.join(runner, "lock-age-cache.json"))
                     self.assertFalse(path.startswith(checkout + os.sep))
+
+
+
+class Allow(unittest.TestCase):
+    """The allow-list of security fixes: an entry lets its young version through until its day is over, then fails."""
+
+    def run_main(self, published, allow, printed=None):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "Cargo.lock")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(LOCK)
+            if allow is not None:
+                with open(os.path.join(folder, "lock-age-allow.json"), "w", encoding="utf-8") as handle:
+                    handle.write(allow if isinstance(allow, str) else json.dumps(allow))
+            argv = ["check-lock-age.py", "--lock", path, "--min-days", "7", "--cache", os.path.join(folder, "c.json")]
+            out = printed if printed is not None else []
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(
+                age_check, "published", side_effect=published
+            ), mock.patch.object(age_check.time, "sleep"), mock.patch(
+                "builtins.print", side_effect=lambda *a, **k: out.append(" ".join(map(str, a)))
+            ):
+                return age_check.main()
+
+    @staticmethod
+    def entry(until, version="1.0.0"):
+        return {
+            "crate": "serde",
+            "version": version,
+            "advisory": "RUSTSEC-2026-0592",
+            "reason": "the fix of the advisory; no older fixed version",
+            "until": until.isoformat(),
+        }
+
+    young = staticmethod(lambda name, version: datetime.now(timezone.utc) - timedelta(days=2))  # noqa: E731
+    old = staticmethod(lambda name, version: datetime.now(timezone.utc) - timedelta(days=30))  # noqa: E731
+
+    def today(self):
+        return datetime.now(timezone.utc).date()
+
+    def test_an_entry_lets_its_young_version_through_and_says_so(self):
+        printed = []
+        self.assertEqual(self.run_main(self.young, [self.entry(self.today() + timedelta(days=3))], printed), 0)
+        self.assertTrue(any("allowed while young: serde 1.0.0" in line and "RUSTSEC-2026-0592" in line for line in printed))
+
+    def test_the_entry_holds_on_its_last_day(self):
+        self.assertEqual(self.run_main(self.young, [self.entry(self.today())]), 0)
+
+    def test_an_expired_entry_lets_nothing_through_and_fails_until_taken_out(self):
+        printed = []
+        expired = [self.entry(self.today() - timedelta(days=1))]
+        self.assertEqual(self.run_main(self.young, expired, printed), 1)
+        self.assertTrue(any("too young: serde 1.0.0" in line for line in printed))
+        # Also when the version has grown old meanwhile: the allowance does not stay behind unnoticed.
+        printed = []
+        self.assertEqual(self.run_main(self.old, expired, printed), 1)
+        self.assertTrue(any("expired allowance: serde 1.0.0" in line for line in printed))
+
+    def test_an_entry_of_another_version_lets_nothing_through(self):
+        self.assertEqual(self.run_main(self.young, [self.entry(self.today() + timedelta(days=3), version="1.0.1")]), 1)
+
+    def test_without_the_file_nothing_is_allowed(self):
+        self.assertEqual(self.run_main(self.young, None), 1)
+        self.assertEqual(self.run_main(self.old, None), 0)
+
+    def test_a_broken_list_is_no_pass(self):
+        for broken in (
+            "{not json",
+            {"crate": "serde"},
+            [{"crate": "serde", "version": "1.0.0"}],
+            [{**self.entry(self.today()), "advisory": "CVE-2026-1"}],
+            [{**self.entry(self.today()), "until": "27.11.2026"}],
+            [{**self.entry(self.today()), "reason": " "}],
+        ):
+            with self.subTest(broken=broken):
+                self.assertEqual(self.run_main(self.old, broken), 2)
 
 
 if __name__ == "__main__":

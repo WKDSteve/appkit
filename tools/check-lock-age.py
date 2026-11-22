@@ -23,6 +23,17 @@ The cache belongs to one workspace, not to the account: a file every job of ever
 can write (`~/.cache`) would let the build script of any dependency anywhere enter an old date for a young version and
 open this gate. What is left: a build script of this very repository can still write its cache; a hosted runner
 starts without it. A date without a time zone is no date this tool wrote: it is asked again.
+
+A security fix can be younger than the week: the advisory (cargo audit, cargo deny) fails on the old version, this
+check on the new one. `lock-age-allow.json` beside the lock file (`--allow` names another) lets such a version through
+for a few days, each entry with its reason and an end:
+
+    [{"crate": "url", "version": "2.5.9", "advisory": "RUSTSEC-2026-0592",
+      "reason": "fixes the advisory; no older fixed version", "until": "2026-11-27"}]
+
+An entry holds up to and including its day `until` and is printed on every run. Once that day is over, the entry fails
+the check (exit 1) until it is taken out, whether or not the version is still young: an allowance does not stay behind
+unnoticed. A file that is not such a list fails with exit 2.
 """
 
 import argparse
@@ -141,20 +152,73 @@ def too_young(age, min_days):
     return age < timedelta(days=min_days)
 
 
+ADVISORY = re.compile(r"^RUSTSEC-\d{4}-\d{4}$")
+DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+ALLOW_FIELDS = ("crate", "version", "advisory", "reason", "until")
+
+
+def load_allow(path):
+    """The entries of the allow-list of security fixes, or [] without the file. A file that is not a list of entries
+    with every field (`crate`, `version`, an advisory id `RUSTSEC-YYYY-NNNN`, a `reason`, an `until` day) raises
+    ValueError: a broken list lets nothing through by mistake."""
+    if not os.path.exists(path):
+        return []
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+    if not isinstance(data, list):
+        raise ValueError("not a list of entries")
+    entries = []
+    for i, entry in enumerate(data):
+        if not isinstance(entry, dict) or not all(isinstance(entry.get(k), str) and entry[k].strip() for k in ALLOW_FIELDS):
+            raise ValueError(f"entry {i}: needs {', '.join(ALLOW_FIELDS)}")
+        if not ADVISORY.match(entry["advisory"]):
+            raise ValueError(f"entry {i}: advisory {entry['advisory']!r} is no RUSTSEC id")
+        if not DAY.match(entry["until"]):
+            raise ValueError(f"entry {i}: until {entry['until']!r} is no day YYYY-MM-DD")
+        datetime.strptime(entry["until"], "%Y-%m-%d")
+        entries.append(entry)
+    return entries
+
+
+def split_allow(entries, today):
+    """The entries that hold on `today` (a date; up to and including `until`) as {(crate, version): entry}, and those
+    whose day is over."""
+    active, expired = {}, []
+    for entry in entries:
+        if today.isoformat() <= entry["until"]:
+            active[(entry["crate"], entry["version"])] = entry
+        else:
+            expired.append(entry)
+    return active, expired
+
+
+def default_allow(lock):
+    """The allow-list beside the lock file."""
+    return os.path.join(os.path.dirname(os.path.abspath(lock)), "lock-age-allow.json")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--min-days", type=int, default=7)
     parser.add_argument("--lock", default="Cargo.lock")
     parser.add_argument("--cache", default=None, help="file of known publication dates")
+    parser.add_argument("--allow", default=None, help="allow-list of security fixes (default: beside the lock file)")
     args = parser.parse_args()
     cache_path = args.cache or default_cache(args.lock)
     cache = load_cache(cache_path)
+    allow_path = args.allow or default_allow(args.lock)
+    try:
+        allowed, expired = split_allow(load_allow(allow_path), datetime.now(timezone.utc).date())
+    except (OSError, ValueError) as err:
+        print(f"cannot read the allow-list {allow_path}: {err}", file=sys.stderr)
+        return 2
 
     with open(args.lock, encoding="utf-8") as handle:
         packages = sorted(set(locked_registry_packages(handle.read())))
     now = datetime.now(timezone.utc)
 
     young = []
+    let_through = []
     asked = 0
     for name, version in packages:
         try:
@@ -165,7 +229,11 @@ def main():
             return 2
         age = now - moment
         if too_young(age, args.min_days):
-            young.append((age.total_seconds() / 86400, name, version))
+            entry = allowed.get((name, version))
+            if entry is not None:
+                let_through.append((age.total_seconds() / 86400, name, version, entry))
+            else:
+                young.append((age.total_seconds() / 86400, name, version))
         if fresh:
             asked += 1
             time.sleep(1.05)
@@ -174,7 +242,17 @@ def main():
     print(f"{len(packages)} registry crates checked ({asked} asked, the rest from the cache), minimum age {args.min_days} days")
     for age, name, version in sorted(young):
         print(f"  too young: {name} {version} ({age:.1f} days)")
-    return 1 if young else 0
+    for age, name, version, entry in sorted(let_through, key=lambda x: x[:3]):
+        print(
+            f"  allowed while young: {name} {version} ({age:.1f} days), {entry['advisory']} until {entry['until']}:"
+            f" {entry['reason']}"
+        )
+    for entry in expired:
+        print(
+            f"  expired allowance: {entry['crate']} {entry['version']} ({entry['advisory']}, until {entry['until']}):"
+            f" take it out of {allow_path}"
+        )
+    return 1 if young or expired else 0
 
 
 if __name__ == "__main__":
