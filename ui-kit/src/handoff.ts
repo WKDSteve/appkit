@@ -81,20 +81,38 @@ export interface AskOptions {
   /**
    * An answer after the wait (the promise has already said null): the page may still take the token. Called at most
    * once. Without it the question ends with the wait. With it the listener stays until an answer comes, which costs one
-   * function on a channel the page keeps anyway.
+   * function on a channel the page keeps anyway; a new question on the same channel, or `signal`, ends it, so a page
+   * that asks again (on each focus) holds one late listener, not one per question.
    */
   onLate?: (token: string) => void;
+  /** Ends the question: the promise says null if it has not answered yet, and no answer reaches `onLate` any more. */
+  signal?: AbortSignal;
 }
+
+/** The late listener of the last question on each channel: the next question on that channel removes it. */
+const lateOn = new WeakMap<ChannelLike, () => void>();
 
 /** Ask the open tabs of the page for a session: the token of the first that answers, or null after the wait. */
 export function askForSession(options: AskOptions): Promise<string | null> {
+  lateOn.get(options.channel)?.();
+  if (options.signal?.aborted) return Promise.resolve(null);
   const bytes = options.random();
   const nonce = [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
   if (!NONCE.test(nonce)) return Promise.resolve(null);
   return new Promise((resolve) => {
     let timer: unknown = null;
     let waited = false;
-    const stopListening = (): void => options.channel.removeEventListener('message', onMessage);
+    const stopListening = (): void => {
+      options.channel.removeEventListener('message', onMessage);
+      options.signal?.removeEventListener('abort', onAbort);
+      if (lateOn.get(options.channel) === stopListening) lateOn.delete(options.channel);
+    };
+    const onAbort = (): void => {
+      stopListening();
+      if (timer !== null && !waited) options.clearTimeout(timer);
+      resolve(null);
+    };
+    options.signal?.addEventListener('abort', onAbort, { once: true });
     const onMessage = (event: { data: unknown }): void => {
       const token = answerOf(event.data, nonce);
       if (token === null) return;
@@ -110,6 +128,7 @@ export function askForSession(options: AskOptions): Promise<string | null> {
     timer = options.setTimeout(() => {
       waited = true;
       if (options.onLate === undefined) stopListening();
+      else lateOn.set(options.channel, stopListening);
       resolve(null);
     }, options.waitMs ?? ASK_MS);
     options.channel.postMessage({ appkitSession: 1, ask: nonce } satisfies Ask);

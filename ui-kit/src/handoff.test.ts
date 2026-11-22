@@ -107,6 +107,52 @@ describe('handoff of the session to a new tab', () => {
     expect(taken).toEqual([TOKEN]);
   });
 
+  it('a new question on the same channel ends the late listener of the one before', async () => {
+    const make = bus();
+    const late = make();
+    const fresh = make();
+    const c = clock();
+    const taken: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const asked = askForSession({ channel: fresh, random, ...c, onLate: (t) => taken.push(`${i}:${t}`) });
+      c.fire();
+      expect(await asked).toBeNull();
+      expect(fresh.listening()).toBe(1);
+    }
+    late.postMessage({ appkitSession: 1, answer: NONCE, token: TOKEN });
+    expect(taken).toEqual([`2:${TOKEN}`]);
+    expect(fresh.listening()).toBe(0);
+  });
+
+  it('an abort ends the question: null before the wait, and no late answer after it', async () => {
+    const make = bus();
+    const late = make();
+    const fresh = make();
+    const c = clock();
+    const taken: string[] = [];
+    const early = new AbortController();
+    const asked = askForSession({ channel: fresh, random, ...c, onLate: (t) => taken.push(t), signal: early.signal });
+    early.abort();
+    expect(await asked).toBeNull();
+    expect(fresh.listening()).toBe(0);
+    expect(c.timers[0]?.cleared).toBe(true);
+
+    const after = new AbortController();
+    const second = askForSession({ channel: fresh, random, ...c, onLate: (t) => taken.push(t), signal: after.signal });
+    c.fire();
+    expect(await second).toBeNull();
+    expect(fresh.listening()).toBe(1);
+    after.abort();
+    expect(fresh.listening()).toBe(0);
+    late.postMessage({ appkitSession: 1, answer: NONCE, token: TOKEN });
+    expect(taken).toEqual([]);
+
+    const gone = new AbortController();
+    gone.abort();
+    expect(await askForSession({ channel: fresh, random, ...c, signal: gone.signal })).toBeNull();
+    expect(fresh.sent.length).toBe(2);
+  });
+
   it('an answer in time does not reach onLate', async () => {
     const make = bus();
     shareSession({ channel: make(), token: () => TOKEN, live: () => true });
