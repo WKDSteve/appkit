@@ -37,14 +37,34 @@ export function startsOnGrip(pointerType: string): boolean {
   return pointerType === 'touch' || pointerType === 'pen';
 }
 
-/** The grip of an item: follows its own pointer from `start` to `end` and tells `sink` about it. */
+/** The touch a grip is held by, from its `pointerdown` to the end of the drag. */
+interface Held {
+  pointerId: number;
+  el: Element;
+  x: number;
+  y: number;
+  /** The browser was told that this touch is no gesture of its own (the `touchstart` was taken). */
+  taken: boolean;
+  drop: () => void;
+}
+
+/**
+ * The grip of an item: follows its own pointer from `start` to `end` and tells `sink` about it. The touch that holds
+ * it is taken from the browser: a finger that lifts while it still moves (a flick) is the start of a fling to Chrome,
+ * although the grip scrolls nothing (`touch-action: none`), and a tap while that fling runs only stops it: no click,
+ * for up to about two seconds after the drop (measured 2026-11-18: 12 of 12 taps lost after a flick, none when the
+ * finger rested before it lifted or the `touchstart` was taken). A `touchstart` that is taken makes no gesture at
+ * all. It makes no click either, so a tap on the grip (the finger did not go `GRAB` far) is told as the click it would
+ * have been: whatever listens for one (the card that selects, the hint popup) hears it as before. A pen sends no touch
+ * events; its click is the browser's.
+ */
 export function createGrip(
   sink: () => ((event: PointerDragEvent) => void) | undefined,
   blocked: () => boolean,
 ): (e: PointerEvent, id: string, phase: PointerDragEvent['phase']) => void {
   // The item whose grip a finger holds: the pointer is followed on the grip (captured), wherever it goes.
   let gripped: string | null = null;
-  return (e, id, phase) => {
+  const follow = (e: PointerEvent, id: string, phase: PointerDragEvent['phase']): void => {
     const on = sink();
     if (!on) return;
     if (phase === 'start') {
@@ -61,5 +81,49 @@ export function createGrip(
     }
     if (phase === 'end' || phase === 'cancel') gripped = null;
     on({ phase, id, x: e.clientX, y: e.clientY });
+  };
+
+  let held: Held | null = null;
+  return (e, id, phase) => {
+    const el = e.currentTarget as Element | null;
+    if (phase === 'start' && startsOnGrip(e.pointerType) && typeof el?.addEventListener === 'function') {
+      held?.drop();
+      // The `touchstart` of this touch comes after its `pointerdown`, to the same element.
+      const take = (touch: Event): void => {
+        if (!touch.cancelable) return;
+        touch.preventDefault();
+        now.taken = true;
+      };
+      const now: Held = {
+        pointerId: e.pointerId,
+        el,
+        x: e.clientX,
+        y: e.clientY,
+        taken: false,
+        drop: () => el.removeEventListener('touchstart', take),
+      };
+      el.addEventListener('touchstart', take, { passive: false, once: true });
+      held = now;
+    }
+    follow(e, id, phase);
+    // Only the finger that holds the grip ends its hold: a second finger that lifts elsewhere is not this touch.
+    if ((phase === 'end' || phase === 'cancel') && held !== null && held.pointerId === e.pointerId) {
+      const was = held;
+      held = null;
+      was.drop();
+      if (phase === 'end' && was.taken && !farEnough(was, { x: e.clientX, y: e.clientY })) {
+        was.el.dispatchEvent(
+          new PointerEvent('click', {
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+            pointerType: e.pointerType,
+            pointerId: e.pointerId,
+            clientX: e.clientX,
+            clientY: e.clientY,
+          }),
+        );
+      }
+    }
   };
 }
