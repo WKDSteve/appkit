@@ -358,6 +358,8 @@ pub struct SessionStore {
     max: usize,
     /// Each session with the device it was opened for (`None`: a browser on this machine, paired by code).
     sessions: Mutex<VecDeque<(Secret, Option<String>)>>,
+    /// Woken whenever a session ends (sign-out, revoke, pushed out, cleared): see [`SessionStore::ended`].
+    ended: tokio::sync::Notify,
 }
 
 impl SessionStore {
@@ -366,6 +368,7 @@ impl SessionStore {
         Self {
             max: max.max(1),
             sessions: Mutex::new(VecDeque::new()),
+            ended: tokio::sync::Notify::new(),
         }
     }
 
@@ -390,10 +393,16 @@ impl SessionStore {
     fn open(&self, device: Option<String>) -> Result<Secret, RandomError> {
         let token = Secret::generate(TOKEN_BYTES)?;
         let mut sessions = lock(&self.sessions);
+        let mut pushed_out = false;
         while sessions.len() >= self.max {
             sessions.pop_front();
+            pushed_out = true;
         }
         sessions.push_back((token.clone(), device));
+        drop(sessions);
+        if pushed_out {
+            self.ended.notify_waiters();
+        }
         Ok(token)
     }
 
@@ -406,12 +415,34 @@ impl SessionStore {
         let mut sessions = lock(&self.sessions);
         let before = sessions.len();
         sessions.retain(|(token, _)| !token.matches(&given));
-        sessions.len() != before
+        let closed = sessions.len() != before;
+        drop(sessions);
+        if closed {
+            self.ended.notify_waiters();
+        }
+        closed
+    }
+
+    /// Resolves when the session of this token is no longer open: signed out, revoked with its device, pushed out
+    /// by newer ones, or cleared. At once when it is not open now. An event stream waits on this next to its
+    /// client (`SRV-27`: a stream of a closed session ends).
+    pub async fn ended(&self, text: &str) {
+        loop {
+            let notified = self.ended.notified();
+            tokio::pin!(notified);
+            // Registered before the check, so that an end between the check and the wait is not missed.
+            notified.as_mut().enable();
+            if !self.check(text) {
+                return;
+            }
+            notified.await;
+        }
     }
 
     /// Close every session of a device (it was revoked).
     pub fn close_device(&self, device: &str) {
         lock(&self.sessions).retain(|(_, d)| d.as_deref() != Some(device));
+        self.ended.notify_waiters();
     }
 
     /// The device a session was opened for; `None` for a session of a code, or for no session.
@@ -445,6 +476,7 @@ impl SessionStore {
     /// Close every session.
     pub fn clear(&self) {
         lock(&self.sessions).clear();
+        self.ended.notify_waiters();
     }
 }
 
@@ -493,6 +525,29 @@ mod tests {
     fn clock() -> (Arc<ManualClock>, Arc<dyn Clock>) {
         let manual = Arc::new(ManualClock::new());
         (Arc::clone(&manual), manual)
+    }
+
+    #[tokio::test]
+    async fn a_waiter_on_a_session_wakes_when_it_ends_and_not_before() {
+        let sessions = Arc::new(SessionStore::new(4));
+        let a = sessions.create().unwrap().to_hex();
+        let b = sessions.create().unwrap().to_hex();
+        let waiter = {
+            let (sessions, a) = (Arc::clone(&sessions), a.clone());
+            tokio::spawn(async move { sessions.ended(&a).await })
+        };
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        // Another session ending does not wake it.
+        assert!(sessions.close(&b));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!waiter.is_finished());
+        assert!(sessions.close(&a));
+        tokio::time::timeout(Duration::from_secs(2), waiter)
+            .await
+            .expect("the waiter wakes")
+            .unwrap();
+        // A session that is not open ends at once.
+        sessions.ended(&a).await;
     }
 
     #[test]

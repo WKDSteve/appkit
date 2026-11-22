@@ -4,6 +4,21 @@ use crate::*;
 
 // ── the guard ───────────────────────────────────────────────────────────────
 
+/// What a route that streams reads from the request (`parts.extensions`): resolves when the session of the request
+/// ends, so that an event stream ends with it (`SRV-27`, `SRV-19`).
+#[derive(Clone)]
+pub struct SessionEnd {
+    sessions: Arc<SessionStore>,
+    token: String,
+}
+
+impl SessionEnd {
+    /// Resolves when the session is signed out, revoked, pushed out or cleared.
+    pub async fn ended(&self) {
+        self.sessions.ended(&self.token).await;
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Class {
     /// The static page of the app, no credential.
@@ -772,6 +787,7 @@ pub async fn judge<R: Runtime>(st: &Core<R>, class: Class, req: Request, next: N
     // 7. The credential the route needs, and who it is (a route below `/api/` reads the `Caller`).
     let mut caller = None;
     let mut confirm_for = None;
+    let mut token_for_end: Option<String> = None;
     match class {
         Class::Shell | Class::Hello | Class::Exchange | Class::Other => {}
         Class::ControlPair => {
@@ -800,6 +816,7 @@ pub async fn judge<R: Runtime>(st: &Core<R>, class: Class, req: Request, next: N
                 return error_body(StatusCode::UNAUTHORIZED, "unauthorized", "session required");
             }
             let device = token.as_deref().and_then(|t| st.sessions.device_of(t));
+            token_for_end.clone_from(&token);
             if remote && device.is_none() {
                 return error_body(
                     StatusCode::FORBIDDEN,
@@ -878,6 +895,12 @@ pub async fn judge<R: Runtime>(st: &Core<R>, class: Class, req: Request, next: N
             here.arrive();
         }
         parts.extensions.insert(caller);
+        if let Some(token) = token_for_end {
+            parts.extensions.insert(SessionEnd {
+                sessions: Arc::clone(&st.sessions),
+                token: token.clone(),
+            });
+        }
     }
     let req = Request::from_parts(parts, body);
     if upload {

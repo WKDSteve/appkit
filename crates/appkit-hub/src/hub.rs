@@ -47,7 +47,7 @@ pub trait Pages: Send + Sync {
 pub struct Core<R: Runtime> {
     pub policy: HostPolicy,
     pub pairing: PairingStore,
-    pub sessions: SessionStore,
+    pub sessions: Arc<SessionStore>,
     pub control: Secret,
     pub post_limit: RateLimiter,
     pub ops_limit: RateLimiter,
@@ -227,7 +227,7 @@ where
             None => HostPolicy::loopback(addr.port()),
         },
         pairing: PairingStore::new(Arc::clone(&parts.clock), parts.pairing_ttl),
-        sessions: SessionStore::new(limits.max_sessions),
+        sessions: Arc::new(SessionStore::new(limits.max_sessions)),
         control: parts.control_secret,
         post_limit: RateLimiter::new(
             Arc::clone(&parts.clock),
@@ -551,7 +551,7 @@ mod tests {
         Arc::new(Core {
             policy: HostPolicy::loopback(1),
             pairing: PairingStore::new(Arc::clone(&clock), ttl),
-            sessions: SessionStore::new(4),
+            sessions: Arc::new(SessionStore::new(4)),
             control: Secret::generate(TOKEN_BYTES).unwrap(),
             post_limit: RateLimiter::new(Arc::clone(&clock), 10, ttl),
             ops_limit: RateLimiter::new(Arc::clone(&clock), 10, ttl),

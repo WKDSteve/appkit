@@ -1103,6 +1103,79 @@ pub async fn a_session_ends_when_the_person_signs_out(s: &dyn Subject) {
     );
 }
 
+/// `SRV-27`, `SRV-19`: an open event stream of a session ends when the session does (sign-out), and the stream of
+/// another session does not.
+pub async fn an_event_stream_ends_with_its_session(s: &dyn Subject) {
+    if !s.has_stream() {
+        return;
+    }
+    let h = Harness::new(s).await;
+    let first = session(&h).await;
+    let second = session(&h).await;
+    let host = h.host();
+    let open = |token: String| {
+        let addr = h.addr();
+        let path = h.route("stream");
+        let host = host.clone();
+        async move {
+            let mut stream = TcpStream::connect(addr).await.expect("connect");
+            let auth = bearer(&token);
+            let head =
+                format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nAuthorization: {auth}\r\n\r\n");
+            stream.write_all(head.as_bytes()).await.unwrap();
+            // The first event arrives: the stream is open.
+            let mut seen = Vec::new();
+            let mut buf = [0u8; 512];
+            while !String::from_utf8_lossy(&seen).contains("data: hello") {
+                let n = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buf))
+                    .await
+                    .expect("the first event comes")
+                    .unwrap();
+                assert!(n > 0, "the stream closed before the first event");
+                seen.extend_from_slice(&buf[..n]);
+            }
+            stream
+        }
+    };
+    let mut a = open(first.clone()).await;
+    let mut b = open(second.clone()).await;
+    let auth = bearer(&first);
+    let r = post(
+        &h,
+        appkit_hub::guard::LOGOUT_PATH,
+        &[("Authorization", &auth)],
+        "{}",
+    )
+    .await;
+    assert_eq!(r.status, 200, "{r:?}");
+    // The stream of the signed-out session ends: the body is finished (the last chunk) or the server closed it.
+    let mut rest = Vec::new();
+    let finished = async {
+        let mut buf = [0u8; 256];
+        loop {
+            let n = a.read(&mut buf).await.unwrap();
+            if n == 0 {
+                return;
+            }
+            rest.extend_from_slice(&buf[..n]);
+            if rest.ends_with(b"0\r\n\r\n") {
+                return;
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(3), finished)
+        .await
+        .expect("the stream of a signed-out session ends");
+    // ... and the stream of the other session is still open.
+    let mut buf = [0u8; 16];
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), b.read(&mut buf))
+            .await
+            .is_err(),
+        "the stream of another session ended"
+    );
+}
+
 // ── 11 to 14, 17: pairing ───────────────────────────────────────────────────
 
 pub async fn a_pairing_code_is_good_once(s: &dyn Subject) {
@@ -1504,6 +1577,7 @@ macro_rules! security_matrix {
         answers_say_what_they_are_and_betray_nothing,
         an_ambiguous_message_is_refused_and_a_proxy_is_not_believed,
         a_session_ends_when_the_person_signs_out,
+        an_event_stream_ends_with_its_session,
         a_pairing_code_is_good_once,
         a_pairing_code_expires,
         a_pairing_code_cannot_be_got_without_the_control_secret,

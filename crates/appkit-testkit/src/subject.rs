@@ -35,6 +35,12 @@ pub trait Subject: Send + Sync {
     /// kind of one; the guard refuses by the path before the method or the route is looked at.
     fn data_routes(&self) -> Vec<&'static str>;
 
+    /// Whether the hub has an event-stream route named `stream` (below the namespace). The matrix then holds the
+    /// stream to the end of its session; a hub without one skips that test. Default `false`.
+    fn has_stream(&self) -> bool {
+        false
+    }
+
     /// Whether the app lets its page use the camera and the microphone (`GuardRules::with_page_capture`). The matrix
     /// holds the page to exactly this (`the_page_captures_as_the_subject_says`): an app that sets the switch without
     /// saying so here, or says so without setting it, is red. Most apps do not: the default is `false`.

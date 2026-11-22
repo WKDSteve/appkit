@@ -80,6 +80,21 @@ fn routes(_core: &Arc<Core<DemoRuntime>>) -> Router<Arc<Core<DemoRuntime>>> {
             }),
         )
         .route(&IDENTITY.route("pc-only"), get(|| async { "{}" }))
+        // An event stream: one event, then it stays open until the session of the request ends.
+        .route(
+            &IDENTITY.route("stream"),
+            get(
+                |Extension(end): Extension<appkit_hub::guard::SessionEnd>| async move {
+                    let (tx, rx) = tokio::sync::mpsc::channel(4);
+                    tokio::spawn(async move {
+                        let _ = tx.send(axum::body::Bytes::from("data: hello\n\n")).await;
+                        end.ended().await;
+                        // The sender is dropped here: the stream ends.
+                    });
+                    appkit_hub::streams::sse_response(rx)
+                },
+            ),
+        )
         .route(&IDENTITY.route("status"), post(|| async { "{}" }))
         // A trigger answers with the body it was given, so a test sees what reached the route.
         .route(
@@ -199,6 +214,10 @@ impl Subject for Demo {
 
     fn start(&self, cfg: StartConfig) -> BoxFuture<'_, std::io::Result<RunningServer>> {
         start_with(cfg, rules())
+    }
+
+    fn has_stream(&self) -> bool {
+        true
     }
 
     fn data_routes(&self) -> Vec<&'static str> {
