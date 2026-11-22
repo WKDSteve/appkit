@@ -236,7 +236,7 @@ Parameters (all optional):
             if ($channel -cnotmatch $plain) {
                 Exit-Install "the version has a character that is not allowed: $channel"
             }
-            if ($channel -eq 'latest') {
+            if ($channel -cin @('latest', 'nightly', 'stable')) {
                 $name = $rollingAsset.Replace('{triple}', 'x86_64-pc-windows-msvc')
             }
             else {
@@ -252,7 +252,7 @@ Parameters (all optional):
                 Get-ReleaseFile -From $repo -Channel $channel -Name 'SHA256SUMS' -OutFile (Join-Path $work 'SHA256SUMS')
             }
             catch {
-                if ($channel -eq 'latest') {
+                if ($channel -cin @('latest', 'nightly', 'stable')) {
                     # It cannot be told from here whether a build is being published or the last one stopped half way.
                     Exit-Install 'SHA256SUMS of the rolling build is missing: either a build is being published right now (try again in a few minutes), or its last publish failed and the next green build of the app brings them back'
                 }
@@ -307,7 +307,7 @@ Parameters (all optional):
         elseif (-not $gh) { $skip = 'the GitHub CLI (gh) is not installed' }
         else {
             $verify = @('attestation', 'verify', $path, '-R', $repo)
-            if ($channel -eq 'latest') { $verify += @('--signer-workflow', "$repo/.github/workflows/rolling.yml") }
+            if ($channel -cin @('latest', 'nightly', 'stable')) { $verify += @('--signer-workflow', "$repo/.github/workflows/rolling.yml") }
             elseif ($channel -ne '') { $verify += @('--signer-workflow', "$repo/.github/workflows/release.yml") }
             # Windows PowerShell 5.1 turns a line on stderr of a program into an error under 'Stop'; gh writes its
             # verdict there, so for this one call errors are text.

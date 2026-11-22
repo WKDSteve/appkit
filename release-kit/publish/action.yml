@@ -51,10 +51,10 @@ inputs:
     description: A token with contents write (github.token).
     required: true
   tag:
-    description: latest (the rolling build) or vX.Y.Z (a release, left as a draft).
+    description: latest, nightly or stable (a rolling build) or vX.Y.Z (a release, left as a draft).
     required: true
   sha:
-    description: The commit of the rolling build (needed for latest).
+    description: The commit of the rolling build (needed for latest, nightly and stable).
     required: false
     default: ""
   files:

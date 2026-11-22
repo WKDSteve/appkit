@@ -3,7 +3,8 @@
 # of all of them on a GitHub release. Called by release-kit/publish/action.yml; everything comes in
 # through the environment (see there), and the GitHub CLI `gh` does the talking.
 #
-#   TAG=latest   the rolling build: the pre-release `latest` is made if missing; SHA256SUMS goes
+#   TAG=latest   the rolling build (nightly and stable are the same, with the pre-release of their own name):
+#                the pre-release `latest` is made if missing; SHA256SUMS goes
 #                first (no stale checksums for files that change), then the files, then files of an
 #                earlier build that this one no longer has, then the checksums, and LAST the tag
 #                moves to SHA and the page names it. A run that stops in between leaves the page
@@ -100,14 +101,20 @@ gh_retry() {
     done
 }
 
+# The rolling channels (rule GIT-08): the pre-release of that name, whose files are replaced by each build.
 case "$TAG" in
-    latest)
+    latest | nightly | stable)
         [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || fail "the rolling build needs sha, a full commit id (got '$SHA')"
+        case "$TAG" in
+            latest) LABEL="Rolling build" ;;
+            nightly) LABEL="Nightly build" ;;
+            stable) LABEL="Stable build" ;;
+        esac
         ;;
     v[0-9]*.[0-9]*.[0-9]*)
         [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.-]*$ ]] || fail "the tag $TAG is not vX.Y.Z"
         ;;
-    *) fail "tag must be latest or vX.Y.Z, got '$TAG'" ;;
+    *) fail "tag must be latest, nightly, stable or vX.Y.Z, got '$TAG'" ;;
 esac
 # The title of a release page (a rolling build names its commit itself).
 TITLE="${TITLE:-$TAG}"
@@ -209,40 +216,40 @@ notes() {
     fi
 }
 
-if [ "$TAG" = "latest" ]; then
-    if ! gh release view latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-        gh release create latest --repo "$GITHUB_REPOSITORY" --prerelease --latest=false --target "$SHA" \
-            --title "Rolling build (starting)" --notes "The first rolling build is being made."
+if [ -n "${LABEL:-}" ]; then
+    if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+        gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease --latest=false --target "$SHA" \
+            --title "$LABEL (starting)" --notes "The first build of this channel is being made."
     fi
     # No checksums for files that are about to change.
-    gh release delete-asset latest SHA256SUMS --repo "$GITHUB_REPOSITORY" --yes 2>/dev/null || true
-    (cd "$stage" && gh_retry gh release upload latest "${names[@]}" --repo "$GITHUB_REPOSITORY" --clobber)
+    gh release delete-asset "$TAG" SHA256SUMS --repo "$GITHUB_REPOSITORY" --yes 2>/dev/null || true
+    (cd "$stage" && gh_retry gh release upload "$TAG" "${names[@]}" --repo "$GITHUB_REPOSITORY" --clobber)
     # A file of an earlier build that this one no longer has (a renamed asset) would be offered
     # without a checksum: it goes. (The list first, so a failing `gh` stops here.)
-    present="$(gh_retry gh release view latest --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+    present="$(gh_retry gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
     while IFS= read -r old; do
         [ -n "$old" ] || continue
         [ "$old" = "SHA256SUMS" ] && continue
         if ! printf '%s\n' "${names[@]}" | grep -Fxq -- "$old"; then
             say "removing $old (not part of this build)"
-            gh release delete-asset latest "$old" --repo "$GITHUB_REPOSITORY" --yes
+            gh release delete-asset "$TAG" "$old" --repo "$GITHUB_REPOSITORY" --yes
         fi
     done <<< "$present"
     cp "$stage.sums" "$stage/SHA256SUMS"
-    (cd "$stage" && gh_retry gh release upload latest SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber)
+    (cd "$stage" && gh_retry gh release upload "$TAG" SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber)
 
     # The words of the page, last: only now does it name this commit. The downloads go by the name
     # of the release, not by the commit of its tag; when the tag cannot move (a token without the
     # right to point a ref past a change of .github/workflows), the page still names the commit.
-    if ! gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/latest" -f sha="$SHA" -F force=true >/dev/null; then
-        printf '::warning::release-kit publish: the tag latest could not be moved to %s; the files and the page are of this commit\n' "$SHA" >&2
+    if ! gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" -f sha="$SHA" -F force=true >/dev/null; then
+        printf '::warning::release-kit publish: the tag %s could not be moved to %s; the files and the page are of this commit\n' "$TAG" "$SHA" >&2
     fi
     {
         notes
         printf '\nBuilt from commit %s%s%s.\n' '`' "$SHA" '`'
     } > "$stage.notes"
-    gh_retry gh release edit latest --repo "$GITHUB_REPOSITORY" --prerelease --latest=false \
-        --title "Rolling build (${SHA:0:7})" --notes-file "$stage.notes"
+    gh_retry gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease --latest=false \
+        --title "$LABEL (${SHA:0:7})" --notes-file "$stage.notes"
 else
     if draft="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null)"; then
         [ "$draft" = "true" ] || fail "the release $TAG is published: it is never cut again (NREL-10), make a patch release"

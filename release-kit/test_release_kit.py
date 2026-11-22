@@ -293,6 +293,14 @@ class StampTest(unittest.TestCase):
         self.assertEqual(len(changed), 7, changed)
         self.assertEqual(len(source.splitlines()), len(out.splitlines()))
 
+    def test_a_rolling_channel_needs_the_rolling_asset(self) -> None:
+        for channel in ("latest", "nightly", "stable"):
+            with self.subTest(channel=channel):
+                out = stamp.stamp(PS1.read_text(encoding="utf-8"), ".ps1", values(channel=channel, release_asset=""))
+                self.assertIn(f"$StampChannel = '{channel}'", out)
+                with self.assertRaises(stamp.StampError):
+                    stamp.stamp(PS1.read_text(encoding="utf-8"), ".ps1", values(channel=channel, rolling_asset=""))
+
     def test_sh_gets_every_value(self) -> None:
         out = stamp.stamp(SH.read_text(encoding="utf-8"), ".sh", values(kind="appimage", program="demo"))
         self.assertIn('STAMP_REPO="Owner/app-repo"', out)
@@ -568,6 +576,17 @@ class InstallShTest(unittest.TestCase):
         res = self.download(self.stamped(rolling_asset="demo-hub-linux-x86_64.tar.gz"))
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(self.urls()[0], "https://github.com/Owner/app-repo/releases/download/latest/demo-hub-linux-x86_64.tar.gz")
+
+    def test_the_stamped_nightly_and_stable_copies_download_their_own_channel(self) -> None:
+        self.fixtures("demo-hub-linux-x86_64.tar.gz")
+        for channel in ("nightly", "stable"):
+            with self.subTest(channel=channel):
+                res = self.download(self.stamped(channel=channel, rolling_asset="demo-hub-linux-x86_64.tar.gz"))
+                self.assertEqual(res.returncode, 0, res.stderr)
+                self.assertIn(
+                    f"https://github.com/Owner/app-repo/releases/download/{channel}/demo-hub-linux-x86_64.tar.gz",
+                    self.urls(),
+                )
 
     def test_the_rolling_build_of_linux_is_not_installed_on_a_mac(self) -> None:
         self.fixtures("demo-hub-linux-x86_64.tar.gz")
@@ -1294,6 +1313,11 @@ class VersionJsonTest(unittest.TestCase):
              "commit": self.SHA, "date": self.DATE},
         )
 
+    def test_the_document_names_each_rolling_channel(self) -> None:
+        for channel in ("latest", "nightly", "stable"):
+            with self.subTest(channel=channel):
+                self.assertEqual(version_json.make("demo", channel, "1.2.3", self.SHA, self.DATE)["channel"], channel)
+
     def test_a_rolling_build_not_told_its_version_says_null(self) -> None:
         doc = version_json.make("demo", "latest", "", self.SHA, self.DATE)
         self.assertIsNone(doc["version"])
@@ -1492,6 +1516,30 @@ class PublishTest(unittest.TestCase):
         create = next(c for c in self.calls() if c.startswith("gh release create latest"))
         for flag in ("--prerelease", "--latest=false", "--target " + "a" * 40):
             self.assertIn(flag, create)
+
+    def test_nightly_and_stable_go_to_the_release_of_their_own_name(self) -> None:
+        for tag, label in (("nightly", "Nightly build"), ("stable", "Stable build")):
+            with self.subTest(tag=tag):
+                self.log.unlink(missing_ok=True)
+                res = self.publish(TAG=tag)
+                self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+                calls = self.calls()
+                self.assertTrue(any(c.startswith(f"gh release upload {tag} demo-hub") for c in calls), calls)
+                self.assertTrue(any(f"git/refs/tags/{tag}" in c for c in calls), calls)
+                edit = next(c for c in calls if c.startswith(f"gh release edit {tag}"))
+                self.assertIn(f"{label} (aaaaaaa)", edit)
+                self.assertFalse(any(" latest " in c for c in calls), "nothing of latest is touched")
+
+    def test_the_first_nightly_build_makes_its_pre_release(self) -> None:
+        res = self.publish(TAG="nightly", GH_NO_RELEASE="1")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        create = next(c for c in self.calls() if c.startswith("gh release create nightly"))
+        self.assertIn("--prerelease", create)
+
+    def test_a_tag_that_is_no_channel_is_refused(self) -> None:
+        res = self.publish(TAG="weekly")
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("latest, nightly, stable or vX.Y.Z", res.stderr)
 
     def test_a_tag_that_cannot_move_still_names_the_commit(self) -> None:
         res = self.publish(GH_FAIL_PATCH="1")

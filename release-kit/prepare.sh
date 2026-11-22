@@ -7,15 +7,18 @@
 # It is in a script of its own because the action runs it twice over: with `bash` on Linux runners and with Git
 # Bash by its full path on Windows runners (on a self-hosted Windows runner `shell: bash` is the WSL launcher).
 #
-# Environment: GH_TOKEN, BRANCH, GITHUB_REPOSITORY, GITHUB_OUTPUT, KIT (this folder); SHA (a full commit id built
+# Environment: GH_TOKEN, CHANNEL (latest, nightly or stable; default latest), CHANNELS (the channels the app has switched on; default latest), BRANCH, GITHUB_REPOSITORY, GITHUB_OUTPUT, KIT (this folder); SHA (a full commit id built
 # by hand, empty for the newest green one), CI_WORKFLOW (default ci.yml), PYTHON (default python3).
 set -eu
 
 : "${GH_TOKEN:?}" "${BRANCH:?}" "${GITHUB_REPOSITORY:?}" "${GITHUB_OUTPUT:?}" "${KIT:?}"
 SHA="${SHA:-}"
 PYTHON="${PYTHON:-python3}"
+CHANNEL="${CHANNEL:-latest}"
+CHANNELS="${CHANNELS:-latest}"
 
-picked="$("$PYTHON" "$KIT/pick_target.py" --repo "$GITHUB_REPOSITORY" --branch "$BRANCH"     --ci-workflow "${CI_WORKFLOW:-ci.yml}" --requested "$SHA")"
+picked="$("$PYTHON" "$KIT/pick_target.py" --repo "$GITHUB_REPOSITORY" --branch "$BRANCH" \
+    --ci-workflow "${CI_WORKFLOW:-ci.yml}" --channel "$CHANNEL" --channels "$CHANNELS" --requested "$SHA")"
 target="$(printf '%s
 ' "$picked" | sed -n 's/^target=//p')"
 reason="$(printf '%s
@@ -33,7 +36,7 @@ echo "::notice::building $short: $reason"
     echo "short=$short"
     echo "current=true"
 } >> "$GITHUB_OUTPUT"
-if ! gh release view latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-    gh release create latest --repo "$GITHUB_REPOSITORY" --prerelease --latest=false --target "$SHA" \
-        --title "Rolling build (starting)" --notes "The first rolling build is being made."
+if ! gh release view "$CHANNEL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+    gh release create "$CHANNEL" --repo "$GITHUB_REPOSITORY" --prerelease --latest=false --target "$SHA" \
+        --title "Rolling build (starting)" --notes "The first build of this channel is being made."
 fi

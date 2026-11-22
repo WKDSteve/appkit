@@ -101,6 +101,13 @@ while [ $# -gt 0 ]; do
 done
 # What is left are the arguments of the install step.
 
+# The channels of the rolling build (release-kit publish): one file name each, replaced by the next build.
+is_rolling() {
+    case "$1" in
+        latest | nightly | stable) return 0 ;;
+        *) return 1 ;;
+    esac
+}
 plain() {
     case "$1" in
         "" | *[!A-Za-z0-9._-]*) return 1 ;;
@@ -216,7 +223,7 @@ if [ -z "$FILE" ]; then
     fi
     # A tag is a plain word: it goes into a URL and a file name.
     plain "$CHANNEL" || fail "the version has a character that is not allowed: $CHANNEL"
-    if [ "$CHANNEL" = "latest" ]; then
+    if is_rolling "$CHANNEL"; then
         PATTERN="$ROLLING_ASSET"
     else
         PATTERN="$RELEASE_ASSET"
@@ -240,7 +247,7 @@ if [ -z "$FILE" ]; then
     fetch_release_file "$REPO" "$CHANNEL" "$NAME" "$WORK/$NAME" || fail "cannot download $BASE/$NAME (a private repository needs GH_TOKEN)"
     if ! fetch_release_file "$REPO" "$CHANNEL" "SHA256SUMS" "$WORK/SHA256SUMS"; then
         # It cannot be told from here whether a build is being published or the last one stopped half way.
-        [ "$CHANNEL" = "latest" ] && fail "SHA256SUMS of the rolling build is missing: either a build is being published right now (try again in a few minutes), or its last publish failed and the next green build of the app brings them back"
+        is_rolling "$CHANNEL" && fail "SHA256SUMS of the rolling build is missing: either a build is being published right now (try again in a few minutes), or its last publish failed and the next green build of the app brings them back"
         fail "cannot download $BASE/SHA256SUMS"
     fi
     FILE="$WORK/$NAME"
@@ -285,7 +292,7 @@ if [ -z "$ATTEST_SKIP" ] && ! command -v "$GH" >/dev/null 2>&1; then
 fi
 if [ -z "$ATTEST_SKIP" ]; then
     case "$CHANNEL" in
-        latest) WORKFLOW="rolling.yml" ;;
+        latest | nightly | stable) WORKFLOW="rolling.yml" ;;
         "") WORKFLOW="" ;;
         *) WORKFLOW="release.yml" ;;
     esac

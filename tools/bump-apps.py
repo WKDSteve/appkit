@@ -121,6 +121,11 @@ BY_HAND = [
      "the prepare step gets `sha: ${{ github.event.inputs.sha }}` (empty after a workflow_run) and the job `if` "
      "runs for a workflow_dispatch too (`github.event_name == 'workflow_dispatch' || (conclusion == 'success' && "
      "event == 'push')`); the model is release-kit/README.md"),
+    ("v0.75.0", ("full", "kit", "cargo"),
+     "rolling channels (rule GIT-08): the prepare step of rolling.yml gets the line `channels: latest` (the channels "
+     "the app has switched on; default latest), and the README of the app names them. nightly = add `on: push: "
+     "branches: [main]`, stable = add `on: schedule` (weekly) and a workflow_dispatch input; both then pass "
+     "`channel:` to prepare and `tag:` to publish (the model is release-kit/README.md, `More rolling channels`)"),
 ]
 
 

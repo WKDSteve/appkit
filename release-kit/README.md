@@ -17,7 +17,7 @@ The kit builds nothing: the build stays a job of each app (pnpm and cargo, Tauri
 MSYS2 and Inno Setup are too different). It takes over what is the same everywhere: deciding,
 uploading, checking, naming.
 
-## The two channels
+## The channels
 
 - **`latest`** is a pre-release that is never marked "Latest". After every green CI run on `main`,
   the build of the newest green commit of `main` (not of the tip: a red tip, or one still in CI, does not keep it
@@ -29,6 +29,24 @@ uploading, checking, naming.
 - **`vX.Y.Z`** is a release from a tag, left as a **draft** (NREL-07): a person installs it, opens it,
   and publishes it. A published release is never touched again (NREL-10). A draft that is there
   already (the tag was set again on a newer commit) gets the files and the notes of this run.
+
+### More rolling channels: `nightly` and `stable`
+
+Only where they are needed (rule GIT-08); the default of an app is `latest` alone. Both are pre-releases of their
+own name with the same fixed file names as `latest`, move only forward (each against the `version.json` of its own
+release), and carry their name in `version.json` (`"channel": "nightly"`) and in the stamped install scripts.
+
+- **`nightly`**: the tip of `main`, built at once, green or not. For an app whose newest state somebody wants to
+  see before the CI is through. Triggered by a `push` to `main`.
+- **`stable`**: the commit `latest` has had at the top for at least 14 days (`STABLE_DAYS` of `pick_target.py`, read
+  from the date in `version.json` of `latest`), if no CI run of `main` went red since and no issue labelled `bug`
+  was filed since. A weekly `schedule` runs the decision; a manual start with `sha` promotes a green commit by hand,
+  whatever its age. The bug check sees the GitHub issues of the repository only; bug tasks that live elsewhere do
+  not reach it.
+
+An app names the channels it has switched on in one line, the `channels` input of `prepare`
+(`channels: latest nightly stable`, default `latest`); a run for another channel builds nothing and says so.
+The decision of every channel is `pick_target.py` (tests: `test_pick_target.py`).
 
 The tag `latest` is moved with the token of the workflow. Should GitHub refuse that (a token may not
 point a ref past a change of `.github/workflows` without the `workflows` right), the run only warns:

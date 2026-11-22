@@ -7,7 +7,7 @@ The scripts in release-kit/scripts carry a block between the lines `release-kit:
 script to, so a script downloaded from a release knows its repository, its app and its channel
 (that release, or the rolling build `latest`) and runs without parameters.
 
-    stamp.py SOURCE OUT --repo OWNER/NAME --channel latest|vX.Y.Z --app NAME --kind KIND
+    stamp.py SOURCE OUT --repo OWNER/NAME --channel latest|nightly|stable|vX.Y.Z --app NAME --kind KIND
              --program NAME [--release-asset NAME] [--rolling-asset NAME]
 
 A value may hold letters, digits and `._-/{}` only: it ends up in a URL, a file name and a line of
@@ -41,9 +41,10 @@ FIELDS = {
     "rolling_asset": ("StampRollingAsset", "STAMP_ROLLING_ASSET"),
 }
 
+ROLLING = ("latest", "nightly", "stable")
 PLAIN = re.compile(r"^[A-Za-z0-9._{}/-]*$")
 REPO = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
-CHANNEL = re.compile(r"^(latest|v[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.-]*)$")
+CHANNEL = re.compile(r"^(latest|nightly|stable|v[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.-]*)$")
 WORD = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
@@ -59,7 +60,7 @@ def check(values: dict[str, str], suffix: str) -> None:
     if not REPO.fullmatch(values["repo"]):
         raise StampError("--repo must be OWNER/NAME")
     if not CHANNEL.fullmatch(values["channel"]):
-        raise StampError("--channel must be latest or vX.Y.Z")
+        raise StampError("--channel must be latest, nightly, stable or vX.Y.Z")
     if not WORD.fullmatch(values["app"]):
         raise StampError("--app must be a plain word")
     if values["kind"] not in KINDS[suffix]:
@@ -68,9 +69,9 @@ def check(values: dict[str, str], suffix: str) -> None:
     needs_program = values["kind"] in ("hub", "appimage")
     if (needs_program or values["program"]) and not WORD.fullmatch(values["program"]):
         raise StampError("--program must be a plain file name")
-    asset = values["rolling_asset"] if values["channel"] == "latest" else values["release_asset"]
+    asset = values["rolling_asset"] if values["channel"] in ROLLING else values["release_asset"]
     if asset == "":
-        which = "--rolling-asset" if values["channel"] == "latest" else "--release-asset"
+        which = "--rolling-asset" if values["channel"] in ROLLING else "--release-asset"
         raise StampError(f"{which} is needed for the channel {values['channel']}")
     for name in ("release_asset", "rolling_asset"):
         if "/" in values[name]:

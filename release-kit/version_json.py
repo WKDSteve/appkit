@@ -5,7 +5,7 @@ A hub that lists apps (hub-desktop) shows "update available" by comparing the ve
 app with the newest build. It reads this one small file, from the same place for every app
 (`releases/download/<channel>/version.json`), instead of the release API of each app.
 
-    version_json.py OUT --app NAME --channel latest|vX.Y.Z [--version V] [--commit SHA] [--date ISO]
+    version_json.py OUT --app NAME --channel latest|nightly|stable|vX.Y.Z [--version V] [--commit SHA] [--date ISO]
 
 The document (schema `release-kit-version/1`, a later minor version only adds keys):
 
@@ -30,7 +30,7 @@ from pathlib import Path
 SCHEMA = "release-kit-version/1"
 
 WORD = re.compile(r"^[A-Za-z0-9._-]+$")
-CHANNEL = re.compile(r"^(latest|v([0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.-]*))$")
+CHANNEL = re.compile(r"^(latest|nightly|stable|v([0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.-]*))$")
 VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.+-]*$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 DATE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
@@ -46,7 +46,7 @@ def make(app: str, channel: str, version: str = "", commit: str = "", date: str 
         raise VersionError("--app must be a plain word")
     tag = CHANNEL.fullmatch(channel)
     if not tag:
-        raise VersionError("--channel must be latest or vX.Y.Z")
+        raise VersionError("--channel must be latest, nightly, stable or vX.Y.Z")
     if version and not VERSION.fullmatch(version):
         raise VersionError(f"--version must be X.Y.Z, got {version!r}")
     if tag.group(2):

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import sys
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -83,6 +84,96 @@ class Pick(unittest.TestCase):
     def test_requested_commit_off_the_branch_is_refused(self):
         target, _ = pick_target.pick(BRANCH, {c(9)}, None, descendant, requested=c(9))
         self.assertIsNone(target)
+
+
+NOW = datetime(2026, 11, 22, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def ago(days: float) -> datetime:
+    return NOW - timedelta(days=days)
+
+
+class Nightly(unittest.TestCase):
+    def test_builds_the_tip_even_when_it_is_not_green(self):
+        target, _ = pick_target.pick_nightly(BRANCH, c(3), descendant)
+        self.assertEqual(target, c(5))
+
+    def test_builds_nothing_when_the_tip_is_built(self):
+        target, why = pick_target.pick_nightly(BRANCH, c(5), descendant)
+        self.assertIsNone(target)
+        self.assertIn("built already", why)
+
+    def test_only_moves_forward(self):
+        # nightly is at a commit the branch no longer descends from (the tip is behind it)
+        target, why = pick_target.pick_nightly(BRANCH, c(9), lambda old, new: False)
+        self.assertIsNone(target)
+        self.assertIn("only moves forward", why)
+
+    def test_first_build_needs_no_ancestry(self):
+        target, _ = pick_target.pick_nightly(BRANCH, None, descendant)
+        self.assertEqual(target, c(5))
+
+    def test_requested_commit_must_be_on_the_branch(self):
+        target, _ = pick_target.pick_nightly(BRANCH, c(1), descendant, requested=c(9))
+        self.assertIsNone(target)
+
+
+class Stable(unittest.TestCase):
+    def pick(self, latest, built=None, red=False, bug=False, requested=None, green=(c(5), c(4))):
+        return pick_target.pick_stable(BRANCH, green, latest, built, descendant, NOW, red, bug, requested)
+
+    def test_takes_latest_after_fourteen_days(self):
+        target, _ = self.pick((c(4), ago(14)), built=c(2))
+        self.assertEqual(target, c(4))
+
+    def test_waits_while_latest_is_younger(self):
+        target, why = self.pick((c(4), ago(13.9)), built=c(2))
+        self.assertIsNone(target)
+        self.assertIn("less than 14 days", why)
+
+    def test_a_red_ci_since_stops_it(self):
+        target, why = self.pick((c(4), ago(20)), built=c(2), red=True)
+        self.assertIsNone(target)
+        self.assertIn("turned red", why)
+
+    def test_a_bug_since_stops_it(self):
+        target, why = self.pick((c(4), ago(20)), built=c(2), bug=True)
+        self.assertIsNone(target)
+        self.assertIn("bug", why)
+
+    def test_nothing_new_when_stable_is_there(self):
+        target, why = self.pick((c(4), ago(20)), built=c(4))
+        self.assertIsNone(target)
+        self.assertIn("built already", why)
+
+    def test_only_moves_forward(self):
+        target, why = self.pick((c(2), ago(20)), built=c(4))
+        self.assertIsNone(target)
+        self.assertIn("only moves forward", why)
+
+    def test_no_latest_builds_nothing(self):
+        target, _ = self.pick(None)
+        self.assertIsNone(target)
+
+    def test_by_hand_skips_the_age_and_the_checks(self):
+        target, _ = self.pick((c(4), ago(1)), built=c(2), red=True, bug=True, requested=c(4))
+        self.assertEqual(target, c(4))
+
+    def test_by_hand_needs_a_green_commit(self):
+        target, why = self.pick((c(4), ago(20)), built=c(2), requested=c(3))
+        self.assertIsNone(target)
+        self.assertIn("no green CI run", why)
+
+    def test_by_hand_only_moves_forward(self):
+        target, _ = self.pick((c(4), ago(20)), built=c(4), requested=c(5), green=(c(5), c(2)))
+        self.assertEqual(target, c(5))
+        target, _ = self.pick((c(4), ago(20)), built=c(4), requested=c(2), green=(c(5), c(2)))
+        self.assertIsNone(target)
+
+
+class Channels(unittest.TestCase):
+    def test_the_three_channels_are_named_once(self):
+        self.assertEqual(pick_target.CHANNELS, ("latest", "nightly", "stable"))
 
 
 if __name__ == "__main__":
