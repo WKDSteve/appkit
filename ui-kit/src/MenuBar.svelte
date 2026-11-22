@@ -51,8 +51,9 @@
     /** The id of a menu that is open from the start (a page that renders the list at once, a test). */
     initialOpen?: string | null;
     /**
-     * Words of the bar. `submenuCurrent`: the name of a submenu item whose list has a checked radio item, with the
-     * holes `{label}` and `{current}` (default `{label}, {current}`; German for instance `{label}, aktuell: {current}`).
+     * Words of the bar. `submenuCurrent`: the name of a submenu item whose list has a checked radio item, and of a
+     * menu's title in the bar that has a `current`, with the holes `{label}` and `{current}` (default
+     * `{label}, {current}`; German for instance `{label}, aktuell: {current}`).
      */
     labels?: { submenuCurrent?: string };
   } = $props();
@@ -675,13 +676,15 @@
         aria-haspopup="menu"
         aria-keyshortcuts={menu.mnemonic ? `Alt+${menu.mnemonic.toLocaleUpperCase()}` : undefined}
         aria-expanded={openId === menu.id}
+        aria-label={menu.current ? fill(currentText, { label: menu.label, current: menu.current }) : undefined}
         onclick={() => (openId === menu.id ? close(false) : void open(menu.id, null))}
         onkeydown={(e) => onTriggerKey(e, menu.id)}
         onpointermove={(e) => {
           // A move of the pointer, not its enter: a scroll or a shift of the layout under a resting pointer brings
           // another title under it without a move, and must not switch the menu one is choosing in.
           if (e.pointerType !== 'touch' && openId !== null && openId !== menu.id) void open(menu.id, null);
-        }}>{@render triggerText(menu)}</button
+        }}
+        >{#if menu.current}<span class="mb-current" aria-hidden="true">●</span>{/if}{@render triggerText(menu)}</button
       >
       {#if openId === menu.id}
         <div
@@ -712,6 +715,13 @@
   .mb-trigger u {
     text-decoration: underline;
     text-underline-offset: 0.15em;
+  }
+  /* The dot of a menu whose part of the page is shown (`current`), in the colour of the dot of a radio item. */
+  .mb-current {
+    color: var(--accent);
+    margin-inline-end: 0.3em;
+    font-size: 0.75em;
+    vertical-align: 0.1em;
   }
   .mb-menu {
     position: relative;

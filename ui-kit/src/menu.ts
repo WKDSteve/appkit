@@ -175,6 +175,13 @@ export interface Menu {
    * were drawn the first time; what the hook changes then is drawn at once.
    */
   onopen?: () => void;
+  /**
+   * What this menu shows now, when it stands for a part of the page (a tab of views, one of which is shown): its
+   * title in the bar then carries the dot, and its name says which (`labels.submenuCurrent` of the menu bar, the
+   * same words as for a submenu). Null or absent: no dot. The app names it; the bar does not guess it from a checked
+   * radio item, since a menu may hold radio items of another kind (a theme).
+   */
+  current?: string | null;
   items: MenuItem[];
 }
 

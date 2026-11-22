@@ -114,7 +114,10 @@ a click opens it at once. It opens beside the menu on the right, on the left whe
 narrower than 410 px it folds open inside the menu instead (indented, `▾`). Its items are items like any other (`href`,
 `onopennew`, `hint`, `shortcut`). When one of its `radio` items is checked, the item shows the dot and its name says
 which: `labels.submenuCurrent` of the bar, with the holes `{label}` and `{current}` (default `{label}, {current}`; for
-German `{label}, aktuell: {current}`). A submenu without an item that can be chosen is disabled. The context menu opens
+German `{label}, aktuell: {current}`). A menu of the bar that stands for a part of the page (a tab of views) may
+carry `current`, the name of what it shows now: its title then shows the dot too and is named with the same words
+(`Lernpläne, aktuell: Lernpfade`); the popup keeps the plain name. The app sets it; a checked radio item alone (a
+theme) is no current part. A submenu without an item that can be chosen is disabled. The context menu opens
 no submenu: it shows one flat (`flatItems`). `MenuItem` has a member more (`submenu`), so an exhaustive `switch` over
 `kind` needs a case for it. `node ui-kit/browser/menubar.browser.cjs` builds an example page and checks it in Chromium,
 light and dark, with and without the Popover API: beside, on the left, the pointer's way, folded, and axe (needs
