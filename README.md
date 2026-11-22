@@ -193,6 +193,11 @@ starter in the family folder's `bin`, which goes on the `PATH` of the user once 
 [docs/FAMILY.md](docs/FAMILY.md#the-command-in-the-terminal-the-starters-in-familybin)); `uninstall`
 takes it away, and the folder and its `PATH` entry with the last starter.
 
+The commands every hub app shares come from `cli`: `parse` reads them (`start [--open]`, `stop`/`quit`,
+`restart`, `status [--json]`, `open`, `link`, `logs [-f] [-n N]`, `paths`, `version`, `help [<command>]`)
+and leaves the app's own words to it; `status`, `logs` and `paths` are done there, `usage_lines` and `help`
+give the texts. Exit codes: 0 done, 1 failed (`status`: not running), 2 wrong arguments.
+
 ## Ports
 
 The default ports of the apps that run side by side are listed in
