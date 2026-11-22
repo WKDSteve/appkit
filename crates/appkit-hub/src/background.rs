@@ -24,6 +24,7 @@ use appkit_core::child::{self, Environment, Leftovers, Run, Start, Stream};
 use appkit_core::family;
 use appkit_core::identity::AppIdentity;
 
+use crate::cli_entry;
 use crate::env::Env;
 use crate::instance;
 use crate::loginitems::{self, LoginApp};
@@ -1294,12 +1295,54 @@ async fn install_steps_beside(
             out.push_str(&undo_entry_on_failure(made, entry_made, entry)?);
         }
     }
+    let command = command_step(app, &env, &target, out);
     out.push_str(&how_to_start(
         app,
         &target,
         env.get("PATH").map(OsString::as_os_str),
+        command.then_some(app.identity().app),
     ));
     Ok(())
+}
+
+/// Where the command of the app (`cli_entry`) is made and removed, and through which `PATH` of the user: `None` when
+/// the tests of the program ask for no changes to the machine (`NO_LOGIN_SYNC`) and name no family folder of their own
+/// (`APPKIT_FAMILY_DIR`); with one, the starter goes there and the `PATH` of the user is left alone. Elsewhere than on
+/// Windows the `PATH` is never changed (`~/.local/bin` is on it already).
+fn command_path(
+    app: &Background<'_>,
+    env: &Env,
+) -> Option<Option<&'static dyn cli_entry::UserPath>> {
+    let tests = env.get(&no_login_sync(app)).is_some();
+    if tests && env.get(family::FAMILY_DIR_VAR).is_none() {
+        return None;
+    }
+    if tests || !cfg!(windows) {
+        return Some(None);
+    }
+    Some(Some(&cli_entry::SystemPath))
+}
+
+/// The step of `install` that makes `<app>` a command in the terminal (`cli_entry`). The install is done when it
+/// fails: the failure is said (on stderr too, so it is not lost in the lines), the program works with its whole path.
+/// Returns whether the command is there.
+fn command_step(app: &Background<'_>, env: &Env, target: &Path, out: &mut String) -> bool {
+    let Some(path) = command_path(app, env) else {
+        return false;
+    };
+    let command = app.identity().app;
+    match cli_entry::install(command, target, env, path) {
+        Ok(text) => {
+            out.push_str(&text);
+            true
+        }
+        Err(e) => {
+            let line = format!("no command `{command}` in the terminal: {e}\n");
+            eprint!("{line}");
+            out.push_str(&line);
+            false
+        }
+    }
 }
 
 /// The login entry of `install`: made when asked for, pointed at the installed copy when it was on for another
@@ -1374,11 +1417,22 @@ fn entry_and_links(
     Ok(out)
 }
 
-/// The last lines of `install`: the whole call that starts the installed program, and whether its folder is on
-/// `PATH`. Install does not put it there: a program of the user is not added to the path of every shell behind
-/// their back. Windows compares the folders without case and without a trailing separator.
+/// The last lines of `install`: the command of the app when `install` made one (`command`, see [`cli_entry`]), and
+/// the whole call that starts the installed program. Without a command, whether the folder of the program is on
+/// `PATH`; Windows compares the folders without case and without a trailing separator.
 #[must_use]
-pub fn how_to_start(app: &Background<'_>, target: &Path, path_var: Option<&OsStr>) -> String {
+pub fn how_to_start(
+    app: &Background<'_>,
+    target: &Path,
+    path_var: Option<&OsStr>,
+    command: Option<&str>,
+) -> String {
+    if let Some(command) = command {
+        return format!(
+            "start it: `{command}` (or \"{}\" start --open); `{command} --help` lists the commands\n",
+            target.display()
+        );
+    }
     let dir = target.parent().unwrap_or(target);
     let same = |p: &Path| {
         if cfg!(windows) {
@@ -1615,6 +1669,12 @@ async fn uninstall_steps(app: &Background<'_>, opts: UninstallOptions) -> Result
     } else {
         step(autostart(app, Autostart::Off), &mut out);
         step(remove_shortcut(app, &env), &mut out);
+    }
+    if let Some(path) = command_path(app, &env) {
+        step(
+            cli_entry::uninstall(app.identity().app, &env, path),
+            &mut out,
+        );
     }
     unregister_from_family(app, &env);
     uninstall_closing(
@@ -2037,6 +2097,42 @@ mod tests {
         assert!(family::family_apps(&vars, &[])[0].installed);
         unregister_from_family(&APP, &env);
         assert!(family::family_apps(&vars, &[]).is_empty());
+    }
+
+    /// The command of the app: the tests of a program (`NO_LOGIN_SYNC`) never touch the starter folder or the `PATH`
+    /// of the machine; with a family folder of their own they get the starter there, still without the `PATH`.
+    #[test]
+    fn the_command_step_leaves_the_machine_to_the_person() {
+        let root = Scratch::new("hub-command-step");
+        let program = root.join("rules-hub.exe");
+        let machine = Env::from_pairs([
+            ("RULES_DESKTOP_NO_LOGIN_SYNC", root.join("1")),
+            ("LOCALAPPDATA", root.join("local")),
+        ]);
+        assert!(command_path(&APP, &machine).is_none());
+        let mut out = String::new();
+        assert!(!command_step(&APP, &machine, &program, &mut out));
+        assert_eq!(out, "");
+        assert!(!root.join("local").exists());
+
+        let own = Env::from_pairs([
+            ("RULES_DESKTOP_NO_LOGIN_SYNC", root.join("1")),
+            (family::FAMILY_DIR_VAR, root.join("family")),
+            ("LOCALAPPDATA", root.join("local")),
+        ]);
+        assert!(matches!(command_path(&APP, &own), Some(None)));
+        assert!(command_step(&APP, &own, &program, &mut out));
+        assert!(out.contains("command: `rules-desktop`"), "{out}");
+        let dir = root.join("family").join("bin");
+        assert!(cli_entry::starter_files(&dir, "rules-desktop")
+            .iter()
+            .all(|f| f.is_file()));
+
+        let person = Env::from_pairs([("LOCALAPPDATA", root.join("local"))]);
+        assert_eq!(
+            command_path(&APP, &person).map(|p| p.is_some()),
+            Some(cfg!(windows))
+        );
     }
 
     #[test]
@@ -3535,7 +3631,15 @@ ERROR: Access is denied.
         let dir = root.join("bin");
         let target = dir.join(IDENTITY.program_file());
         let elsewhere = std::env::join_paths([root.join("elsewhere")]).unwrap();
-        let off = how_to_start(&APP, &target, Some(&elsewhere));
+        // With the command of the app made, that is what it is started by.
+        let named = how_to_start(&APP, &target, Some(&elsewhere), Some("rules-desktop"));
+        assert!(
+            named.starts_with("start it: `rules-desktop` (or \""),
+            "{named}"
+        );
+        assert!(named.contains("`rules-desktop --help`"), "{named}");
+        assert!(!named.contains("PATH"), "{named}");
+        let off = how_to_start(&APP, &target, Some(&elsewhere), None);
         assert!(
             off.starts_with(&format!(
                 "start it: \"{}\" start --open\n",
@@ -3551,16 +3655,16 @@ ERROR: Access is denied.
             cfg!(windows),
             "{off}"
         );
-        let none = how_to_start(&APP, &target, None);
+        let none = how_to_start(&APP, &target, None, None);
         assert!(none.contains("not on PATH"), "{none}");
         let with = std::env::join_paths([root.join("elsewhere"), dir.clone()]).unwrap();
-        let on = how_to_start(&APP, &target, Some(&with));
+        let on = how_to_start(&APP, &target, Some(&with), None);
         assert!(on.contains("is on PATH: `rules-hub start --open`"), "{on}");
         assert!(!on.contains("not on PATH"), "{on}");
         if cfg!(windows) {
             // Windows does not tell the case of a folder apart, nor a trailing separator.
             let upper = OsString::from(format!("{}\\", dir.display().to_string().to_uppercase()));
-            assert!(how_to_start(&APP, &target, Some(&upper)).contains("is on PATH"));
+            assert!(how_to_start(&APP, &target, Some(&upper), None).contains("is on PATH"));
         }
     }
 }

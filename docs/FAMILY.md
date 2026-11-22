@@ -44,6 +44,32 @@ Who writes it: `appkit-hub`'s `install` command (every hub app: tasks-, rules-, 
 hub-desktop) and its `uninstall`; the Inno setup of ai-desktop. The tests of a hub program
 (`<PREFIX>_NO_LOGIN_SYNC`) leave the folder of the machine alone unless they set `APPKIT_FAMILY_DIR`.
 
+## The command in the terminal: the starters in `<family>/bin`
+
+Every install makes the app a command named after the app, in any new terminal: `tasks-desktop status`,
+`hub-desktop`, not the whole path of `tasks-hub.exe`. `appkit_hub::cli_entry` does it for the hub apps
+(`install` and `uninstall`); an installer of its own (NSIS, Inno) writes the same files.
+
+| System | Folder | Files per app | On `PATH` |
+|---|---|---|---|
+| Windows | `<family>\bin` (`%LOCALAPPDATA%\appkit-family\bin`) | `<app>.cmd` (PowerShell, cmd) and `<app>` (a shell script for Git Bash) | the `PATH` of the user (`HKCU\Environment`), added once, as `%LOCALAPPDATA%\appkit-family\bin` in an expandable value |
+| Linux, macOS | `~/.local/bin` (`<family>/bin` when `APPKIT_FAMILY_DIR` is set) | `<app>`, executable | not changed; `install` says when the folder is missing on it |
+
+- A starter starts the program with all arguments and hands its exit code back; a program that is gone
+  ends it with exit code 3 and a line on stderr. It carries the words `appkit starter`: a file of that
+  name without them is never overwritten or removed.
+- The `.cmd` names a program below `LOCALAPPDATA` as `%LOCALAPPDATA%\...`; another path must be plain
+  ASCII, since cmd reads the file in the code page of the console.
+- A starter, not a copy of the program: the hubs are window programs, and PowerShell does not wait for a
+  window program (its output would come after the prompt, `$LASTEXITCODE` would be wrong); cmd waits for
+  the program a `.cmd` starts.
+- `uninstall` removes the starters of its app; the last one takes the folder and its `PATH` entry with it.
+- The `PATH` of the user keeps the type of its value (`REG_EXPAND_SZ` stays expandable, so its `%VAR%`
+  keep working); after a change the session is told (`WM_SETTINGCHANGE`), so new terminals see it. A
+  terminal that is open already does not: `install` names the line that adds the folder there.
+- The tests of a hub program (`<PREFIX>_NO_LOGIN_SYNC`) make no starter unless they set
+  `APPKIT_FAMILY_DIR`, and then never touch the `PATH` of the user.
+
 ## Running: `hub.json` in the config folder
 
 The config folder of an app is `<PREFIX>_CONFIG_DIR`, else `%APPDATA%\<app>` (Windows),

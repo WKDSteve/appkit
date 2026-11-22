@@ -188,6 +188,11 @@ side is what the other side shows. The tests pass a fake `LoginEntries` and thei
 `install --autostart` takes its login entry back when a later step fails, and `uninstall` also
 removes the `start-hub.vbs` an old version left in the config folder.
 
+`install` also makes the app a command named after it (`tasks-desktop status` in any new terminal): a
+starter in the family folder's `bin`, which goes on the `PATH` of the user once (`cli_entry`, see
+[docs/FAMILY.md](docs/FAMILY.md#the-command-in-the-terminal-the-starters-in-familybin)); `uninstall`
+takes it away, and the folder and its `PATH` entry with the last starter.
+
 ## Ports
 
 The default ports of the apps that run side by side are listed in

@@ -49,6 +49,7 @@ pub mod access;
 pub mod background;
 mod blocking;
 pub mod browser;
+pub mod cli_entry;
 pub mod client;
 pub mod config;
 pub mod devices;

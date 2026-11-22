@@ -10,8 +10,8 @@
 use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, ERROR_SUCCESS};
 use windows_sys::Win32::System::Registry::{
     RegCloseKey, RegDeleteKeyValueW, RegGetValueW, RegOpenKeyExW, RegSetKeyValueW, HKEY,
-    HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, REG_SZ, RRF_NOEXPAND, RRF_RT_REG_EXPAND_SZ,
-    RRF_RT_REG_SZ,
+    HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, REG_EXPAND_SZ, REG_SZ, RRF_NOEXPAND,
+    RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ,
 };
 
 /// The largest value that is read: a path, or a command line.
@@ -61,10 +61,21 @@ pub fn key_exists(key: &str) -> Result<bool, String> {
 ///
 /// The key is not one of the user or the machine.
 pub fn get(key: &str, value: &str) -> Result<Option<String>, String> {
+    Ok(get_typed(key, value)?.map(|(text, _)| text))
+}
+
+/// Like [`get`], and whether the value is an expandable string (`REG_EXPAND_SZ`, which holds `%VAR%` that the system
+/// expands when it reads it) rather than a plain one.
+///
+/// # Errors
+///
+/// The key is not one of the user or the machine.
+pub fn get_typed(key: &str, value: &str) -> Result<Option<(String, bool)>, String> {
     let (root, sub) = split(key)?;
     let name = wide(value);
     let flags = RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND;
     let mut bytes = 0u32;
+    let mut kind = 0u32;
     // SAFETY: a call without a buffer only asks for the size.
     let code = unsafe {
         RegGetValueW(
@@ -83,14 +94,14 @@ pub fn get(key: &str, value: &str) -> Result<Option<String>, String> {
     let mut buf = vec![0u16; (bytes as usize).div_ceil(2) + 1];
     let mut size =
         u32::try_from(buf.len() * 2).map_err(|_| "a value that is too large".to_owned())?;
-    // SAFETY: `buf` holds `size` bytes.
+    // SAFETY: `buf` holds `size` bytes; `kind` receives the type of the value.
     let code = unsafe {
         RegGetValueW(
             root,
             sub.as_ptr(),
             name.as_ptr(),
             flags,
-            std::ptr::null_mut(),
+            &mut kind,
             buf.as_mut_ptr().cast(),
             &mut size,
         )
@@ -101,7 +112,10 @@ pub fn get(key: &str, value: &str) -> Result<Option<String>, String> {
     let units = (size as usize / 2).min(buf.len());
     let text = &buf[..units];
     let end = text.iter().position(|&u| u == 0).unwrap_or(text.len());
-    Ok(Some(String::from_utf16_lossy(&text[..end])))
+    Ok(Some((
+        String::from_utf16_lossy(&text[..end]),
+        kind == REG_EXPAND_SZ,
+    )))
 }
 
 /// Write the string `value` of `key` (the key is made when it is not there).
@@ -110,18 +124,29 @@ pub fn get(key: &str, value: &str) -> Result<Option<String>, String> {
 ///
 /// What the system said.
 pub fn set(key: &str, value: &str, data: &str) -> Result<(), String> {
+    set_typed(key, value, data, false)
+}
+
+/// Write the string `value` of `key`, as an expandable string (`REG_EXPAND_SZ`) when `expand` is set: a value that
+/// holds `%VAR%` and was expandable must stay so, or every `%VAR%` in it stops working.
+///
+/// # Errors
+///
+/// What the system said.
+pub fn set_typed(key: &str, value: &str, data: &str, expand: bool) -> Result<(), String> {
     let (root, sub) = split(key)?;
     let name = wide(value);
     let text = wide(data);
     let bytes =
         u32::try_from(text.len() * 2).map_err(|_| "a value that is too large".to_owned())?;
+    let kind = if expand { REG_EXPAND_SZ } else { REG_SZ };
     // SAFETY: all strings end with a NUL; `text` holds `bytes` bytes.
     let code = unsafe {
         RegSetKeyValueW(
             root,
             sub.as_ptr(),
             name.as_ptr(),
-            REG_SZ,
+            kind,
             text.as_ptr().cast(),
             bytes,
         )
@@ -130,6 +155,29 @@ pub fn set(key: &str, value: &str, data: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(os_error(code))
+    }
+}
+
+/// Tell the programs of the session that the environment of the user changed (`WM_SETTINGCHANGE` with
+/// `"Environment"`), as every installer does after it changed `PATH`: Explorer then gives the new value to the
+/// terminals it starts from now on. A window that does not answer within a second is not waited for.
+pub fn announce_environment() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE,
+    };
+    let area = wide("Environment");
+    let mut result = 0usize;
+    // SAFETY: `area` ends with a NUL and lives until the call returns; the call only reads it.
+    unsafe {
+        SendMessageTimeoutW(
+            HWND_BROADCAST,
+            WM_SETTINGCHANGE,
+            0,
+            area.as_ptr() as isize,
+            SMTO_ABORTIFHUNG,
+            1000,
+            &mut result,
+        );
     }
 }
 
