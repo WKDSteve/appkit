@@ -46,3 +46,4 @@ Commits: `type(scope): what changed` (scopes such as `hub`, `ui-kit`, `web-kit`,
   CI runs it as an informative step in the `ui-kit` and `web-kit` jobs. Raise its version on purpose.
 - `.claude/settings.json` sets `DISABLE_TELEMETRY=1` and allows only `npx -y modern-web-guidance@latest *`.
 - Rules: the maintainer's ruleset for the web platform (private, so not named or cited here by id).
+- Git: in a cloud session (`CLAUDE_CODE_REMOTE` is set) never push to `main`, only to your own `claude/…` branch; a local session lands it by rebase and the device key re-signs it (`GIT-09`). "Push to main" (`GIT-01`) applies locally only.
