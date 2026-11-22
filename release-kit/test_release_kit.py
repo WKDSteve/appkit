@@ -1191,6 +1191,16 @@ class InstallPs1Test(unittest.TestCase):
             self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
             self.assertIn("/download/latest/demo-x86_64-pc-windows-msvc-setup.cmd", self.urls()[0])
 
+    def test_the_stamped_nightly_and_stable_copies_download_their_own_channel(self) -> None:
+        self.fixtures("demo-setup.cmd")
+        for channel in ("nightly", "stable"):
+            script = self.stamped(channel=channel, kind="nsis", program="", rolling_asset="demo-setup.cmd")
+            for shell in self.each_shell():
+                with self.subTest(channel=channel, shell=shell):
+                    res = self.download(shell, script)
+                    self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+                    self.assertEqual(self.urls()[0], f"https://github.com/Owner/app-repo/releases/download/{channel}/demo-setup.cmd")
+
     def test_no_release_at_all_takes_the_rolling_build(self) -> None:
         self.fixtures("demo-setup.cmd")
         args = "-Repo Owner/app-repo -Kind nsis -RollingAsset demo-setup.cmd"
