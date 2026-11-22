@@ -449,6 +449,73 @@ class WorktreeTest(unittest.TestCase):
         self.assertEqual(self.git(app, "branch", "--list", "bump/*").strip(), "")
         self.assertEqual(self.worktrees(app), 1)
 
+    def behind(self, name: str) -> tuple[Path, str]:
+        """A clone of `name` whose main is one commit behind its origin; returns the clone and origin's tip."""
+        app = self.repo(name, full=False)
+        origin = self.tmp / f"{name}.git"
+        self.git(self.tmp, "clone", "-q", "--bare", str(app), str(origin))
+        self.git(app, "remote", "add", "origin", str(origin))
+        self.git(app, "fetch", "-q", "origin")
+        self.git(app, "branch", "-q", f"--set-upstream-to=origin/{self.branch(app)}")
+        other = self.tmp / f"{name}-other"
+        self.git(self.tmp, "clone", "-q", str(origin), str(other))
+        (other / "README.md").write_text("pushed by another machine\n", encoding="utf-8")
+        self.git(other, "add", "README.md")
+        self.git(other, "commit", "-q", "-m", "elsewhere")
+        self.git(other, "push", "-q", "origin", "HEAD")
+        return app, self.git(other, "rev-parse", "HEAD").strip()
+
+    def branch(self, app: Path) -> str:
+        return self.git(app, "symbolic-ref", "--short", "HEAD").strip()
+
+    def test_a_clean_clone_behind_its_upstream_is_fast_forwarded_before_the_bump(self) -> None:
+        app, tip = self.behind("ai-desktop")
+        with mock.patch.object(bump, "run"):
+            self.assertTrue(bump.bump_app("ai-desktop", self.tmp, "v0.23.2", NEW_SHA, self.args))
+        self.assertEqual(self.git(app, "rev-parse", "HEAD~1").strip(), tip, "the bump sits on origin's tip")
+        self.assertIn(NEW_SHA, (app / "tools" / "release-kit.pin").read_text())
+        self.assertEqual(self.git(app, "branch", "--list", "bump/*").strip(), "")
+        self.assertEqual(self.worktrees(app), 1)
+
+    def test_a_dirty_clone_behind_its_upstream_keeps_its_branch_and_gets_the_bump_on_origin(self) -> None:
+        app, tip = self.behind("ai-desktop")
+        old = self.git(app, "rev-parse", "HEAD").strip()
+        (app / "notes.txt").write_text("someone else's\n", encoding="utf-8")
+        with mock.patch.object(bump, "run"):
+            self.assertFalse(bump.bump_app("ai-desktop", self.tmp, "v0.23.2", NEW_SHA, self.args))
+        self.assertEqual(self.git(app, "rev-parse", "HEAD").strip(), old, "the clone's branch did not move")
+        self.assertEqual(self.git(app, "rev-parse", "bump/appkit-v0.23.2~1").strip(), tip,
+                         "the bump is built on origin's tip, not on the old local main")
+        self.assertTrue((app / "notes.txt").exists())
+        self.assertEqual(self.worktrees(app), 1)
+
+    def test_a_clone_diverged_from_its_upstream_gets_the_bump_on_origin(self) -> None:
+        app, tip = self.behind("ai-desktop")
+        (app / "local.txt").write_text("not pushed\n", encoding="utf-8")
+        self.git(app, "add", "local.txt")
+        self.git(app, "commit", "-q", "-m", "local only")
+        mine = self.git(app, "rev-parse", "HEAD").strip()
+        with mock.patch.object(bump, "run"):
+            self.assertFalse(bump.bump_app("ai-desktop", self.tmp, "v0.23.2", NEW_SHA, self.args))
+        self.assertEqual(self.git(app, "rev-parse", "HEAD").strip(), mine)
+        self.assertEqual(self.git(app, "rev-parse", "bump/appkit-v0.23.2~1").strip(), tip)
+        self.assertEqual(self.worktrees(app), 1)
+
+    def test_a_clone_ahead_of_its_upstream_bumps_on_its_head(self) -> None:
+        app = self.repo("ai-desktop", full=False)
+        origin = self.tmp / "ai-desktop.git"
+        self.git(self.tmp, "clone", "-q", "--bare", str(app), str(origin))
+        self.git(app, "remote", "add", "origin", str(origin))
+        self.git(app, "fetch", "-q", "origin")
+        self.git(app, "branch", "-q", f"--set-upstream-to=origin/{self.branch(app)}")
+        (app / "local.txt").write_text("not pushed\n", encoding="utf-8")
+        self.git(app, "add", "local.txt")
+        self.git(app, "commit", "-q", "-m", "local only")
+        mine = self.git(app, "rev-parse", "HEAD").strip()
+        with mock.patch.object(bump, "run"):
+            self.assertTrue(bump.bump_app("ai-desktop", self.tmp, "v0.23.2", NEW_SHA, self.args))
+        self.assertEqual(self.git(app, "rev-parse", "HEAD~1").strip(), mine)
+
     def test_a_failing_pin_check_commits_nothing_anywhere(self) -> None:
         app = self.repo("ai-desktop", full=False)
         with mock.patch.object(bump, "run", side_effect=RuntimeError("pins differ")):

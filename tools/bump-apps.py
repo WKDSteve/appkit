@@ -36,6 +36,9 @@ update` resolves the whole workspace, so a dependency added to a member's Cargo.
 in the bump's Cargo.lock; pnpm runs with --lockfile-only there). The commit is moved into the clone's branch as a
 fast-forward; when the clone's own uncommitted changes touch the same files, or its branch moved meanwhile, the commit
 stays on the branch bump/appkit-<tag> and the app counts as not done (merge it once that work is committed).
+A branch with an upstream is compared with it after a fetch: only behind and the clone clean, it is fast-forwarded
+first; behind with uncommitted changes, or diverged, the bump is built on the upstream's tip and stays on
+bump/appkit-<tag> (with the push that brings it onto the branch).
 
 A job whose step `release-kit/publish` attests (the default since v0.48) needs `id-token: write` and
 `attestations: write` in its permissions (or the workflow's, when the job has none): without them every rolling and
@@ -461,6 +464,44 @@ def check_nested_pins(app: Path, changes: dict[Path, str]) -> None:
                  str(Path(sub) / "Cargo.lock")], app)
 
 
+def choose_base(app: Path, branch: str, args: argparse.Namespace) -> tuple[str, str]:
+    """The commit a --worktree bump is built on, and the upstream's name when that is not the clone's branch.
+
+    Without an upstream the clone's HEAD. With one, it is fetched first: a branch level with it or only ahead keeps
+    HEAD; a branch that is only behind is fast-forwarded first when the clone is clean (not in a dry run) and then
+    keeps HEAD; a branch behind with uncommitted changes, or diverged, gives the upstream's tip, and the bump then
+    stays on its own branch (the clone's branch would not take it as a fast-forward)."""
+    head = git(app, "rev-parse", "HEAD").strip()
+    try:
+        upstream = git(app, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}").strip()
+    except RuntimeError:
+        return head, ""
+    remote = upstream.split("/", 1)[0]
+    try:
+        git(app, "fetch", "--quiet", remote)
+    except RuntimeError as err:
+        print(f"   note: could not fetch {remote} ({err}); comparing with the last known {upstream}")
+    tip = git(app, "rev-parse", upstream).strip()
+    if tip == head or is_ancestor(app, tip, head):
+        return head, ""
+    if is_ancestor(app, head, tip):
+        clean = git(app, "status", "--porcelain").strip() == ""
+        if clean and not args.dry_run:
+            git(app, "merge", "--ff-only", "--quiet", tip)
+            print(f"   {branch} was behind {upstream}: fast-forwarded to {tip[:12]} first")
+            return tip, ""
+        why = "uncommitted changes in the clone" if not clean else "a dry run"
+        print(f"   {branch} is behind {upstream} ({why}): the bump is built on {upstream} ({tip[:12]})")
+    else:
+        print(f"   {branch} and {upstream} have diverged: the bump is built on {upstream} ({tip[:12]})")
+    return tip, upstream
+
+
+def is_ancestor(repo: Path, older: str, newer: str) -> bool:
+    res = subprocess.run(["git", "-C", str(repo), "merge-base", "--is-ancestor", older, newer], capture_output=True)
+    return res.returncode == 0
+
+
 def bump_in_worktree(name: str, app: Path, mode: str, tag: str, sha: str, args: argparse.Namespace) -> bool:
     """The bump of one app in a throw-away worktree of its HEAD, committed there and moved into the clone's branch
     as a fast-forward (or left on bump/appkit-<tag>)."""
@@ -469,7 +510,7 @@ def bump_in_worktree(name: str, app: Path, mode: str, tag: str, sha: str, args: 
     except RuntimeError:
         print("   skipped: the clone is on no branch (a detached HEAD): nothing to move the bump to")
         return False
-    base = git(app, "rev-parse", "HEAD").strip()
+    base, upstream = choose_base(app, branch, args)
     holder = Path(tempfile.mkdtemp(prefix=f"bump-{name}-"))
     tree = holder / name
     try:
@@ -509,6 +550,15 @@ def bump_in_worktree(name: str, app: Path, mode: str, tag: str, sha: str, args: 
             "--", *files)
         commit = git(tree, "rev-parse", "HEAD").strip()
         print(f"   ok: pins agree on {tag}, committed as {commit[:12]} in the worktree")
+        if upstream:
+            # built on the upstream, not on the clone's branch (behind with own changes, or diverged): the clone's
+            # branch cannot take it as a fast-forward, so it waits on its own branch
+            keep = f"bump/appkit-{tag}"
+            git(app, "branch", "--force", keep, commit)
+            print(f"   NOT moved into {branch}: it is not on {upstream} (see above); the commit stays on {keep}, "
+                  f"built on {upstream}: git -C {app} push {upstream.split('/', 1)[0]} {keep}:{branch} after its "
+                  f"check, then git -C {app} pull --rebase once the clone's own work is committed")
+            return False
         try:
             # a fast-forward of the clone's branch; git refuses when the clone's own changes touch the same files
             git(app, "merge", "--ff-only", "--quiet", commit)

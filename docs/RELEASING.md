@@ -37,6 +37,11 @@ tag (`pnpm-lock.yaml` holds the commit of each kit), and its CI checks that the 
    slips into the lock files (`cargo update` resolves the whole workspace, and pnpm runs `--lockfile-only`
    there), and moves the commit into the clone's branch as a fast-forward. When their changes touch the same
    files, or the branch moved meanwhile, the commit waits on `bump/appkit-<tag>` and the app counts as not done.
+   A branch with an upstream is compared with it after a `fetch` first. If it is only behind and the clone
+   is clean, it is fast-forwarded before the bump. If it is behind with uncommitted changes, or has diverged,
+   the bump is built on the upstream's tip, not on the old local state, and waits on `bump/appkit-<tag>`.
+   The script names the way onto `main`: `git push origin bump/appkit-<tag>:main` once checked, then
+   `git pull --rebase` in the clone once its own work is committed.
 
    While working on appkit and an app at the same time, do not bump at all: use a `[patch]` in an
    uncommitted `.cargo/config.toml` of the app (README of appkit). Tag and bump when the change is done.
