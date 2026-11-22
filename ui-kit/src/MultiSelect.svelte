@@ -1,6 +1,7 @@
 <script lang="ts">
   // A choice of any number of values. The name of the choice is the label of
   // the button, never one of the options.
+  import { tick } from 'svelte';
   import { tooltip } from './tooltip';
 
   export interface Option {
@@ -130,13 +131,38 @@
     if (!(target instanceof HTMLInputElement || target instanceof HTMLButtonElement)) event.preventDefault();
   }
 
+  const boxes = (): HTMLInputElement[] =>
+    root ? [...root.querySelectorAll<HTMLInputElement>('.popup input[type="checkbox"]')] : [];
+
   function onKey(event: KeyboardEvent): void {
     if (event.key === 'Escape' && open) {
       // The page's own Escape (leave the selection) must not also fire, nor the dialog's own (it would close).
       event.stopPropagation();
       event.preventDefault();
       close(true);
+      return;
     }
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    const target = event.target;
+    // Down on the button opens the popup (or, open, goes into it) and lands on the first option.
+    if (event.key === 'ArrowDown' && target === button) {
+      event.preventDefault();
+      if (!open) openPopup();
+      void tick().then(() => boxes()[0]?.focus());
+      return;
+    }
+    // The arrows walk the options like the items of a list (a checkbox has no arrow key of its own). In the search
+    // field only Down leaves it: Home and End move its caret.
+    const inBox = target instanceof HTMLInputElement && target.type === 'checkbox';
+    const inSearch = target instanceof HTMLInputElement && target.type === 'search';
+    if (!open || !(inBox || (inSearch && event.key === 'ArrowDown'))) return;
+    const list = boxes();
+    const at = inBox ? list.indexOf(target) : -1;
+    const to =
+      event.key === 'ArrowDown' ? at + 1 : event.key === 'ArrowUp' ? at - 1 : event.key === 'Home' ? 0 : event.key === 'End' ? list.length - 1 : null;
+    if (to === null) return;
+    event.preventDefault();
+    list[Math.max(0, Math.min(to, list.length - 1))]?.focus();
   }
 </script>
 
@@ -164,8 +190,8 @@
     class="trigger"
     class:active={selected.length > 0}
     class:clearable={selected.length > 0}
-    aria-haspopup="true"
     aria-expanded={open}
+    aria-controls={open ? `${uid}-popup` : undefined}
     class:held={open && openWidth > 0}
     style:width={open && openWidth > 0 ? `${openWidth}px` : undefined}
     use:tooltip={open ? '' : hint}
@@ -192,7 +218,7 @@
   {#if open}
     <!-- The listener steers the focus only (see onPopupMouseDown); the group itself is not interactive. -->
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <div class="popup" role="group" aria-label={label} onmousedown={onPopupMouseDown}>
+    <div class="popup" id="{uid}-popup" role="group" aria-label={label} onmousedown={onPopupMouseDown}>
       {#if note !== ''}<p class="note">{note}</p>{/if}
       {#if match}
         <div class="match" role="radiogroup" aria-label={label}>
