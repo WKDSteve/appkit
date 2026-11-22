@@ -27,6 +27,13 @@ const action = (label: string, shortcut?: string): MenuItem => ({
   onselect: () => picked.push(label),
 });
 
+const check = (label: string, checked: boolean): MenuItem => ({
+  kind: 'check',
+  label,
+  checked,
+  onselect: () => picked.push(label),
+});
+
 const menus: Menu[] = [
   { id: 'tasks', label: 'Aufgaben', mnemonic: 'a', items: [action('Neu', 'Strg+N'), action('Suchen', 'Strg+F')] },
   {
@@ -48,6 +55,13 @@ const menus: Menu[] = [
       { kind: 'section', label: 'Export' },
       action('Als Markdown …'),
     ],
+  },
+  {
+    // Taller than a low window: the popup scrolls (`longMenu` in `../menubar.browser.cjs`).
+    id: 'long',
+    label: 'Lang',
+    mnemonic: 'l',
+    items: Array.from({ length: 30 }, (_, i) => check(`Eintrag ${i + 1}`, i % 2 === 0)),
   },
   {
     id: 'options',

@@ -217,6 +217,41 @@ async function round(browser, base, scheme, popover) {
   console.log(`ok  ${what}`);
 }
 
+/**
+ * A menu taller than the window scrolls inside its popup. The scrolling box must be reachable by keyboard (axe
+ * `scrollable-region-focusable`), and the arrow keys must scroll the item with the focus into view, down to the last.
+ */
+async function longMenu(browser, base, scheme, popover) {
+  const what = `${scheme}${popover ? '' : ', no popover'}, long menu`;
+  const context = await browser.newContext({ viewport: { width: 1000, height: 300 }, colorScheme: scheme });
+  const page = await context.newPage();
+  if (!popover) {
+    await page.addInitScript(() => {
+      delete HTMLElement.prototype.showPopover;
+      delete HTMLElement.prototype.hidePopover;
+    });
+  }
+  await page.goto(base);
+  // Opened by a click, as in an app: the focus stays on the title, no item has it yet.
+  await page.locator('button.mb-trigger[data-for="long"]').click();
+  const popup = page.locator('[data-menu="long"]');
+  const scrolls = await popup.evaluate((el) => el.scrollHeight > el.clientHeight);
+  assert.ok(scrolls, `${what}: the popup scrolls in a low window`);
+  await axe(page, `${what}, open`);
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('End');
+  assert.equal(await activeText(page), 'Eintrag 30');
+  const inView = await page.evaluate(() => {
+    const item = document.activeElement.getBoundingClientRect();
+    const box = document.activeElement.closest('[data-menu]').getBoundingClientRect();
+    return item.top >= box.top - 1 && item.bottom <= box.bottom + 1;
+  });
+  assert.ok(inView, `${what}: the last item is scrolled into view`);
+  await axe(page, `${what}, at the end`);
+  await context.close();
+  console.log(`ok  ${what}`);
+}
+
 (async () => {
   const dir = await buildPage();
   const server = await serve(dir);
@@ -224,7 +259,10 @@ async function round(browser, base, scheme, popover) {
   const browser = await chromium.launch();
   try {
     for (const popover of [true, false]) {
-      for (const scheme of ['light', 'dark']) await round(browser, base, scheme, popover);
+      for (const scheme of ['light', 'dark']) {
+        await round(browser, base, scheme, popover);
+        await longMenu(browser, base, scheme, popover);
+      }
     }
   } finally {
     await browser.close();
