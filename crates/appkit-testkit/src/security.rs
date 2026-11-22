@@ -941,6 +941,124 @@ pub async fn answers_say_what_they_are_and_betray_nothing(s: &dyn Subject) {
     }
 }
 
+/// `SRV-28`: behind a proxy the hub reads a message the way the strictest reader does, and believes no header a
+/// proxy sets. Ambiguous messages get 400 and the connection is closed; `X-Forwarded-*` and identity headers
+/// decide nothing.
+pub async fn an_ambiguous_message_is_refused_and_a_proxy_is_not_believed(s: &dyn Subject) {
+    let h = Harness::new(s).await;
+    let host = h.host();
+    let path = "/auth/exchange";
+    let ambiguous: Vec<(&str, Vec<u8>)> = vec![
+        (
+            "Transfer-Encoding with Content-Length",
+            format!(
+                "POST {path} HTTP/1.1\r\nHost: {host}\r\nOrigin: http://{host}\r\nContent-Type: application/json\r\n\
+                 Content-Length: 4\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n0\r\n\r\n"
+            )
+            .into_bytes(),
+        ),
+        (
+            "a Transfer-Encoding the hub does not read",
+            format!(
+                "POST {path} HTTP/1.1\r\nHost: {host}\r\nOrigin: http://{host}\r\nContent-Type: application/json\r\n\
+                 Transfer-Encoding: gzip, chunked\r\nConnection: close\r\n\r\n0\r\n\r\n"
+            )
+            .into_bytes(),
+        ),
+        (
+            "a CR in a header value",
+            format!(
+                "GET {} HTTP/1.1\r\nHost: {host}\r\nX-Note: a\rb\r\nConnection: close\r\n\r\n",
+                h.route("hello")
+            )
+            .into_bytes(),
+        ),
+        (
+            "two Content-Length headers that differ",
+            format!(
+                "POST {path} HTTP/1.1\r\nHost: {host}\r\nOrigin: http://{host}\r\nContent-Type: application/json\r\n\
+                 Content-Length: 2\r\nContent-Length: 40\r\nConnection: close\r\n\r\n{{}}"
+            )
+            .into_bytes(),
+        ),
+    ];
+    for (what, bytes) in ambiguous {
+        let started = std::time::Instant::now();
+        let r = send(h.addr(), bytes).await;
+        assert_eq!(r.status, 400, "{what}: {r:?}");
+        // `send` reads to the end: it returns when the hub closed the connection, not when the timeout ended.
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "{what}: the connection stayed open"
+        );
+    }
+    // No header a proxy sets is a credential or changes a decision.
+    let forwarded: &[(&str, &str)] = &[
+        ("X-Forwarded-For", "127.0.0.1"),
+        ("X-Forwarded-Host", "127.0.0.1"),
+        ("X-Forwarded-Proto", "https"),
+        ("X-Real-IP", "127.0.0.1"),
+        ("Forwarded", "for=127.0.0.1;host=127.0.0.1;proto=https"),
+        ("Tailscale-User-Login", "anna@example.com"),
+        ("Tailscale-User-Name", "Anna"),
+        ("X-Forwarded-User", "anna"),
+        ("X-Authenticated-User", "anna"),
+        ("Remote-User", "anna"),
+    ];
+    for route in s.data_routes() {
+        let r = get(&h, h.route(route).as_str(), forwarded).await;
+        assert_eq!(r.status, 401, "{route}: {r:?}");
+    }
+    // The host is the Host header, whatever the proxy says it was.
+    let mut headers = forwarded.to_vec();
+    headers.push(("Host", "evil.example"));
+    let r = send(
+        h.addr(),
+        request("GET", h.route("hello").as_str(), &headers, b""),
+    )
+    .await;
+    assert_eq!(r.status, 403, "{r:?}");
+    // The origin is the Origin header: a forwarded host does not make a foreign origin the hub's own.
+    let mut headers = forwarded.to_vec();
+    headers.extend([
+        ("Host", host.as_str()),
+        ("Origin", "http://evil.example"),
+        ("Content-Type", "application/json"),
+    ]);
+    let r = send(h.addr(), request("POST", "/auth/exchange", &headers, b"{}")).await;
+    assert_eq!(r.status, 403, "{r:?}");
+    // A limit hangs on the session or the pairing, not on an address a header names.
+    let limits = Limits {
+        exchange_max: 3,
+        ..Limits::default()
+    };
+    let h = Harness::with(s, limits).await;
+    let host = h.host();
+    let body = format!("{{\"code\":\"{}\"}}", "0".repeat(32));
+    for n in 0..4 {
+        let address = format!("10.0.0.{n}");
+        let origin = format!("http://{host}");
+        let r = send(
+            h.addr(),
+            request(
+                "POST",
+                "/auth/exchange",
+                &[
+                    ("Host", host.as_str()),
+                    ("Origin", origin.as_str()),
+                    ("Content-Type", "application/json"),
+                    ("Content-Length", &body.len().to_string()),
+                    ("X-Forwarded-For", address.as_str()),
+                    ("X-Real-IP", address.as_str()),
+                ],
+                body.as_bytes(),
+            ),
+        )
+        .await;
+        assert_eq!(r.status, if n < 3 { 401 } else { 429 }, "{n}: {r:?}");
+    }
+}
+
 // ── 11 to 14, 17: pairing ───────────────────────────────────────────────────
 
 pub async fn a_pairing_code_is_good_once(s: &dyn Subject) {
@@ -1340,6 +1458,7 @@ macro_rules! security_matrix {
         the_page_needs_no_token_and_has_its_headers,
         every_answer_carries_the_security_headers,
         answers_say_what_they_are_and_betray_nothing,
+        an_ambiguous_message_is_refused_and_a_proxy_is_not_believed,
         a_pairing_code_is_good_once,
         a_pairing_code_expires,
         a_pairing_code_cannot_be_got_without_the_control_secret,
