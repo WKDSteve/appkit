@@ -501,3 +501,13 @@ pub async fn control_revoke<R: Runtime>(State(st): State<Arc<Core<R>>>, body: By
         }
     }
 }
+
+/// Sign out: the session of the token that sent the request ends at once (`SRV-27`). The guard has checked the
+/// session, so the token is there; the next request with it is a 401.
+pub async fn logout<R: Runtime>(
+    State(st): State<Arc<Core<R>>>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let closed = crate::guard::bearer(&headers).is_some_and(|token| st.sessions.close(&token));
+    axum::Json(json!({ "signed_out": closed })).into_response()
+}

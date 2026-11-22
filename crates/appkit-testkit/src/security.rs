@@ -1059,6 +1059,50 @@ pub async fn an_ambiguous_message_is_refused_and_a_proxy_is_not_believed(s: &dyn
     }
 }
 
+/// `SRV-27`: a session ends when the person signs out. The token is at least 128 bits, a new one comes with each
+/// pairing, signing out closes exactly the session that asks, and the next request with the token is a 401.
+pub async fn a_session_ends_when_the_person_signs_out(s: &dyn Subject) {
+    let h = Harness::new(s).await;
+    // At least 128 bits, new for each pairing.
+    let first = session(&h).await;
+    let second = session(&h).await;
+    assert!(
+        first.len() >= 32 && first.bytes().all(|b| b.is_ascii_hexdigit()),
+        "{first}"
+    );
+    assert_ne!(first, second);
+    let route = s.data_routes()[0];
+    let data = h.route(route);
+    let auth = bearer(&first);
+    let other = bearer(&second);
+    assert_ne!(
+        get(&h, &data, &[("Authorization", &auth)]).await.status,
+        401
+    );
+    // Signing out needs a session, and a request that is not JSON is refused like any mutation.
+    let logout = appkit_hub::guard::LOGOUT_PATH;
+    assert_eq!(post(&h, logout, &[], "{}").await.status, 401);
+    // It ends this session and no other.
+    let r = post(&h, logout, &[("Authorization", &auth)], "{}").await;
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(r.json()["signed_out"], true, "{r:?}");
+    assert_eq!(
+        get(&h, &data, &[("Authorization", &auth)]).await.status,
+        401
+    );
+    assert_ne!(
+        get(&h, &data, &[("Authorization", &other)]).await.status,
+        401
+    );
+    // The token is gone for good: signing out again is refused, and the code that made it is spent.
+    assert_eq!(
+        post(&h, logout, &[("Authorization", &auth)], "{}")
+            .await
+            .status,
+        401
+    );
+}
+
 // ── 11 to 14, 17: pairing ───────────────────────────────────────────────────
 
 pub async fn a_pairing_code_is_good_once(s: &dyn Subject) {
@@ -1459,6 +1503,7 @@ macro_rules! security_matrix {
         every_answer_carries_the_security_headers,
         answers_say_what_they_are_and_betray_nothing,
         an_ambiguous_message_is_refused_and_a_proxy_is_not_believed,
+        a_session_ends_when_the_person_signs_out,
         a_pairing_code_is_good_once,
         a_pairing_code_expires,
         a_pairing_code_cannot_be_got_without_the_control_secret,

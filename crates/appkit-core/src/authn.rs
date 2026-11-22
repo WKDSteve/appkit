@@ -397,6 +397,18 @@ impl SessionStore {
         Ok(token)
     }
 
+    /// Close the session of this token (the person signed out): the next request with it is refused. `true` when
+    /// there was such a session.
+    pub fn close(&self, text: &str) -> bool {
+        let Some(given) = Secret::from_hex(text, TOKEN_BYTES) else {
+            return false;
+        };
+        let mut sessions = lock(&self.sessions);
+        let before = sessions.len();
+        sessions.retain(|(token, _)| !token.matches(&given));
+        sessions.len() != before
+    }
+
     /// Close every session of a device (it was revoked).
     pub fn close_device(&self, device: &str) {
         lock(&self.sessions).retain(|(_, d)| d.as_deref() != Some(device));
@@ -481,6 +493,21 @@ mod tests {
     fn clock() -> (Arc<ManualClock>, Arc<dyn Clock>) {
         let manual = Arc::new(ManualClock::new());
         (Arc::clone(&manual), manual)
+    }
+
+    #[test]
+    fn signing_out_closes_that_session_and_no_other() {
+        // At least 128 bits (SRV-27).
+        const { assert!(TOKEN_BYTES >= 16) };
+        let sessions = SessionStore::new(4);
+        let a = sessions.create().unwrap().to_hex();
+        let b = sessions.create().unwrap().to_hex();
+        assert!(sessions.close(&a));
+        assert!(!sessions.check(&a) && sessions.check(&b));
+        // Closing twice, or a token that is not one, closes nothing.
+        assert!(!sessions.close(&a));
+        assert!(!sessions.close("not a token"));
+        assert!(sessions.check(&b));
     }
 
     #[test]

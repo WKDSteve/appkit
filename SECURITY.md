@@ -101,7 +101,7 @@ percent escapes or a trailing slash is not the list's path and needs a session t
 |---|---|---|
 | none | | the page, `GET /api/<ns>/hello` (name, version, instance id, whether the engine is ready, a short problem code; no data, no path) |
 | pairing code | 128 bits, one use, 60 s by default | `POST /auth/exchange` for a session token |
-| session token | 256 bits, in the memory of the hub only, a limited number open | the routes of the app |
+| session token | 256 bits, new at every pairing, in the memory of the hub only, a limited number open; it ends when the person signs out (`POST /api/session/logout`), when the hub restarts, and when its device is revoked; there is no idle or maximum time (loopback, one user, memory only: decided 2026-11-21) | the routes of the app |
 | device key | ECDSA P-256, made by the page with WebCrypto, non-extractable; the hub keeps the public key in `devices.json` | `POST /auth/device/session`: a session for a signed challenge (only an app that calls `with_devices`) |
 | control secret | 256 bits, in `control.secret` | `POST /api/control/pair`: mint a pairing code; `/api/control/devices` and `/api/control/devices/revoke`: list and revoke devices; `POST /api/control/stop`: ask the hub to end itself (`<program> stop`). Nothing else. |
 

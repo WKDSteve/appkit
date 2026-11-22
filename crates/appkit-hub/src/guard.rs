@@ -58,6 +58,9 @@ pub const DEVICE_CHALLENGE_PATH: &str = "/auth/device/challenge";
 pub const DEVICE_SESSION_PATH: &str = "/auth/device/session";
 /// The routes of the PC for its devices, with the control secret: the list, and revoking one.
 pub const CONTROL_DEVICES_PATH: &str = "/api/control/devices";
+/// Signs the caller out: the session of the token that sends it ends (`SRV-27`). Below `/api/`, so it needs a session,
+/// and released for every device at the lowest level: signing out is never a privilege.
+pub const LOGOUT_PATH: &str = "/api/session/logout";
 pub const CONTROL_REVOKE_PATH: &str = "/api/control/devices/revoke";
 /// The route of the PC that sets the level of a device, with the control secret.
 pub const CONTROL_LEVEL_PATH: &str = "/api/control/devices/level";
@@ -280,6 +283,9 @@ impl GuardRules {
     /// The level a device needs for `path`; `None`: the route is not released for devices.
     #[must_use]
     pub fn device_level(&self, path: &str) -> Option<Level> {
+        if path == LOGOUT_PATH {
+            return Some(Level::Read);
+        }
         self.device_routes
             .iter()
             .find(|(p, _)| p == path)

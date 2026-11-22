@@ -313,6 +313,10 @@ fn router<R: Runtime>(core: &Arc<Core<R>>, app: Router<Arc<Core<R>>>) -> Router 
             post(exchange::<R>).layer(DefaultBodyLimit::max(small)),
         )
         .route(
+            crate::guard::LOGOUT_PATH,
+            post(crate::access::logout::<R>).layer(DefaultBodyLimit::max(small)),
+        )
+        .route(
             "/api/control/pair",
             post(control_pair::<R>).layer(DefaultBodyLimit::max(small)),
         )
