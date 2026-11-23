@@ -205,6 +205,20 @@ The commands every hub app shares come from `cli`: `parse` reads them (`start [-
 and leaves the app's own words to it; `status`, `logs` and `paths` are done there, `usage_lines` and `help`
 give the texts. Exit codes: 0 done, 1 failed (`status`: not running), 2 wrong arguments.
 
+`completions powershell|bash` (`Verb::Completions`) prints the script for tab completion; an app answers it with
+`cli::completions_script(shell, &[<command>, <binary>], OWN_COMMANDS)` (the names the shell finds the app by, and the
+app's own words). It names no path, only commands. Put it in the profile once:
+
+```powershell
+# PowerShell: add to $PROFILE
+tasks-desktop completions powershell | Out-String | Invoke-Expression
+```
+
+```bash
+# bash: add to ~/.bashrc
+source <(tasks-desktop completions bash)
+```
+
 ## Ports
 
 The default ports of the apps that run side by side are listed in

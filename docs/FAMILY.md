@@ -70,6 +70,15 @@ Every install makes the app a command named after the app, in any new terminal: 
 - The tests of a hub program (`<PREFIX>_NO_LOGIN_SYNC`) make no starter unless they set
   `APPKIT_FAMILY_DIR`, and then never touch the `PATH` of the user.
 
+### Tab completion
+
+`<app> completions powershell` prints a `Register-ArgumentCompleter` block, `<app> completions bash` a `complete`
+script (`appkit_hub::cli::completions_script`). Both know the common commands and the app's own, and use only the
+command names, no path. A wrong or missing shell word is exit code 2. Once, in the profile:
+
+- PowerShell (`$PROFILE`): `tasks-desktop completions powershell | Out-String | Invoke-Expression`
+- bash (`~/.bashrc`): `source <(tasks-desktop completions bash)`
+
 ## Running: `hub.json` in the config folder
 
 The config folder of an app is `<PREFIX>_CONFIG_DIR`, else `%APPDATA%\<app>` (Windows),

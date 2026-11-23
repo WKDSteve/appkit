@@ -15,6 +15,7 @@
 //! | `paths` | the program, the installed program, the settings, the log and the command |
 //! | `version`, `--version`, `-V` | the version |
 //! | `help [<command>]`, `--help`, `-h`, `<command> --help` | what the commands do |
+//! | `completions powershell`, `completions bash` | print the script for tab completion ([`completions_script`]) |
 //!
 //! Exit codes: 0 done, 1 failed (or, for `status`, not running), 2 the arguments were wrong. `close` is not a
 //! command: it would read as "close the window, the hub runs on"; it is answered with a pointer to `stop`.
@@ -65,8 +66,17 @@ pub enum Verb {
     },
     Paths,
     Version,
+    /// `completions powershell` or `completions bash`.
+    Completions(Shell),
     /// `help`, `--help`, `-h` (`None`), or `help <command>` and `<command> --help`.
     Help(Option<String>),
+}
+
+/// The shells that `completions` writes a script for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shell {
+    PowerShell,
+    Bash,
 }
 
 /// What the arguments are.
@@ -105,6 +115,11 @@ pub fn parse(args: &[String]) -> Parsed {
         ["open"] | ["open", "--launch"] => Verb::Open,
         ["link"] => Verb::Link,
         ["paths"] => Verb::Paths,
+        ["completions", "powershell"] => Verb::Completions(Shell::PowerShell),
+        ["completions", "bash"] => Verb::Completions(Shell::Bash),
+        ["completions", ..] => {
+            return Parsed::Usage("completions: say the shell, `powershell` or `bash`".to_owned());
+        }
         ["logs", rest @ ..] => match parse_logs(rest) {
             Ok(verb) => verb,
             Err(e) => return Parsed::Usage(e),
@@ -157,7 +172,7 @@ fn parse_logs(words: &[&str]) -> Result<Verb, String> {
 /// the apps (the command at the left, what it does from column 42).
 #[must_use]
 pub fn usage_lines(command: &str) -> String {
-    let rows: [(&str, &str); 11] = [
+    let rows: [(&str, &str); 12] = [
         (
             "",
             "(no argument, as a double click) start the hub when it is not running, open the page",
@@ -187,6 +202,10 @@ pub fn usage_lines(command: &str) -> String {
         ),
         ("version | --version", "the version"),
         (
+            "completions <shell>",
+            "tab completion script for powershell or bash (help completions)",
+        ),
+        (
             "help [<command>]",
             "this text, or what one command does (also <command> --help)",
         ),
@@ -200,6 +219,133 @@ pub fn usage_lines(command: &str) -> String {
         };
         out.push_str(&format!("{left:<42}{what}\n"));
     }
+    out
+}
+
+/// The common commands with the words that can follow each, for the completion scripts. Every [`Verb`] has its word
+/// here (`every_verb_is_completed` fails when one does not).
+const COMMON_WORDS: [(&str, &[&str]); 12] = [
+    ("start", &["--open"]),
+    ("stop", &[]),
+    ("quit", &[]),
+    ("restart", &["--open"]),
+    ("status", &["--json"]),
+    ("open", &["--launch"]),
+    ("link", &[]),
+    ("logs", &["-f", "--follow", "-n", "--lines"]),
+    ("paths", &[]),
+    ("version", &[]),
+    ("help", &[]),
+    ("completions", &["powershell", "bash"]),
+];
+
+/// Whether `word` may stand in a script as it is (a command name, never a quote or a space).
+fn is_plain_word(word: &str) -> bool {
+    !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
+/// The script that completes the commands of an app with the Tab key, for `completions powershell|bash`.
+/// `programs` are the names the shell finds the app by (`tasks-desktop`, `tasks-hub`), `own` the app's own commands
+/// (`serve`, `setup`, ...). A word that is not plain (letters, digits, `-`, `_`, `.`) is left out, so nothing of an
+/// argument ends up as code. The script names no path: only the command names.
+#[must_use]
+pub fn completions_script(shell: Shell, programs: &[&str], own: &[&str]) -> String {
+    let programs: Vec<&str> = programs
+        .iter()
+        .copied()
+        .filter(|p| is_plain_word(p))
+        .collect();
+    let mut top: Vec<&str> = COMMON_WORDS.iter().map(|(w, _)| *w).collect();
+    for word in own.iter().copied().filter(|w| is_plain_word(w)) {
+        if !top.contains(&word) {
+            top.push(word);
+        }
+    }
+    let top = top.join(" ");
+    match shell {
+        Shell::PowerShell => powershell_script(&programs, &top),
+        Shell::Bash => bash_script(&programs, &top),
+    }
+}
+
+fn powershell_script(programs: &[&str], top: &str) -> String {
+    let names = programs
+        .iter()
+        .map(|p| format!("'{p}'"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut out =
+        format!("Register-ArgumentCompleter -Native -CommandName {names} -ScriptBlock {{\n");
+    out.push_str("    param($wordToComplete, $commandAst, $cursorPosition)\n");
+    out.push_str("    $words = @($commandAst.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.ToString() })\n");
+    out.push_str(
+        "    if ($wordToComplete -ne '') { $words = @($words | Select-Object -SkipLast 1) }\n",
+    );
+    out.push_str("    $candidates = @()\n");
+    out.push_str(&format!(
+        "    if ($words.Count -eq 0) {{ $candidates = '{top}' -split ' ' }}\n"
+    ));
+    out.push_str("    else {\n        switch ($words[0]) {\n");
+    for (word, next) in COMMON_WORDS {
+        let list = if word == "help" {
+            // `help <command>` completes one command, not a second word.
+            if next.is_empty() {
+                "if ($words.Count -eq 1) { $candidates = '{top}' -split ' ' }".replace("{top}", top)
+            } else {
+                continue;
+            }
+        } else if next.is_empty() {
+            continue;
+        } else {
+            format!("$candidates = '{}' -split ' '", next.join(" "))
+        };
+        out.push_str(&format!("            '{word}' {{ {list} }}\n"));
+    }
+    out.push_str("        }\n    }\n");
+    out.push_str("    $candidates | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } |\n");
+    out.push_str("        ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }\n");
+    out.push_str("}\n");
+    out
+}
+
+fn bash_script(programs: &[&str], top: &str) -> String {
+    let function = format!(
+        "_{}_complete",
+        programs
+            .first()
+            .copied()
+            .unwrap_or("app")
+            .replace(['-', '.'], "_")
+    );
+    let mut out = format!("{function}() {{\n");
+    out.push_str("    local cur=\"${COMP_WORDS[COMP_CWORD]}\"\n");
+    out.push_str("    if [ \"$COMP_CWORD\" -eq 1 ]; then\n");
+    out.push_str(&format!(
+        "        COMPREPLY=($(compgen -W \"{top}\" -- \"$cur\"))\n        return 0\n    fi\n"
+    ));
+    out.push_str("    case \"${COMP_WORDS[1]}\" in\n");
+    for (word, next) in COMMON_WORDS {
+        let list = if word == "help" {
+            top.to_owned()
+        } else if next.is_empty() {
+            continue;
+        } else {
+            next.join(" ")
+        };
+        let guard = if word == "help" {
+            "[ \"$COMP_CWORD\" -eq 2 ] && "
+        } else {
+            ""
+        };
+        out.push_str(&format!(
+            "        {word}) {guard}COMPREPLY=($(compgen -W \"{list}\" -- \"$cur\")) ;;\n"
+        ));
+    }
+    out.push_str("    esac\n    return 0\n}\n");
+    out.push_str(&format!("complete -F {function} {}\n", programs.join(" ")));
     out
 }
 
@@ -233,6 +379,9 @@ pub fn help(command: &str, program: &str) -> Option<String> {
             "{program} paths\n  The running program, the installed one, the settings folder, the log and the\n  command in the terminal."
         ),
         "version" => format!("{program} version   (also --version, -V)\n  The version."),
+        "completions" => format!(
+            "{program} completions powershell|bash\n  Print the script that completes the commands of {program} with the Tab key.\n  PowerShell: add `{program} completions powershell | Out-String | Invoke-Expression` to your profile ($PROFILE).\n  bash: add `source <({program} completions bash)` to ~/.bashrc."
+        ),
         "help" => format!(
             "{program} help [<command>]\n  All commands, or what one does (also `{program} <command> --help`)."
         ),
@@ -506,6 +655,14 @@ mod tests {
         assert_eq!(common(&["open", "--launch"]), Verb::Open);
         assert_eq!(common(&["link"]), Verb::Link);
         assert_eq!(common(&["paths"]), Verb::Paths);
+        assert_eq!(
+            common(&["completions", "bash"]),
+            Verb::Completions(Shell::Bash)
+        );
+        assert_eq!(
+            common(&["completions", "powershell"]),
+            Verb::Completions(Shell::PowerShell)
+        );
         for v in ["version", "--version", "-V"] {
             assert_eq!(common(&[v]), Verb::Version);
         }
@@ -592,7 +749,16 @@ mod tests {
     fn every_common_command_has_its_help_and_the_usage_lists_them() {
         let usage = usage_lines("tasks-desktop");
         for verb in [
-            "start", "stop", "restart", "status", "open", "link", "logs", "paths", "version",
+            "start",
+            "stop",
+            "restart",
+            "status",
+            "open",
+            "link",
+            "logs",
+            "paths",
+            "version",
+            "completions",
             "help",
         ] {
             let text = help(verb, "tasks-desktop").unwrap_or_else(|| panic!("{verb}"));
@@ -610,6 +776,77 @@ mod tests {
         for line in usage.lines() {
             assert!(line.len() > 42 && line.as_bytes()[41] == b' ', "{line:?}");
         }
+    }
+
+    /// The word of a verb in the completions; the match has no wildcard, so a new [`Verb`] does not compile before it
+    /// has its word.
+    fn word_of(verb: &Verb) -> &'static str {
+        match verb {
+            Verb::Click => "",
+            Verb::Start { .. } => "start",
+            Verb::Stop => "stop",
+            Verb::Restart { .. } => "restart",
+            Verb::Status { .. } => "status",
+            Verb::Open => "open",
+            Verb::Link => "link",
+            Verb::Logs { .. } => "logs",
+            Verb::Paths => "paths",
+            Verb::Version => "version",
+            Verb::Completions(_) => "completions",
+            Verb::Help(_) => "help",
+        }
+    }
+
+    #[test]
+    fn every_verb_is_completed() {
+        let verbs = [
+            Verb::Click,
+            Verb::Start { open: false },
+            Verb::Stop,
+            Verb::Restart { open: false },
+            Verb::Status { json: false },
+            Verb::Open,
+            Verb::Link,
+            Verb::Logs {
+                lines: 1,
+                follow: false,
+            },
+            Verb::Paths,
+            Verb::Version,
+            Verb::Completions(Shell::Bash),
+            Verb::Help(None),
+        ];
+        let scripts = [Shell::PowerShell, Shell::Bash].map(|shell| {
+            completions_script(shell, &["tasks-desktop", "tasks-hub"], &["serve", "setup"])
+        });
+        for script in &scripts {
+            for verb in &verbs {
+                let word = word_of(verb);
+                assert!(word.is_empty() || script.contains(word), "{word}: {script}");
+            }
+            for own in ["serve", "setup", "quit"] {
+                assert!(script.contains(own), "{own}");
+            }
+        }
+        // Every word of the list is one the parser knows, `quit` and `completions` included.
+        for (word, _) in COMMON_WORDS {
+            assert_ne!(parse(&args(&[word])), Parsed::Own, "{word}");
+        }
+        assert!(scripts[0].contains("-CommandName 'tasks-desktop','tasks-hub'"));
+        assert!(scripts[1].contains("complete -F _tasks_desktop_complete tasks-desktop tasks-hub"));
+    }
+
+    #[test]
+    fn completions_need_a_known_shell_and_leave_out_odd_words() {
+        for bad in [
+            &["completions"][..],
+            &["completions", "zsh"],
+            &["completions", "bash", "x"],
+        ] {
+            assert!(matches!(parse(&args(bad)), Parsed::Usage(_)), "{bad:?}");
+        }
+        let script = completions_script(Shell::Bash, &["a b", "app"], &["ok", "x'; rm -rf ~; '"]);
+        assert!(script.contains("ok") && !script.contains("rm -rf") && !script.contains("a b"));
     }
 
     #[test]

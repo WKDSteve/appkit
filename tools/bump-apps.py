@@ -126,6 +126,11 @@ BY_HAND = [
      "the app has switched on; default latest), and the README of the app names them. nightly = add `on: push: "
      "branches: [main]`, stable = add `on: schedule` (weekly) and a workflow_dispatch input; both then pass "
      "`channel:` to prepare and `tag:` to publish (the model is release-kit/README.md, `More rolling channels`)"),
+    ("v0.81.0", ("full",),
+     "tab completion: appkit_hub::cli::Verb has a new arm Completions(Shell); the app's match on the verb prints "
+     "cli::completions_script(shell, &[<command>, <binary>], OWN_COMMANDS) and exits 0 (a wrong shell word is "
+     "Parsed::Usage, exit 2 as before); the app's own usage text lists `completions <shell>` through "
+     "cli::usage_lines; README of appkit, 'completions'"),
 ]
 
 
