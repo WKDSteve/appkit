@@ -185,6 +185,168 @@ pub(crate) fn open_own_page(path: &std::path::Path) -> Result<(), String> {
     hand_over(text)
 }
 
+/// The one file name [`open_index_html`] opens.
+const PAGE_FILE: &str = "index.html";
+/// The longest relative path of the page, in bytes.
+const MAX_PAGE_PATH: usize = 256;
+/// The longest node name of the fragment, in bytes (before it is encoded).
+const MAX_NODE: usize = 128;
+
+/// Is `part` one folder or file name of the relative path: plain characters only, and not one
+/// the system reads as something else (`.`, `..`, a name that ends in a dot, which Windows drops)?
+fn plain_component(part: &str) -> bool {
+    !part.is_empty()
+        && part != "."
+        && part != ".."
+        && !part.ends_with('.')
+        && part
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+}
+
+/// Percent-encode `text` for a link: only letters, digits and `-_.~` stay as they are.
+fn encode(text: &str) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::with_capacity(text.len());
+    for b in text.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(char::from(b));
+        } else {
+            let _ = write!(out, "%{b:02X}");
+        }
+    }
+    out
+}
+
+/// The path of a canonical file as the text of a `file:` link, or `None` for what is not a plain
+/// local file (a network share, a device namespace, a name that is no text).
+fn file_link(canonical: &std::path::Path) -> Option<String> {
+    use std::path::Component;
+
+    let mut link = String::from("file://");
+    let mut any = false;
+    for part in canonical.components() {
+        match part {
+            Component::Prefix(prefix) => {
+                use std::path::Prefix;
+                // `\\?\C:\…` is what `canonicalize` gives; a share or a device is not a local file.
+                let (Prefix::Disk(letter) | Prefix::VerbatimDisk(letter)) = prefix.kind() else {
+                    return None;
+                };
+                link.push('/');
+                link.push(char::from(letter.to_ascii_uppercase()));
+                link.push(':');
+            }
+            Component::RootDir => {}
+            Component::Normal(name) => {
+                link.push('/');
+                link.push_str(&encode(name.to_str()?));
+                any = true;
+            }
+            Component::CurDir | Component::ParentDir => return None,
+        }
+    }
+    any.then_some(link)
+}
+
+/// The refusal of the page on the machine with the role `role` (the value of
+/// `NVIM_MACHINE_ROLE`): the work machine does not open it.
+fn refused_on(role: Option<&str>) -> Result<(), String> {
+    match role {
+        Some(role) if role.trim().eq_ignore_ascii_case("workstation") => {
+            Err("the page of a repository is not opened on this machine: not opened".to_owned())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// The link of the page `relative` below `folder`, checked, or why it is not one.
+fn page_link(folder: &std::path::Path, relative: &str) -> Result<String, String> {
+    let refuse = |why: &str| Err(format!("not the page of a repository ({why}): not opened"));
+    if relative.is_empty() || relative.len() > MAX_PAGE_PATH {
+        return refuse("the path has no sensible length");
+    }
+    // Only `/` separates: a backslash, a drive, a share, a stream (`:`) or a root is not plain.
+    let parts: Vec<&str> = relative.split('/').collect();
+    if !parts.iter().all(|p| plain_component(p)) {
+        return refuse("the path holds more than plain names below the folder");
+    }
+    if parts.last().copied() != Some(PAGE_FILE) {
+        return refuse("the file is not index.html");
+    }
+    if !folder.is_absolute() {
+        return refuse("the folder is not absolute");
+    }
+    let root = folder
+        .canonicalize()
+        .map_err(|_| "the folder is not there: not opened".to_owned())?;
+    let target = root.join(relative);
+    // The file itself is no link, and a link on the way may not lead out of the folder.
+    if !std::fs::symlink_metadata(&target).is_ok_and(|m| m.is_file()) {
+        return refuse("there is no such file");
+    }
+    let real = target
+        .canonicalize()
+        .map_err(|_| "the page is not there: not opened".to_owned())?;
+    if !real.starts_with(&root) || real.file_name().and_then(|n| n.to_str()) != Some(PAGE_FILE) {
+        return refuse("the page lies outside the folder");
+    }
+    file_link(&real).ok_or_else(|| "the page is not a local file: not opened".to_owned())
+}
+
+/// Is there a page `relative` below `folder` that [`open_index_html`] would open (the checks of
+/// a call, without the machine)? A caller shows its button only when this holds.
+#[must_use]
+pub fn index_html_available(folder: &std::path::Path, relative: &str) -> bool {
+    page_link(folder, relative).is_ok()
+}
+
+/// Open the page `relative` of a repository in the default browser: the one file named
+/// `index.html`, below `folder`, which the caller has checked as the folder of a repository. Not
+/// a way to open files: the name is fixed, the path may hold plain names only (no `..`, no
+/// drive, no share, no backslash), the file and what it resolves to must lie in `folder` (a link
+/// out of it is refused), and the link is built here from that file, never from text of the
+/// caller. `node` names a node of the page: it becomes the fragment `#tab=tree&id=<node>`,
+/// encoded, and it is at most 128 bytes; nothing else of the caller reaches the link.
+///
+/// Not opened on the work machine (`NVIM_MACHINE_ROLE` is `workstation`); a caller hides its
+/// button there.
+///
+/// # Errors
+///
+/// The machine is the work machine, the path or the node is not allowed, the file is not a
+/// regular file in `folder`, or the system could not open it. Whatever the error, nothing is
+/// started.
+pub fn open_index_html(
+    folder: &std::path::Path,
+    relative: &str,
+    node: Option<&str>,
+) -> Result<(), String> {
+    refused_on(std::env::var("NVIM_MACHINE_ROLE").ok().as_deref())?;
+    let link = page_link_with_node(folder, relative, node)?;
+    hand_over(&link)
+}
+
+fn page_link_with_node(
+    folder: &std::path::Path,
+    relative: &str,
+    node: Option<&str>,
+) -> Result<String, String> {
+    let mut link = page_link(folder, relative)?;
+    if let Some(node) = node {
+        if node.is_empty() || node.len() > MAX_NODE || node.chars().any(char::is_control) {
+            return Err("the node is not one the page shows: not opened".to_owned());
+        }
+        link.push_str("#tab=tree&id=");
+        link.push_str(&encode(node));
+    }
+    if link.len() > MAX_LEN {
+        return Err("the link is too long: not opened".to_owned());
+    }
+    Ok(link)
+}
+
 /// Hand a checked link or page to the system.
 fn hand_over(target: &str) -> Result<(), String> {
     #[cfg(windows)]
@@ -202,6 +364,8 @@ fn hand_over(target: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    use std::path::Path;
 
     const PORTS: &[u16] = &[17610, 17611, 8080];
 
@@ -279,6 +443,167 @@ mod tests {
     fn open_refuses_before_it_starts_anything() {
         let err = open("file:///C:/Windows/notepad.exe", PORTS).unwrap_err();
         assert!(err.contains("not opened"), "{err}");
+    }
+
+    fn repo() -> appkit_scratch::Scratch {
+        let dir = appkit_scratch::Scratch::new("browser-page");
+        std::fs::create_dir_all(dir.join("docs/map")).unwrap();
+        std::fs::write(dir.join("docs/map/index.html"), "<html>").unwrap();
+        std::fs::write(dir.join("docs/map/other.html"), "<html>").unwrap();
+        std::fs::write(dir.join("index.html"), "<html>").unwrap();
+        dir
+    }
+
+    #[test]
+    fn the_page_of_a_repository_gets_a_link_built_from_the_file() {
+        let dir = repo();
+        let link = page_link_with_node(&dir, "docs/map/index.html", None).unwrap();
+        assert!(link.starts_with("file:///"), "{link}");
+        assert!(link.ends_with("/docs/map/index.html"), "{link}");
+        assert!(!link.contains('\\') && !link.contains('#'), "{link}");
+        assert!(page_link_with_node(&dir, "index.html", None).is_ok());
+        assert!(index_html_available(&dir, "docs/map/index.html"));
+    }
+
+    #[test]
+    fn the_node_becomes_a_fixed_encoded_fragment() {
+        let dir = repo();
+        let link = page_link_with_node(&dir, "index.html", Some("a b&id=x#y/é")).unwrap();
+        let (_, fragment) = link.split_once('#').unwrap();
+        assert_eq!(fragment, "tab=tree&id=a%20b%26id%3Dx%23y%2F%C3%A9");
+        assert_eq!(link.matches('#').count(), 1);
+    }
+
+    #[test]
+    fn a_node_that_is_empty_long_or_a_control_is_refused() {
+        let dir = repo();
+        for node in ["", "a\nb", "a\0b", &"n".repeat(MAX_NODE + 1)] {
+            assert!(
+                page_link_with_node(&dir, "index.html", Some(node)).is_err(),
+                "{node:?}"
+            );
+        }
+        let longest = "n".repeat(MAX_NODE);
+        assert!(page_link_with_node(&dir, "index.html", Some(&longest)).is_ok());
+    }
+
+    #[test]
+    fn a_path_out_of_the_folder_or_with_another_name_opens_nothing() {
+        let dir = repo();
+        for relative in [
+            "../index.html",
+            "docs/../index.html",
+            "docs/map/../../index.html",
+            "./index.html",
+            "/index.html",
+            "//server/share/index.html",
+            "C:/index.html",
+            "C:index.html",
+            "docs\\map\\index.html",
+            "..\\index.html",
+            "\\\\server\\share\\index.html",
+            "index.html:stream",
+            "index.html/",
+            "docs//map/index.html",
+            "docs/map/other.html",
+            "docs/map/INDEX.HTML",
+            "docs/map/index.htm",
+            "docs/map/index.html.",
+            "docs/map",
+            "docs/map/",
+            "docs",
+            "",
+            "index.html\0",
+            "docs/map/index.html?x=1",
+            "docs/map/index.html#x",
+            "docs/m ap/index.html",
+        ] {
+            assert!(!index_html_available(&dir, relative), "{relative:?}");
+            assert!(
+                page_link_with_node(&dir, relative, None).is_err(),
+                "{relative:?}"
+            );
+        }
+        let long = format!("{}/index.html", "a/".repeat(MAX_PAGE_PATH));
+        assert!(page_link(&dir, &long).is_err());
+    }
+
+    #[test]
+    fn a_folder_that_is_relative_gone_or_without_the_file_opens_nothing() {
+        let dir = repo();
+        assert!(page_link(Path::new("docs"), "index.html").is_err());
+        assert!(page_link(&dir.join("gone"), "index.html").is_err());
+        assert!(page_link(&dir.join("docs"), "index.html").is_err());
+        // A folder named index.html is not a file.
+        std::fs::create_dir_all(dir.join("x/index.html")).unwrap();
+        assert!(page_link(&dir, "x/index.html").is_err());
+    }
+
+    /// A link out of the folder: the file itself, or a folder on the way. Where the system may not
+    /// create links, the case is not applicable.
+    #[test]
+    fn a_link_that_leads_out_of_the_folder_opens_nothing() {
+        let outside = appkit_scratch::Scratch::new("browser-outside");
+        std::fs::write(outside.join("index.html"), "<html>").unwrap();
+        let dir = repo();
+        #[cfg(windows)]
+        let (file_link, dir_link) = (
+            std::os::windows::fs::symlink_file(outside.join("index.html"), dir.join("link.html")),
+            std::os::windows::fs::symlink_dir(outside.path(), dir.join("out")),
+        );
+        #[cfg(not(windows))]
+        let (file_link, dir_link) = (
+            std::os::unix::fs::symlink(outside.join("index.html"), dir.join("link.html")),
+            std::os::unix::fs::symlink(outside.path(), dir.join("out")),
+        );
+        if file_link.is_err() || dir_link.is_err() {
+            println!("n/a  this system does not let the test create links");
+            return;
+        }
+        // A file that is a link is refused, even to a file that is named right.
+        std::fs::create_dir_all(dir.join("viafile")).unwrap();
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_file(
+            outside.join("index.html"),
+            dir.join("viafile/index.html"),
+        );
+        #[cfg(not(windows))]
+        let made =
+            std::os::unix::fs::symlink(outside.join("index.html"), dir.join("viafile/index.html"));
+        assert!(made.is_ok());
+        assert!(page_link(&dir, "viafile/index.html").is_err());
+        // A folder on the way that leads out.
+        assert!(page_link(&dir, "out/index.html").is_err());
+    }
+
+    #[test]
+    fn the_work_machine_does_not_open_the_page() {
+        for role in ["workstation", "Workstation", " WORKSTATION "] {
+            let err = refused_on(Some(role)).unwrap_err();
+            assert!(err.contains("not opened"), "{err}");
+        }
+        for role in [None, Some(""), Some("default"), Some("workstations")] {
+            assert!(refused_on(role).is_ok(), "{role:?}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn only_a_local_disk_is_a_link() {
+        for share in [
+            r"\\server\share\docs\index.html",
+            r"\\?\UNC\server\share\index.html",
+        ] {
+            assert_eq!(file_link(Path::new(share)), None, "{share}");
+        }
+        assert_eq!(
+            file_link(Path::new(r"\\?\C:\my repo\index.html")).as_deref(),
+            Some("file:///C:/my%20repo/index.html")
+        );
+        assert_eq!(
+            file_link(Path::new(r"d:\r\index.html")).as_deref(),
+            Some("file:///D:/r/index.html")
+        );
     }
 
     #[cfg(windows)]

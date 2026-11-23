@@ -188,6 +188,17 @@ A program of the system is not started where the system has a call for the same 
 - **Showing a folder** (`FileOpener::reveal`): Windows hands the folder to the shell
   (`ShellExecuteW`, verb `explore`, a folder only), no `explorer.exe` is started by the hub.
   macOS and Linux start `/usr/bin/open` and `xdg-open` the way (b) starts a program.
+- **The page of a repository** (`browser::open_index_html`): the only `file:` link the kit opens
+  besides the page of a pairing code. It is not a way to open files. The name is fixed
+  (`index.html`), the relative path holds plain names only (no `..`, `.`, drive, share, backslash
+  or stream), the folder is canonical and absolute, the file is a regular file that is no link, and
+  what it resolves to must lie in the folder (so a link on the way that leads out is refused). The
+  link is built from that canonical file, never from text of the caller; the only text of the
+  caller in it is the node, as the fixed fragment `#tab=tree&id=<node>`, percent-encoded and at
+  most 128 bytes. The link goes through the same single hand-over as (c) (`ShellExecuteW`, verb
+  `open`; elsewhere `open` or `xdg-open` with the link as one argument), so the check
+  `check-process-starts` sees no new place. The call is refused when `NVIM_MACHINE_ROLE` is
+  `workstation` (`MASCHINE-04`): the app hides its button there.
 
 ## A program of somebody else (`appkit_core::launch`)
 

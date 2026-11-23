@@ -147,6 +147,13 @@ folder and the kind of window are always named. It never hides a window (`CREATE
 top of the inherited environment (names of upper case letters, digits and `_`).
 `browser::open(url, ports)` opens a link in the default browser only when
 it is `http://127.0.0.1:<port>/…` with a port from the list and plain characters after it.
+`browser::open_index_html(folder, "docs/map/index.html", node)` is the one other page it opens: the
+file named `index.html` below a folder the caller has checked as a repository (plain names only, no
+`..`, drive, share or backslash; the file and what it resolves to must lie in the folder, a link out
+of it is refused). The `file:` link is built from that file; `node` only becomes the fragment
+`#tab=tree&id=<encoded, at most 128 bytes>`. `browser::index_html_available` asks the same checks
+without opening. Never opened on the work machine (`NVIM_MACHINE_ROLE=workstation`): the app hides
+its button there. See [docs/PROCESSES.md](docs/PROCESSES.md).
 
 ## A hub in the background ends itself
 
