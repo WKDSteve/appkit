@@ -16,9 +16,17 @@ body {
 }
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
   color: inherit;
+}
+/* A field is at least 16 px: below that iOS Safari zooms into the page when it takes the focus (rule FORM-05).
+   The text around stays at --font-size; only the fields do not follow it down. */
+input,
+select,
+textarea {
+  font-size: max(1rem, var(--font-size));
 }
 :focus-visible {
   outline: 2px solid var(--focus);

@@ -10,6 +10,6 @@ export default defineConfig({
     environment: 'node',
     include: ['src/**/*.test.ts'],
     // A stylesheet is empty in a test unless it is named here: the check of the shell reads the tokens as text.
-    css: { include: [/tokens\.css/] },
+    css: { include: [/tokens\.css/, /base\.css/] },
   },
 });
