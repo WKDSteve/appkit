@@ -42,6 +42,22 @@ too big for this document and travels as a file.
 - Fields nobody knows are ignored. A new field that changes what an action means is a new version.
 - A new action is not a new version: a target that does not know it refuses it, as any action it did not offer.
 
+## A later action with a `code-ref`
+
+Not part of this version, written down so it is built the same way. A `finding` comes from an engine; a mark in an
+editor or a review result has a range of lines and no fingerprint, and is a [`code-ref/1`](../../code-ref/1/README.md)
+(`schemas/code-ref/1`). An action that carries one, say `tasks.new` from a review result, would add a field **next to**
+`finding`, not inside it: `"code_ref": { "schema": "code-ref/1", ... }`, with `finding` `null`, and the action would say
+which of the two it requires. Then:
+
+- It is a new action or a new optional field of an existing one, so by the rule above it is **not** a new version, and a
+  target that does not know it refuses the action.
+- The target checks the `code_ref` with the rules of `code-ref/1` (its own size limit applies to the whole intent
+  as before, 64 KiB), and the path rules of this README apply to `code_ref.file` as they do to `finding.where.file`.
+- The target writes the reference into the new task as a fenced `code-ref` block, so the task has the one place a reader
+  looks at. Nothing else about the intent changes: still a form, a person still confirms, nothing is written by the
+  intent itself.
+
 ## Handshake
 
 Every target names what it takes where it already introduces itself (`call hello` of the engine, the `/health`-side

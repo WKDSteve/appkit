@@ -1,0 +1,15 @@
+{
+  "schema": "code-ref/1",
+  "repo": "docmap.nvim",
+  "sha": "0123456789abcdef0123456789abcdef01234567",
+  "dirty": false,
+  "file": "lua/docmap/core/find.lua",
+  "lines": [22, 41],
+  "lang": "lua",
+  "symbol": "docmap.core.find.node",
+  "excerpt": "function M.node(ir, name, lua_root)\n  local check = require(\"docmap.core.check\")\n  local fallback\n  ...",
+  "truncated": true,
+  "docmap": { "node": "docmap.core.find", "fn": "node" },
+  "telemetry": { "namespace": "docmap.nvim", "key": "docmap.core.find.node" },
+  "class": "public"
+}

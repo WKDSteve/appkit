@@ -1,0 +1,12 @@
+{
+  "schema": "code-ref/1",
+  "repo": "tasks.nvim",
+  "sha": "8aa627637680566b0022ee27b4d98d5f506c3f0b",
+  "dirty": true,
+  "file": "lua/tasks_nvim/ui/cmd.lua",
+  "lines": [1598, 1606],
+  "lang": "lua",
+  "excerpt": "function M.range_source(ctx, buf)\n  local r = ctx.range\n  if not r or (r.range or 0) == 0 then\n    return nil\n  end\n  buf = buf or vim.api.nvim_get_current_buf()",
+  "truncated": false,
+  "class": "internal"
+}
