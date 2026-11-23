@@ -37,6 +37,14 @@ h2,
 h3 {
   margin: 0 0 0.5em;
   line-height: 1.25;
+  /* No single word on the last line (CSS-09). Where the browser does not know it, the line breaks as always. */
+  text-wrap: balance;
+}
+/* Numbers that are compared or change all the time keep one width, so that a column does not tremble (CSS-09). */
+table,
+.num,
+.count {
+  font-variant-numeric: tabular-nums;
 }
 h1 {
   font-size: 1.25rem;

@@ -93,7 +93,7 @@
     {#each shown as item (item.key)}
       <li>
         <p class="what">{show(item.title)}</p>
-        {#if item.id}<p class="id"><code>{show(item.id)}</code></p>{/if}
+        {#if item.id}<p class="id"><code translate="no">{show(item.id)}</code></p>{/if}
         {#each item.notes as note, i (i)}<p class="note">{note}</p>{/each}
         {#if item.rows.length > 0}
           <table>
@@ -108,8 +108,8 @@
               {#each item.rows as row (row.key)}
                 <tr>
                   <th scope="row">{show(row.label)}</th>
-                  <td><pre>{show(row.wanted)}</pre></td>
-                  <td class:same={row.wanted === row.now}><pre>{show(row.now)}</pre></td>
+                  <td><pre translate="no">{show(row.wanted)}</pre></td>
+                  <td class:same={row.wanted === row.now}><pre translate="no">{show(row.now)}</pre></td>
                 </tr>
               {/each}
             </tbody>

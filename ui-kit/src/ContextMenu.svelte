@@ -210,7 +210,7 @@
           >{item.kind === 'radio' ? (item.checked ? '●' : '') : item.kind === 'check' ? (item.checked ? '✓' : '') : ''}</span
         >
         <span class="cm-text">{item.label}</span>
-        {#if item.shortcut}<span class="cm-shortcut">{item.shortcut}</span>{/if}
+        {#if item.shortcut}<span class="cm-shortcut" translate="no">{item.shortcut}</span>{/if}
       </button>
     {/if}
   {/each}

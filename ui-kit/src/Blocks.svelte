@@ -36,7 +36,7 @@
   {:else if block.t === 'pre'}
     <!-- A scrolling block is reached with the keyboard. -->
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-    <pre tabindex="0"><code>{markHidden(block.text)}</code></pre>
+    <pre tabindex="0" translate="no"><code>{markHidden(block.text)}</code></pre>
   {:else if block.t === 'hr'}
     <hr />
   {:else if block.t === 'table'}
