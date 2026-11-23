@@ -1176,6 +1176,33 @@ pub async fn an_event_stream_ends_with_its_session(s: &dyn Subject) {
     );
 }
 
+/// `WPERF-08`, decided 2026-11-22: a hub on loopback keeps `no-store` on every file of its pages, the hashed
+/// ones under `/assets/` included. The page sits in the binary and matches the API of that very version; a cached
+/// older script against a newer API is the failure `no-store` prevents. The exception is held here: no file of a
+/// page, no 404 on a path of the page and no worker or manifest of the installable page may be kept by the browser.
+pub async fn the_files_of_the_pages_are_never_cached(s: &dyn Subject, prefix: &str) {
+    let h = Harness::new(s).await;
+    for path in [
+        "/".to_owned(),
+        format!("{prefix}/"),
+        format!("{prefix}/sw.js"),
+        format!("{prefix}/manifest.webmanifest"),
+        "/assets/app-0123abcd.js".to_owned(),
+    ] {
+        let r = get(&h, &path, &[]).await;
+        assert_eq!(r.header("cache-control"), Some("no-store"), "{path}: {r:?}");
+        assert!(r.header("etag").is_none(), "{path} has an etag: {r:?}");
+        assert!(
+            r.header("last-modified").is_none(),
+            "{path} has a date of change: {r:?}"
+        );
+        assert!(
+            r.header("expires").is_none() && r.header("age").is_none(),
+            "{path}: {r:?}"
+        );
+    }
+}
+
 // ── 11 to 14, 17: pairing ───────────────────────────────────────────────────
 
 pub async fn a_pairing_code_is_good_once(s: &dyn Subject) {
