@@ -62,6 +62,14 @@ import {
 } from 'appkit-web/folder-input';
 import { folderCache, forgetFolderCache, noCache, type ValueStore } from 'appkit-web/folder-cache';
 import { WATCH_MS, watchFolder, type Watcher, type WatchDeps } from 'appkit-web/watch';
+import { MAX_BYTES, blocks, problems as refProblems, taskProblems } from 'appkit-web/code-ref';
+
+// -- appkit-web/code-ref: the check of a code-ref/1 a page makes before it uses one ------------------------------------
+
+const refReasons: string[] = refProblems('{"schema":"code-ref/1"}');
+const refBlocks: string[] = blocks('```code-ref\n{}\n```');
+const refTask: Array<[number, string[]]> = taskProblems('');
+const refs = [MAX_BYTES, refReasons, refBlocks, refTask, refProblems(new Uint8Array(0))];
 
 // -- appkit-web/pack, as an app's build script calls it ------------------------------------------------------------
 
@@ -203,4 +211,5 @@ export const checked = [
   noPaths,
   cached,
   look,
+  refs,
 ] as const;

@@ -12,7 +12,8 @@
     "./folder-input": "./src/folder-input.js",
     "./folder-cache": "./src/folder-cache.js",
     "./watch": "./src/watch.js",
-    "./e2e": "./src/e2e.js"
+    "./e2e": "./src/e2e.js",
+    "./code-ref": "./src/code-ref.js"
   },
   "files": [
     "src",

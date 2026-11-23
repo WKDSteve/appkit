@@ -130,7 +130,7 @@ told to, the area says what the **task** may.
 Lua (tasks.nvim, docmap.nvim), Rust (tasks-desktop, docmap-desktop, ai-desktop) and TypeScript / JavaScript (web pages)
 each port `tools/check-code-ref.py` as one function from the bytes to a list of reasons, and a test that reads the
 goldens in `examples/` from this repository (a copy pinned by `appkit` tag, as for `wkd-intent/1`): every golden has
-no problems, and the refusals of `tools/test_check_code_ref.py` hold. Traps the reference tests name: the size is taken
+no problems, and the refusals of `tools/test_check_code_ref.py` hold. appkit itself holds two ports, so an app that takes the kit by its pin does not write a third: Rust in `appkit-core` (`appkit_core::code_ref`, with `problems`, `blocks`, `task_problems`) and JavaScript in `appkit-web` (`appkit-web/code-ref`), both tested against the goldens in `examples/` and the refusals below. Lua has none here (tasks.nvim and docmap.nvim hold theirs). Two differences of the ports, both on the stricter side or in the wording: the Rust JSON parser stops at a nesting depth of 128 and takes no lone surrogate escape, and JavaScript cannot tell `1.0` from `1`. Traps the reference tests name: the size is taken
 before parsing, a boolean is no integer, the excerpt is counted in bytes, a deeply nested document does not overflow
 the stack, a `code-ref` inside a longer fence is not a block.
 

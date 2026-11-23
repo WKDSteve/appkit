@@ -12,6 +12,7 @@ mod acl;
 pub mod authn;
 pub mod child;
 pub mod classes;
+pub mod code_ref;
 pub mod console;
 pub mod family;
 #[cfg(windows)]
