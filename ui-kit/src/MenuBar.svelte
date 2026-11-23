@@ -642,7 +642,7 @@
           >{item.kind === 'radio' ? (item.checked ? '●' : '') : item.kind === 'check' ? (item.checked ? '✓' : '') : ''}</span
         >
         <span class="mb-text">{item.label}</span>
-        {#if item.shortcut}<span class="mb-shortcut">{item.shortcut}</span>{/if}
+        {#if item.shortcut}<span class="mb-shortcut" translate="no">{item.shortcut}</span>{/if}
       </svelte:element>
     {/if}
   {/each}

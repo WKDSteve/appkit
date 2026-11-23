@@ -14,7 +14,7 @@
   {#if item.t === 'text'}
     {markHidden(item.text)}
   {:else if item.t === 'code'}
-    <code>{markHidden(item.text)}</code>
+    <code translate="no">{markHidden(item.text)}</code>
   {:else if item.t === 'br'}
     <br />
   {:else if item.t === 'em'}

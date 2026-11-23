@@ -14,4 +14,9 @@ describe('base.css: the size of a field', () => {
   it('lets textarea inherit the font of the page like the other fields', () => {
     expect(base).toMatch(/button,\s*input,\s*select,\s*textarea\s*\{[^}]*font:\s*inherit;/);
   });
+
+  it('balances the headings and gives compared numbers one width (CSS-09)', () => {
+    expect(base).toMatch(/h1,\s*h2,\s*h3\s*\{[^}]*text-wrap:\s*balance;/);
+    expect(base).toMatch(/table,\s*\.num,\s*\.count\s*\{[^}]*font-variant-numeric:\s*tabular-nums;/);
+  });
 });
