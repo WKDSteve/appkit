@@ -299,7 +299,17 @@ fn page_link(folder: &std::path::Path, relative: &str) -> Result<String, String>
 /// a call, without the machine)? A caller shows its button only when this holds.
 #[must_use]
 pub fn index_html_available(folder: &std::path::Path, relative: &str) -> bool {
-    page_link(folder, relative).is_ok()
+    available_on(
+        std::env::var("NVIM_MACHINE_ROLE").ok().as_deref(),
+        folder,
+        relative,
+    )
+}
+
+/// [`index_html_available`] for the machine with the role `role`: on the work machine nothing
+/// is available, so no caller shows a button that can only fail.
+fn available_on(role: Option<&str>, folder: &std::path::Path, relative: &str) -> bool {
+    refused_on(role).is_ok() && page_link(folder, relative).is_ok()
 }
 
 /// Open the page `relative` of a repository in the default browser: the one file named
@@ -585,6 +595,15 @@ mod tests {
         for role in [None, Some(""), Some("default"), Some("workstations")] {
             assert!(refused_on(role).is_ok(), "{role:?}");
         }
+    }
+
+    #[test]
+    fn on_the_work_machine_no_page_is_available() {
+        let dir = repo();
+        assert!(available_on(None, &dir, "index.html"));
+        assert!(available_on(Some("default"), &dir, "index.html"));
+        assert!(!available_on(Some("workstation"), &dir, "index.html"));
+        assert!(!available_on(None, &dir, "gone/index.html"));
     }
 
     #[cfg(windows)]
