@@ -30,6 +30,16 @@ import {
   type Watch,
 } from 'appkit-web/e2e';
 import {
+  freePort,
+  pairingLink,
+  removeTree,
+  sessionToken,
+  stopChild,
+  type ChildLike,
+  type HubTarget,
+  type RemoveOptions,
+} from 'appkit-web/e2e-node';
+import {
   displayName,
   grantAccess,
   idbKeyValue,
@@ -213,3 +223,16 @@ export const checked = [
   look,
   refs,
 ] as const;
+
+// -- appkit-web/e2e-node, as an app's Playwright setup calls it ---------------------------------------------------------
+
+const hubTarget: HubTarget = { exe: 'app-hub', env: (config) => ({ APP_CONFIG: config }), origin: 'http://127.0.0.1:1' };
+const removeOptions: RemoveOptions = { tries: 3, pauseMs: 1, rm: () => undefined };
+const child: ChildLike = { exitCode: null, signalCode: null, once: () => undefined, kill: () => undefined };
+const nodeSide: Array<Promise<unknown>> = [
+  removeTree('x', removeOptions),
+  stopChild(child, 1),
+  freePort(),
+  sessionToken('cfg', hubTarget),
+];
+const link: string = pairingLink('cfg', hubTarget);

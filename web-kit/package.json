@@ -13,6 +13,7 @@
     "./folder-cache": "./src/folder-cache.js",
     "./watch": "./src/watch.js",
     "./e2e": "./src/e2e.js",
+    "./e2e-node": "./src/e2e-node.js",
     "./code-ref": "./src/code-ref.js"
   },
   "files": [
