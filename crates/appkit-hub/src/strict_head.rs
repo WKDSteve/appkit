@@ -83,7 +83,13 @@ impl HeadGuard {
         let mut i = 0;
         while i < bytes.len() {
             match self.state {
-                State::Lost => return,
+                State::Lost => {
+                    // Fail closed: what follows a message that cannot be framed is not read as a message
+                    // (hyper refuses NUL and closes), so a bare LF cannot hide behind a framing the reader
+                    // lost but hyper accepted.
+                    bytes[i..].fill(0);
+                    return;
+                }
                 State::Body(left) => {
                     let n = usize::try_from(left)
                         .unwrap_or(usize::MAX)
@@ -113,7 +119,7 @@ impl HeadGuard {
                     if bytes[i] != want {
                         // hyper refuses a chunk that does not end in CRLF.
                         self.state = State::Lost;
-                        return;
+                        continue;
                     }
                     i += 1;
                     self.state = if seen == 0 {
@@ -125,10 +131,8 @@ impl HeadGuard {
                 State::Head | State::ChunkSize | State::Trailer => {
                     let b = bytes[i];
                     i += 1;
+                    // A bare LF ends here in `Lost`; the next turn of the loop clears the rest.
                     self.line_byte(b, &mut bytes[i - 1]);
-                    if self.state == State::Lost {
-                        return;
-                    }
                 }
             }
         }
@@ -343,19 +347,27 @@ mod tests {
             .collect()
     }
 
+    /// What hyper reads when the reader refuses at byte `cut`: everything before it as sent, the rest NUL.
+    fn refused_at(input: &[u8], cut: usize) -> Vec<u8> {
+        let mut out = input[..cut].to_vec();
+        out.resize(input.len(), 0);
+        out
+    }
+
     #[test]
-    fn a_bare_lf_in_a_header_becomes_nul() {
+    fn a_bare_lf_in_a_header_is_refused() {
         let input = b"GET / HTTP/1.1\r\nX-Note: a\nX-Smuggled: 1\r\n\r\n";
+        let cut = b"GET / HTTP/1.1\r\nX-Note: a".len();
         for out in all_steps(input) {
-            assert_eq!(out, b"GET / HTTP/1.1\r\nX-Note: a\0X-Smuggled: 1\r\n\r\n");
+            assert_eq!(out, refused_at(input, cut));
         }
     }
 
     #[test]
-    fn a_bare_lf_in_the_request_line_becomes_nul() {
+    fn a_bare_lf_in_the_request_line_is_refused() {
         let input = b"GET / HTTP/1.1\nHost: x\r\n\r\n";
         for out in all_steps(input) {
-            assert_eq!(out, b"GET / HTTP/1.1\0Host: x\r\n\r\n");
+            assert_eq!(out, refused_at(input, b"GET / HTTP/1.1".len()));
         }
     }
 
@@ -371,10 +383,9 @@ mod tests {
     fn a_body_with_bare_lf_passes_and_the_next_head_is_checked() {
         let input = b"POST / HTTP/1.1\r\nContent-Length: 5\r\n\r\na\nb\nc\
                       GET / HTTP/1.1\r\nX: a\nb\r\n\r\n";
-        let expected = b"POST / HTTP/1.1\r\nContent-Length: 5\r\n\r\na\nb\nc\
-                         GET / HTTP/1.1\r\nX: a\0b\r\n\r\n";
+        let cut = input.len() - b"\nb\r\n\r\n".len();
         for out in all_steps(input) {
-            assert_eq!(out, expected);
+            assert_eq!(out, refused_at(input, cut));
         }
     }
 
@@ -382,10 +393,9 @@ mod tests {
     fn a_chunked_body_with_bare_lf_passes_and_the_next_head_is_checked() {
         let input = b"POST / HTTP/1.1\r\ntransfer-encoding: Chunked\r\n\r\n3\r\na\nb\r\n2;ext=1\r\n\n\n\r\n0\r\nT: v\r\n\r\n\
                       GET / HTTP/1.1\r\nX: a\nb\r\n\r\n";
-        let expected = b"POST / HTTP/1.1\r\ntransfer-encoding: Chunked\r\n\r\n3\r\na\nb\r\n2;ext=1\r\n\n\n\r\n0\r\nT: v\r\n\r\n\
-                         GET / HTTP/1.1\r\nX: a\0b\r\n\r\n";
+        let cut = input.len() - b"\nb\r\n\r\n".len();
         for out in all_steps(input) {
-            assert_eq!(out, expected);
+            assert_eq!(out, refused_at(input, cut));
         }
     }
 
@@ -411,6 +421,27 @@ mod tests {
     }
 
     #[test]
+    fn after_unclear_framing_nothing_passes_that_could_hide_a_bare_lf() {
+        // hyper may accept a message the reader cannot frame (here two Transfer-Encoding lines). The
+        // reader must not then wave through whatever follows: a bare LF behind it would be read as two
+        // headers by hyper and as one by a proxy.
+        let head =
+            b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let rest = b"0\r\n\r\nGET / HTTP/1.1\r\nX: a\nX-Smuggled: 1\r\n\r\n";
+        for step in [1, 5, 1000] {
+            let mut input = head.to_vec();
+            input.extend_from_slice(rest);
+            let out = scanned(&input, step);
+            assert_eq!(&out[..head.len()], head, "step {step}");
+            assert!(
+                !out[head.len()..].contains(&b'\n'),
+                "step {step}: {:?}",
+                String::from_utf8_lossy(&out)
+            );
+        }
+    }
+
+    #[test]
     fn equal_content_lengths_are_one_length() {
         let mut guard = HeadGuard::new();
         let mut bytes =
@@ -428,7 +459,8 @@ mod tests {
             .write_all(b"GET / HTTP/1.1\r\nA: b\nC: d\r\n\r\n")
             .await
             .unwrap();
-        let expected = b"GET / HTTP/1.1\r\nA: b\0C: d\r\n\r\n";
+        let sent = b"GET / HTTP/1.1\r\nA: b\nC: d\r\n\r\n";
+        let expected = refused_at(sent, b"GET / HTTP/1.1\r\nA: b".len());
         let mut got = vec![0u8; expected.len()];
         // A wrong length must fail the test, not hang it.
         tokio::time::timeout(
