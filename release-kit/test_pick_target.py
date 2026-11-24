@@ -178,3 +178,17 @@ class Channels(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CiRunsQuery(unittest.TestCase):
+    """The query for the CI runs of a branch."""
+
+    def test_the_query_does_not_filter_by_status(self):
+        # GitHub's `status=completed` filter leaves out a run that is completed and green (seen on 2026-11-24:
+        # tasks-desktop 6ef892c was missing, so the rolling build took an older green commit). A run
+        # with a conclusion is completed, so the conclusion alone decides.
+        url = pick_target.ci_runs_url("o/r", "ci.yml", "main")
+        self.assertNotIn("status=", url)
+        self.assertIn("event=push", url)
+        self.assertIn("branch=main", url)
+        self.assertIn("workflows/ci.yml/runs", url)

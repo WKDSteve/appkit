@@ -142,6 +142,15 @@ def _forward(target: str, built: str | None, is_descendant: Callable[[str, str],
     return target, f"{target[:7]} (built: {built[:7]})"
 
 
+def ci_runs_url(repo: str, workflow: str, branch: str) -> str:
+    """The API path of the push runs of the CI workflow on `branch`.
+
+    No `status=completed` filter: GitHub leaves out runs that are completed and green (tasks-desktop 6ef892c on
+    2026-11-24), which made `latest` build an older commit. A run with a conclusion is completed; the caller
+    selects on the conclusion."""
+    return f"repos/{repo}/actions/workflows/{workflow}/runs?branch={branch}&event=push&per_page=100"
+
+
 def gh(*args: str) -> str:
     return subprocess.run(["gh", *args], check=True, capture_output=True, text=True).stdout
 
@@ -195,8 +204,7 @@ def main(argv: list[str]) -> int:
     def ci_runs(conclusion: str, field: str) -> list[str]:
         return gh(
             "api",
-            f"repos/{repo}/actions/workflows/{args.ci_workflow}/runs?branch={args.branch}&event=push"
-            "&status=completed&per_page=100",
+            ci_runs_url(repo, args.ci_workflow, args.branch),
             "--jq", f'.workflow_runs[] | select(.conclusion == "{conclusion}") | .{field}',
         ).split()
 
