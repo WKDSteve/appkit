@@ -974,6 +974,22 @@ pub async fn an_ambiguous_message_is_refused_and_a_proxy_is_not_believed(s: &dyn
             .into_bytes(),
         ),
         (
+            "a bare LF in a header value (a second header behind it)",
+            format!(
+                "GET {} HTTP/1.1\r\nHost: {host}\r\nX-Note: a\nX-Smuggled: 1\r\nConnection: close\r\n\r\n",
+                h.route("hello")
+            )
+            .into_bytes(),
+        ),
+        (
+            "a bare LF in the request line",
+            format!(
+                "GET {} HTTP/1.1\nHost: {host}\r\nConnection: close\r\n\r\n",
+                h.route("hello")
+            )
+            .into_bytes(),
+        ),
+        (
             "two Content-Length headers that differ",
             format!(
                 "POST {path} HTTP/1.1\r\nHost: {host}\r\nOrigin: http://{host}\r\nContent-Type: application/json\r\n\

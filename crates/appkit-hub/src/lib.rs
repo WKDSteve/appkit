@@ -85,6 +85,7 @@ pub mod setup;
 pub mod shell_link;
 pub mod store;
 pub mod streams;
+pub mod strict_head;
 pub mod usage;
 pub mod vaults;
 #[cfg(windows)]

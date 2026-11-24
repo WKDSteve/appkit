@@ -438,7 +438,12 @@ async fn accept_loop(
                 .header_read_timeout(header_timeout)
                 .max_buf_size(head_bytes)
                 .keep_alive(true)
-                .serve_connection(TokioIo::new(stream), service);
+                // A bare LF in a head is not read as a line end (a proxy in front may read it as part of
+                // a value): see `strict_head`.
+                .serve_connection(
+                    TokioIo::new(crate::strict_head::StrictHead::new(stream)),
+                    service,
+                );
             tokio::pin!(conn);
             tokio::select! {
                 _ = conn.as_mut() => {}
