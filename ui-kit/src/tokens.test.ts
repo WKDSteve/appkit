@@ -104,3 +104,32 @@ describe('the colours of the areas', () => {
     }
   });
 });
+
+// The colours of text, as they are used on the surfaces, in both themes: what axe measures in a browser, computed here
+// from the file because the tests of the kit run in jsdom, which has no layout and no colours.
+describe('the colours of text', () => {
+  const pages = [token('bg'), ...surfaces];
+  const texts: [string, number][] = [
+    ['text', 7],
+    ['muted', 4.5],
+    ['accent', 4.5],
+    ['ok', 4.5],
+    ['warn', 4.5],
+    ['bad', 4.5],
+  ];
+  for (const [name, least] of texts) {
+    it(`--${name} has at least ${least}:1 on the page and on both surfaces in both themes`, () => {
+      const colour = token(name);
+      for (const theme of themes) {
+        for (const page of pages) {
+          expect(contrast(colour[theme], page[theme]), `--${name} ${theme} on ${page[theme]}`).toBeGreaterThanOrEqual(least);
+        }
+      }
+    });
+  }
+
+  it('--accent-text has at least 4.5:1 on --accent in both themes', () => {
+    const [on, accent] = [token('accent-text'), token('accent')];
+    for (const theme of themes) expect(contrast(on[theme], accent[theme]), theme).toBeGreaterThanOrEqual(4.5);
+  });
+});

@@ -65,6 +65,7 @@
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
+    "axe-core": "4.11.4",
     "jsdom": "^30.1.2",
     "modern-web-guidance": "1.0.0",
     "svelte": "^5.57.1",
