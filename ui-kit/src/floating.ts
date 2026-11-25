@@ -66,6 +66,8 @@ export type FloatAction = ReturnType<typeof floatingIn>;
 function floatingUnder(storeKey: string, node: HTMLDialogElement, params: FloatingParams) {
   let current = params;
   let added: HTMLButtonElement | null = null;
+  /** What the handle does in words (the arrow keys), kept in the page for a screen reader: the hint popup is not read. */
+  let described: HTMLSpanElement | null = null;
   let wasOpen = false;
   /** The drag under way: of a handle (`move`), or of the browser's grip (`grip`, followed only to its release). */
   let drag: { mode: 'move'; id: number; sx: number; sy: number; start: Box } | { mode: 'grip'; start: Box } | null = null;
@@ -220,6 +222,7 @@ function floatingUnder(storeKey: string, node: HTMLDialogElement, params: Floati
     if (!added) return;
     added.setAttribute('aria-label', current.moveLabel);
     added.setAttribute('data-hint', current.moveHint);
+    if (described) described.textContent = current.moveHint;
   }
 
   /**
@@ -244,9 +247,13 @@ function floatingUnder(storeKey: string, node: HTMLDialogElement, params: Floati
     icon.setAttribute('aria-hidden', 'true');
     icon.textContent = '✥';
     added.append(icon);
+    described = document.createElement('span');
+    described.className = 'sr-only';
+    described.id = `float-move-${Math.random().toString(36).slice(2, 9)}`;
+    added.setAttribute('aria-describedby', described.id);
     label();
     // First in the order of the focus, as it is drawn first: in the upper right corner, at the head of the float.
-    node.prepend(added);
+    node.prepend(added, described);
   }
 
   const watch = new MutationObserver(() => {
@@ -292,6 +299,7 @@ function floatingUnder(storeKey: string, node: HTMLDialogElement, params: Floati
       window.removeEventListener('pointerup', up);
       window.removeEventListener('resize', fit);
       added?.remove();
+      described?.remove();
     },
   };
 }

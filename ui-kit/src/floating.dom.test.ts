@@ -78,4 +78,58 @@ describe('floatingIn', () => {
     action.destroy();
     dialog.remove();
   });
+
+  it('moves and sizes with the arrow keys, and puts back with Home (the alternative to dragging)', () => {
+    const dialog = document.createElement('dialog');
+    document.body.append(dialog);
+    const action = floatingIn('an-app.floats')(dialog, { kind: 'docs', moveLabel: 'Move', moveHint: 'Arrows move' });
+    dialog.setAttribute('open', '');
+    // The box follows what the action wrote, as a browser lays it out.
+    dialog.getBoundingClientRect = () =>
+      ({
+        left: parseFloat(dialog.style.left || '100'),
+        top: parseFloat(dialog.style.top || '100'),
+        width: parseFloat(dialog.style.width || '200'),
+        height: parseFloat(dialog.style.height || '200'),
+      }) as DOMRect;
+    const handle = dialog.querySelector('.float-move') as HTMLElement;
+    const press = (key: string, shiftKey = false) =>
+      handle.dispatchEvent(new KeyboardEvent('keydown', { key, shiftKey, bubbles: true, cancelable: true }));
+    press('ArrowRight');
+    const moved = parseFloat(dialog.style.left);
+    expect(moved).toBeGreaterThan(100);
+    expect(dialog.style.width).toBe('');
+    press('ArrowRight', true);
+    expect(parseFloat(dialog.style.width)).toBeGreaterThan(200);
+    press('Home');
+    expect(dialog.style.left).toBe('');
+    expect(window.localStorage.getItem('an-app.floats')).toBe('{}');
+    action.destroy();
+    dialog.remove();
+  });
+
+  it('names what the handle does for a screen reader, not only in the hint popup', () => {
+    const dialog = document.createElement('dialog');
+    document.body.append(dialog);
+    const action = floatingIn('an-app.floats')(dialog, { kind: 'docs', moveLabel: 'Move', moveHint: 'Arrows move' });
+    const handle = dialog.querySelector('.float-move') as HTMLElement;
+    const described = document.getElementById(handle.getAttribute('aria-describedby') ?? '');
+    expect(described?.textContent).toBe('Arrows move');
+    action.update({ kind: 'docs', moveLabel: 'Verschieben', moveHint: 'Pfeiltasten' });
+    expect(described?.textContent).toBe('Pfeiltasten');
+    action.destroy();
+    expect(dialog.querySelector('.sr-only')).toBeNull();
+    dialog.remove();
+  });
+
+  it('draws the handle first in the order of the focus', () => {
+    const dialog = document.createElement('dialog');
+    const input = document.createElement('input');
+    dialog.append(input);
+    document.body.append(dialog);
+    const action = floatingIn('an-app.floats')(dialog, { kind: 'docs', moveLabel: 'Move', moveHint: 'Arrows move' });
+    expect(dialog.firstElementChild?.classList.contains('float-move')).toBe(true);
+    action.destroy();
+    dialog.remove();
+  });
 });
