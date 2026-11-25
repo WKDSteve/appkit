@@ -93,7 +93,7 @@
     {#each shown as item (item.key)}
       <li>
         <p class="what">{show(item.title)}</p>
-        {#if item.id}<p class="id"><code translate="no">{show(item.id)}</code></p>{/if}
+        {#if item.id}<p class="id" translate="no"><code translate="no">{show(item.id)}</code></p>{/if}
         {#each item.notes as note, i (i)}<p class="note">{note}</p>{/each}
         {#if item.rows.length > 0}
           <table>

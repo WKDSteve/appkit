@@ -12,6 +12,8 @@
     "./tokens.css": "./src/tokens.css",
     "./base.css": "./src/base.css",
     "./backdrop": "./src/backdrop.ts",
+    "./checks/formHints": "./src/checks/formHints.ts",
+    "./checks/translate": "./src/checks/translate.ts",
     "./cache": "./src/cache.ts",
     "./client": "./src/client.ts",
     "./conflicts": "./src/conflicts.ts",
