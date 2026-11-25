@@ -11,6 +11,9 @@ export {
   type Theme,
 } from './session.svelte';
 export { signOut } from './signout';
+export { focusFirstInvalid } from './formErrors';
+export { leaveGuard, type LeaveOptions } from './leaveGuard';
+export { warnBeforeUnload } from './unsaved';
 export {
   cacheableClass,
   indexedDbStore,

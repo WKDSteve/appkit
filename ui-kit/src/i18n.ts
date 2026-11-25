@@ -99,6 +99,9 @@ export const kitTexts = {
     'kit.help.hint.repo': 'Opens the source and the issues on GitHub in the browser',
     'kit.help.hint.license': 'Opens the license text in the browser',
     'kit.select.clear': 'Remove the selection {label}',
+    'kit.leave.confirm': 'Discard what you entered?',
+    'kit.leave.discard': 'Discard',
+    'kit.leave.keep': 'Keep editing',
   },
   de: {
     'kit.ago.seconds': '{n} s',
@@ -127,6 +130,9 @@ export const kitTexts = {
     'kit.help.hint.repo': 'Öffnet den Quelltext und die Issues auf GitHub im Browser',
     'kit.help.hint.license': 'Öffnet den Lizenztext im Browser',
     'kit.select.clear': 'Auswahl {label} entfernen',
+    'kit.leave.confirm': 'Eingaben verwerfen?',
+    'kit.leave.discard': 'Verwerfen',
+    'kit.leave.keep': 'Weiter bearbeiten',
   },
 } as const satisfies Record<string, Dictionary>;
 

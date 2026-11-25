@@ -110,6 +110,10 @@ pre {
 .info:hover {
   color: var(--text);
 }
+.field-error {
+  display: block;
+  color: var(--bad);
+}
 .sr-only {
   position: absolute;
   width: 1px;
