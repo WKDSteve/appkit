@@ -89,8 +89,9 @@ pre {
 .info {
   display: inline-grid;
   place-items: center;
-  min-width: 1.4rem;
-  height: 1.4rem;
+  /* A target of at least 24 px, 44 px for a finger. */
+  min-inline-size: 24px;
+  min-block-size: 24px;
   padding: 0;
   background: transparent;
   color: var(--muted);
@@ -99,6 +100,12 @@ pre {
   font-size: 0.8rem;
   line-height: 1;
   cursor: help;
+}
+@media (pointer: coarse) {
+  .info {
+    min-inline-size: 44px;
+    min-block-size: 44px;
+  }
 }
 .info:hover {
   color: var(--text);

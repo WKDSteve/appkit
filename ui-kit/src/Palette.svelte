@@ -158,6 +158,8 @@
     border-radius: var(--radius);
     padding: 0.5rem 0.6rem;
     font: inherit;
+    /* Not below 16 px: iOS Safari zooms into the page when a smaller field takes the focus. */
+    font-size: max(1rem, var(--font-size));
   }
   ul {
     list-style: none;
