@@ -1,0 +1,6 @@
+{
+  "$schema": "https://raw.githubusercontent.com/WKDSteve/docmap.nvim/main/docs/docmap.schema.json",
+  "exclude": [
+    "./mobile-plugin/android/build.gradle.kts"
+  ]
+}

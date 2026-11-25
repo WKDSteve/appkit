@@ -1,3 +1,5 @@
+// The Vitest setup of the UI kit: Svelte, the DOM-capable build for component tests and the stylesheets the tests read.
+
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig } from 'vitest/config';
 

@@ -1,6 +1,7 @@
 // The example page of the menu bar with submenus, built and checked by `../menubar.browser.cjs`: the menu View with
 // the submenu of the learning plans (as tasks-desktop will have it), and the last menu with a submenu that has no
 // room on the right.
+
 import '../../src/tokens.css';
 import '../../src/base.css';
 import './example.css';
