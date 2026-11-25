@@ -1,20 +1,19 @@
-//! The phone side of an app's hub (the mobile basis of the kit, rules `MOB-*` and `MSEC-*` of the ruleset `mobile`).
+//! The phone side of an app's hub (the mobile basis of the kit).
 //!
 //! A phone app of a family (testing mobile, later the others) is a client of the hub on the PC. This crate is what
 //! every such app needs between its page and that hub, written once:
 //!
 //! * [`way`]: the three ways to the data (Tailscale Serve, an SSH tunnel, a vault cloned on the phone) behind one
-//!   description; the page knows which one is in use (`MUI-05`) but never builds an address itself;
+//!   description; the page knows which one is in use but never builds an address itself;
 //! * [`link`]: pairing with a one-time code, the device login with a key the phone keeps (a [`link::Signer`]: the
-//!   Android Keystore in an app, a key in memory in tests), the check that the hub is the one paired with
-//!   (`MSEC-04`), and every request with a time limit and a byte limit (`MSEC-08`); the session token stays in memory
-//!   (`MSEC-01`);
-//! * [`cache`]: the kept copy of what the hub answered, for the start and for a phone without a way to the hub
-//!   (`MOB-08`); it holds only what the hub sent this device;
-//! * [`state`]: what the phone keeps about its pairing, versioned and written atomically (`MSEC-13`), and wholly
-//!   removed on unpairing (`MSEC-12`).
+//!   Android Keystore in an app, a key in memory in tests), the check that the hub is the one paired with,
+//!   and every request with a time limit and a byte limit; the session token stays in memory;
+//! * [`cache`]: the kept copy of what the hub answered, for the start and for a phone without a way to the
+//!   hub; it holds only what the hub sent this device;
+//! * [`state`]: what the phone keeps about its pairing, versioned and written atomically, and wholly
+//!   removed on unpairing.
 //!
-//! The hub decides what a phone may see and do (`MOB-02`, `MOB-03`); nothing here filters or grants. What the page
+//! The hub decides what a phone may see and do; nothing here filters or grants. What the page
 //! shows comes through [`link::Link::fetch`], which only reaches the routes of the app it was made for.
 
 pub mod cache;

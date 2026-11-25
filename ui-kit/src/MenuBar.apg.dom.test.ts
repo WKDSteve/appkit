@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// APG menubar pattern (rule APG-03; WCAG 2.1.1, 2.4.3, 4.1.2) for the menu bar: the key sequence of the pattern.
+// APG menubar pattern (WCAG 2.1.1, 2.4.3, 4.1.2) for the menu bar: the key sequence of the pattern.
 import { flushSync, mount, tick, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import MenuBar from './MenuBar.svelte';
@@ -37,7 +37,7 @@ const trigger = (id: string) => document.querySelector<HTMLButtonElement>(`butto
 const popup = (id: string) => document.querySelector(`[data-menu="${id}"]`);
 const here = () => document.activeElement?.textContent?.trim();
 
-describe('APG-03 menubar', () => {
+describe('APG menubar pattern', () => {
   it('has the roles of the pattern and one tab stop for the whole bar', () => {
     const bar = document.querySelector('[role="menubar"]')!;
     expect(bar.getAttribute('aria-label')).toBe('Main');

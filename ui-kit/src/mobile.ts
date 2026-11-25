@@ -1,4 +1,4 @@
-// The page side of the mobile basis (rules `MOB-06`, `MUI-05`, `MOB-09` of the ruleset `mobile`). The page of a phone
+// The page side of the mobile basis (the rules for a phone app). The page of a phone
 // app never speaks to the hub itself: the shell around it (`appkit-mobile` in a Tauri app) holds the way, the device key
 // and the session, and the page asks it for a route of its app over the bridge. `ipcFetch` turns that bridge into a
 // `fetch`, so the app's own client (`HubClient` and what extends it) works unchanged; the page sees the way only as a word
@@ -30,10 +30,10 @@ export function isWay(value: unknown): value is Way {
 
 /**
  * Why the shell had no answer for the page, as one word (`appkit_mobile::link::LinkError`): the page shows this state
- * and the next step, never an empty list (`MOB-09`).
+ * and the next step, never an empty list.
  *
  * - `unreachable`: nothing reached the hub (Tailscale off, tunnel down, PC asleep); trying again is safe.
- * - `answer_lost`: it may have arrived; a write is not sent again by itself (`MOB-07`).
+ * - `answer_lost`: it may have arrived; a write is not sent again by itself.
  * - `too_large`: the answer was over the limit.
  * - `unpaired`: the hub does not take this phone any more (revoked): pair again.
  * - `other_hub`: another program answers where the hub was: nothing was signed; pair again.
@@ -84,7 +84,7 @@ export interface BridgeResponse {
   etag: string | null;
   body: string;
   /**
-   * The hub was not reached and this is the copy the shell kept (`MOB-08`): when the hub sent it, seconds since 1970.
+   * The hub was not reached and this is the copy the shell kept: when the hub sent it, seconds since 1970.
    * The `Response` carries it as `X-Kept-At`, so the page can say how old what it shows is.
    */
   keptAt?: number | null;
@@ -151,7 +151,7 @@ export function ipcFetch(bridge: Bridge): typeof fetch {
   };
 }
 
-/** What the page shows about the connection, always (`MUI-05`): the way, whether it answered, and how old the data is. */
+/** What the page shows about the connection, always: the way, whether it answered, and how old the data is. */
 export interface Connection {
   way: Way;
   /** `null`: not asked yet. */

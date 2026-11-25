@@ -1,6 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Notices of the hub (a red main), asked for when the person turns them on (Android 13 and later, AND-01). -->
+    <!-- Notices of the hub (a red main), asked for when the person turns them on (Android 13 and later). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application>

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # release-kit/prepare.sh: the work of the action release-kit/prepare (see prepare/action.yml).
 #
-# Which commit gets the rolling build `latest`? The newest commit of the branch whose CI run is green (rule
-# GIT-08), not the tip: see pick_target.py. Then: does the pre-release `latest` exist?
+# Which commit gets the rolling build `latest`? The newest commit of the branch whose CI run is green, not the tip: see
+# pick_target.py. Then: does the pre-release `latest` exist?
 #
 # It is in a script of its own because the action runs it twice over: with `bash` on Linux runners and with Git
 # Bash by its full path on Windows runners (on a self-hosted Windows runner `shell: bash` is the WSL launcher).

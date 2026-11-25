@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Rule APG-06 and WCAG 1.4.13 (content on hover or focus): the popup shows on focus and on hover, is hoverable
+// The tooltip pattern and WCAG 1.4.13 (content on hover or focus): the popup shows on focus and on hover, is hoverable
 // (stays while the pointer is on it), is dismissible with Escape without moving the focus, and persists until the
 // focus or the pointer leaves. It is a `role="tooltip"` that describes its element.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -30,7 +30,7 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-describe('APG-06 tooltip', () => {
+describe('APG tooltip pattern', () => {
   it('is a tooltip that describes its element, with the text of the hint', () => {
     const { a, tip, tab } = page();
     expect(tip.getAttribute('role')).toBe('tooltip');

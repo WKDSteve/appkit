@@ -1,7 +1,7 @@
 //! What the phone keeps about its pairing: the way and address of the hub, the app, the device id and the hub's id.
-//! Nothing secret (the key is the platform's, the session lives in memory), but read back as untrusted (`MSEC-13`):
+//! Nothing secret (the key is the platform's, the session lives in memory), but read back as untrusted:
 //! a file of another version, a broken one or one larger than allowed counts as no pairing, and is removed. Written
-//! atomically (a file beside it, then renamed). Forgetting removes it and checks that it is gone (`MSEC-12`).
+//! atomically (a file beside it, then renamed). Forgetting removes it and checks that it is gone.
 
 use std::path::{Path, PathBuf};
 
@@ -48,7 +48,7 @@ struct File {
     paired: Paired,
 }
 
-/// The file of the pairing, in the app's private data folder (excluded from backups by the app's manifest, `AND-04`).
+/// The file of the pairing, in the app's private data folder (excluded from backups by the app's manifest).
 #[derive(Debug, Clone)]
 pub struct StateFile {
     path: PathBuf,

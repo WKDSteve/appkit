@@ -116,13 +116,13 @@ BY_HAND = [
      "matrix is red on the_page_captures_as_the_subject_says; fn tailnet_name() -> Some(<name>) where a subject "
      "starts the hub with GuardRules::with_tailnet_name, so the matrix asks the page through that host too"),
     ("v0.74.0", ("full", "kit", "cargo"),
-     "rolling.yml builds the newest green commit of main (rule GIT-08), not the tip: on: gains workflow_dispatch with "
+     "rolling.yml builds the newest green commit of main, not the tip: on: gains workflow_dispatch with "
      "an optional input sha; the concurrency block becomes `group: rolling` with `cancel-in-progress: false`; "
      "the prepare step gets `sha: ${{ github.event.inputs.sha }}` (empty after a workflow_run) and the job `if` "
      "runs for a workflow_dispatch too (`github.event_name == 'workflow_dispatch' || (conclusion == 'success' && "
      "event == 'push')`); the model is release-kit/README.md"),
     ("v0.75.0", ("full", "kit", "cargo"),
-     "rolling channels (rule GIT-08): the prepare step of rolling.yml gets the line `channels: latest` (the channels "
+     "rolling channels: the prepare step of rolling.yml gets the line `channels: latest` (the channels "
      "the app has switched on; default latest), and the README of the app names them. nightly = add `on: push: "
      "branches: [main]`, stable = add `on: schedule` (weekly) and a workflow_dispatch input; both then pass "
      "`channel:` to prepare and `tag:` to publish (the model is release-kit/README.md, `More rolling channels`)"),

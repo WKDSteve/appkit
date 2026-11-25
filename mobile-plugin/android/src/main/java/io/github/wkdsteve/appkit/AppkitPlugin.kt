@@ -1,13 +1,13 @@
 // The Android side of appkit's mobile basis (docs/MOBILE.md). The shell of an app (Rust) calls it; the page never does
 // (the plugin names no command of the page). It holds what only the platform can hold or do:
 //
-// - the device keys in the Android Keystore (AND-05, MSEC-01): a login key, and a trigger key that signs only after
+// - the device keys in the Android Keystore: a login key, and a trigger key that signs only after
 //   the biometrics or the device lock, bound by a CryptoObject; neither can be exported, the hub knows the public halves;
 // - the QR code of a pairing, read with ZXing (no network, no analytics);
 // - the folder of a vault cloned on the phone (the Storage Access Framework), read only and bounded;
 // - UnifiedPush: the endpoint a distributor gives, and the notice for a message (the kind only, never content).
 //
-// Nothing is logged with content (AND-11). Every refusal is a short word the shell turns into a state of the page.
+// Nothing is logged with content. Every refusal is a short word the shell turns into a state of the page.
 
 package io.github.wkdsteve.appkit
 
@@ -521,7 +521,7 @@ object Push {
         prefs(context).edit().clear().apply()
     }
 
-    /** The notice of a message: the words the app gave, never what the message holds (PWA-06). */
+    /** The notice of a message: the words the app gave, never what the message holds. */
     fun notify(context: Context) {
         val p = prefs(context)
         val title = p.getString("title", null) ?: return

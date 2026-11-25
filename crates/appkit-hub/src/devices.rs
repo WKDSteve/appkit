@@ -10,11 +10,11 @@
 //!
 //! Nothing secret is in the file: public keys, names the person gave and times. A key never leaves the device.
 //!
-//! Each device has a level (`MOB-03`): read, create, change, trigger. A new device gets the app's default (`create`
+//! Each device has a level: read, create, change, trigger. A new device gets the app's default (`create`
 //! unless the app says otherwise; never `trigger`); the PC raises or lowers it. A route the app released for devices
 //! names the level it needs, and the guard checks it per request. `trigger` (something with an effect beyond the vault:
 //! a run on the PC) also needs a confirmation on the device for each request: a second key, which the phone keeps bound
-//! to its biometrics or its lock (`AND-05`), signs the request itself (its method, path and body) with a fresh
+//! to its biometrics or its lock, signs the request itself (its method, path and body) with a fresh
 //! challenge. A device paired without that key cannot trigger, whatever its level.
 
 use std::path::{Path, PathBuf};
@@ -63,7 +63,7 @@ pub fn confirm_message(
     )
 }
 
-/// What a device may do, from the least to the most (`MOB-03`). The guard compares the level of the device with the
+/// What a device may do, from the least to the most. The guard compares the level of the device with the
 /// level a route needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -127,7 +127,7 @@ struct Stored {
 #[derive(Debug, Serialize, Deserialize)]
 struct File {
     schema: u32,
-    /// The id of this hub, made once with the list: a device sends nothing to a hub that names another (`MSEC-04`).
+    /// The id of this hub, made once with the list: a device sends nothing to a hub that names another.
     /// A list written before it was there gets one when it is opened.
     #[serde(default)]
     hub: Option<String>,

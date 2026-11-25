@@ -685,7 +685,7 @@ struct RegOutput {
 }
 
 impl RegOutput {
-    /// `": <the first line of the complaint>"`, or nothing. The reason of a refusal (rule RS-06) is
+    /// `": <the first line of the complaint>"`, or nothing. The reason of a refusal is
     /// not thrown away; it goes to the terminal of the person only, cleaned of control characters.
     fn reason(&self) -> String {
         let line = self

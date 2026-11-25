@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Decide which commit the rolling build `latest` is made from (rule GIT-08).
+"""Decide which commit the rolling build `latest` is made from.
 
     pick_target.py --repo OWNER/NAME --branch main --ci-workflow ci.yml [--channel latest|nightly|stable]
                    [--channels "latest nightly stable"] [--requested SHA]
 
-Three rolling channels (rule GIT-08), each only moving forward: a target that is not a descendant of the commit
+Three rolling channels, each only moving forward: a target that is not a descendant of the commit
 `version.json` of the channel's own release names builds nothing.
 
   latest   the newest commit of the branch whose CI run is green, not the tip: a tip that is red, or whose CI is

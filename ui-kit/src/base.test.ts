@@ -3,7 +3,7 @@ import base from './base.css?raw';
 import docsDialog from './DocsDialog.svelte?raw';
 import palette from './Palette.svelte?raw';
 
-// A field is never smaller than 16 px (FORM-05): the rule for input, select and textarea comes after the one that
+// A field is never smaller than 16 px: the rule for input, select and textarea comes after the one that
 // lets them inherit the size of the text, and it names the three of them.
 describe('base.css: the size of a field', () => {
   it('sets at least 1rem for input, select and textarea, after the inherit rule', () => {
@@ -17,7 +17,7 @@ describe('base.css: the size of a field', () => {
     expect(base).toMatch(/button,\s*input,\s*select,\s*textarea\s*\{[^}]*font:\s*inherit;/);
   });
 
-  it('balances the headings and gives compared numbers one width (CSS-09)', () => {
+  it('balances the headings and gives compared numbers one width', () => {
     expect(base).toMatch(/h1,\s*h2,\s*h3\s*\{[^}]*text-wrap:\s*balance;/);
     expect(base).toMatch(/table,\s*\.num,\s*\.count\s*\{[^}]*font-variant-numeric:\s*tabular-nums;/);
   });

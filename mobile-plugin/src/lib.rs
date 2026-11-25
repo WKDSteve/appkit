@@ -2,7 +2,7 @@
 //! calls it from Rust; the page reaches none of it (the plugin has no command for the page).
 //!
 //! - [`Platform::public_key`] and [`Platform::sign`]: device keys in the Android Keystore. A key made with `user_auth`
-//!   signs only after the biometrics or the device lock, bound by a `CryptoObject` (`AND-05`): the trigger key.
+//!   signs only after the biometrics or the device lock, bound by a `CryptoObject`: the trigger key.
 //! - [`Platform::scan_qr`]: the text of a QR code (ZXing).
 //! - [`Platform::pick_folder`], [`Platform::list`], [`Platform::read`]: the folder of a vault cloned on the phone,
 //!   read only and bounded.
@@ -210,7 +210,7 @@ impl<R: Runtime> Platform<R> {
             .map(|a| a.key)
     }
 
-    /// Remove the key of `alias` (unpairing, `MSEC-12`).
+    /// Remove the key of `alias` (unpairing).
     ///
     /// # Errors
     ///

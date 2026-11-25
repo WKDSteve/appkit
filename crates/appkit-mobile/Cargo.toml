@@ -16,7 +16,7 @@ default = ["net"]
 # brings its own `Transport`.
 net = ["dep:reqwest"]
 # A device key in memory (`SoftwareSigner`): for tests and the desktop preview of an app, never for a phone, whose key
-# is the platform's (Android Keystore, `AND-05`).
+# is the platform's (Android Keystore).
 software-signer = []
 
 [dependencies]
@@ -30,7 +30,7 @@ sha2 = "0.11"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The phone speaks to the hub over HTTPS (Tailscale Serve) or plain HTTP to the phone's own loopback (an SSH tunnel).
-# rustls with the Mozilla roots (webpki-roots): no user CAs (`AND-03`), the ring provider (no C toolchain beyond the
+# rustls with the Mozilla roots (webpki-roots): no user CAs, the ring provider (no C toolchain beyond the
 # NDK's clang for the Android build).
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2"], optional = true }
 tokio = { version = "1", default-features = false, features = ["time", "sync"] }

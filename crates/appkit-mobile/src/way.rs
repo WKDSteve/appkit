@@ -1,4 +1,4 @@
-//! The three ways from the phone to the data of an app (`MOB-06`), and the link that pairs a phone.
+//! The three ways from the phone to the data of an app, and the link that pairs a phone.
 //!
 //! | Way | What it is | Read | Create, change | Trigger | Push | Offline |
 //! |---|---|---|---|---|---|---|
@@ -8,7 +8,7 @@
 //!
 //! The hub is the same in the first two: the guard tells them apart by the `Host` (a tailnet name, or a loopback name
 //! that only a tunnel or the PC itself can use). A phone never reaches the hub any other way: no LAN address, no
-//! port forward, no Funnel (`MOB-01`).
+//! port forward, no Funnel.
 
 use serde::{Deserialize, Serialize};
 
@@ -24,7 +24,7 @@ pub enum Way {
     Vault,
 }
 
-/// What a way can do. The page leaves out what its way cannot (`MOB-09`: says so once, does not fail).
+/// What a way can do. The page leaves out what its way cannot (says so once, does not fail).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Abilities {
     pub read: bool,
@@ -37,7 +37,7 @@ pub struct Abilities {
 }
 
 impl Way {
-    /// What the way can do; the hub still decides per device (`MOB-03`).
+    /// What the way can do; the hub still decides per device.
     #[must_use]
     pub fn abilities(self) -> Abilities {
         match self {
@@ -177,7 +177,7 @@ pub const MAX_PAIR_LINK: usize = 512;
 pub const PAIR_MARK: &str = "appkit-pair=1";
 
 /// The pairing link the PC shows (as a QR code or as text): `<base>/#appkit-pair=1&app=<app>&code=<hex>`. The code
-/// is in the fragment, which no browser sends and no server logs (`MSEC-02`).
+/// is in the fragment, which no browser sends and no server logs.
 #[must_use]
 pub fn pair_link(address: &HubAddress, app: &str, code: &str) -> String {
     format!("{}/#{PAIR_MARK}&app={app}&code={code}", address.base())

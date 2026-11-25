@@ -26,13 +26,13 @@ uploading, checking, naming.
   in `version.json` of the build that is up builds nothing, so a late run never moves it backwards. `SHA256SUMS` goes first, files of an earlier build that
   this one no longer has go, and only at the end does the tag move to the commit and the page name it:
   a run that stops in between leaves the page naming the previous commit.
-- **`vX.Y.Z`** is a release from a tag, left as a **draft** (NREL-07): a person installs it, opens it,
-  and publishes it. A published release is never touched again (NREL-10). A draft that is there
+- **`vX.Y.Z`** is a release from a tag, left as a **draft**: a person installs it, opens it,
+  and publishes it. A published release is never touched again. A draft that is there
   already (the tag was set again on a newer commit) gets the files and the notes of this run.
 
 ### More rolling channels: `nightly` and `stable`
 
-Only where they are needed (rule GIT-08); the default of an app is `latest` alone. Both are pre-releases of their
+Only where they are needed; the default of an app is `latest` alone. Both are pre-releases of their
 own name with the same fixed file names as `latest`, move only forward (each against the `version.json` of its own
 release), and carry their name in `version.json` (`"channel": "nightly"`) and in the stamped install scripts.
 
@@ -171,7 +171,7 @@ task such as "add to PATH") unless they are named in `-InstallArgs` (`/TASKS=add
 
 ## Using it in an app
 
-Pin the actions by commit, with the tag in a comment (NREL-03). The rolling build, in
+Pin the actions by commit, with the tag in a comment. The rolling build, in
 `.github/workflows/rolling.yml` of the app:
 
 ```yaml
@@ -252,7 +252,7 @@ jobs:
 ```
 
 A release (`release.yml`, on a tag `v*`) has the same `build` and `publish` jobs with
-`tag: ${{ github.ref_name }}` and no `sha`; its own checks (tag, version and CI agree, NREL-08) come
+`tag: ${{ github.ref_name }}` and no `sha`; its own checks (tag, version and CI agree) come
 before the build. Give `windows-release-asset` and `windows-rolling-asset` both in either workflow:
 the stamped script of a release still offers `-Rolling`, and the other way round.
 

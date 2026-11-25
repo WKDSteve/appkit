@@ -425,7 +425,7 @@ impl SessionStore {
 
     /// Resolves when the session of this token is no longer open: signed out, revoked with its device, pushed out
     /// by newer ones, or cleared. At once when it is not open now. An event stream waits on this next to its
-    /// client (`SRV-27`: a stream of a closed session ends).
+    /// client (a stream of a closed session ends).
     pub async fn ended(&self, text: &str) {
         loop {
             let notified = self.ended.notified();
@@ -552,7 +552,7 @@ mod tests {
 
     #[test]
     fn signing_out_closes_that_session_and_no_other() {
-        // At least 128 bits (SRV-27).
+        // At least 128 bits.
         const { assert!(TOKEN_BYTES >= 16) };
         let sessions = SessionStore::new(4);
         let a = sessions.create().unwrap().to_hex();

@@ -5,7 +5,7 @@
 //! (the same format). The hub keeps the subscriptions per device and sends to them when the app says that something
 //! happened. A revoked device's subscriptions go with it.
 //!
-//! What a push carries is a hint, not content (`PWA-06`, `MOB-02`): the kind of event and at most the id of an entry
+//! What a push carries is a hint, not content: the kind of event and at most the id of an entry
 //! whose class is released for devices. The phone fetches the rest over its paired way. The push service is somebody
 //! else's server, even with the payload encrypted.
 //!

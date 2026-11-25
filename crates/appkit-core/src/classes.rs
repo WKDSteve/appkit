@@ -1,4 +1,4 @@
-//! The data classes of what a hub holds, and which may go to a phone (`MOB-02`).
+//! The data classes of what a hub holds, and which may go to a phone.
 //!
 //! The class of an area, a repository or an item is the person's statement on the PC (an app keeps it in its settings,
 //! tasks-desktop in `areas.json`), never something the data says about itself. **Fail closed:** what has no class, or

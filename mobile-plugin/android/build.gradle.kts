@@ -28,12 +28,12 @@ kotlin {
     }
 }
 
-// Every dependency with its reason (MREL-04); exact versions, no ranges (AND-12).
+// Every dependency with its reason; exact versions, no ranges.
 dependencies {
     // The plugin base of Tauri and the activity it runs in (AppCompat, so a fragment can show the prompt).
     implementation("androidx.core:core-ktx:1.9.0")
     implementation("androidx.appcompat:appcompat:1.6.0")
-    // BiometricPrompt with a CryptoObject: the trigger key signs only after the biometrics or the device lock (AND-05).
+    // BiometricPrompt with a CryptoObject: the trigger key signs only after the biometrics or the device lock.
     implementation("androidx.biometric:biometric:1.1.0")
     // The QR code of a pairing: ZXing, Apache-2.0, no network and no analytics (ML Kit of Google would report usage).
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")

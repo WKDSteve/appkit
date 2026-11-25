@@ -198,7 +198,7 @@ A program of the system is not started where the system has a call for the same 
   most 128 bytes. The link goes through the same single hand-over as (c) (`ShellExecuteW`, verb
   `open`; elsewhere `open` or `xdg-open` with the link as one argument), so the check
   `check-process-starts` sees no new place. The call is refused when `NVIM_MACHINE_ROLE` is
-  `workstation` (`MASCHINE-04`): the app hides its button there.
+  `workstation`: the app hides its button there.
 
 ## A program of somebody else (`appkit_core::launch`)
 

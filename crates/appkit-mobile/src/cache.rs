@@ -1,10 +1,9 @@
-//! The kept copy of what the hub answered, for the start and for a phone without a way to the hub (`MOB-08`).
+//! The kept copy of what the hub answered, for the start and for a phone without a way to the hub.
 //!
 //! It holds exactly the answers the hub gave this device for routes of the app, so only data the hub released for
-//! devices (`MOB-02`: the hub cuts, the cache never has to). Each entry is the whole answer of one route and query, as
+//! devices (the hub cuts, the cache never has to). Each entry is the whole answer of one route and query, as
 //! the hub sent it: a part is never made into a whole. Entries older than the limit are dropped when read; the file is
-//! versioned, bounded and written atomically (`MSEC-13`); forgetting removes it and checks that it is gone
-//! (`MSEC-12`). The app's data folder is excluded from backups (`AND-04`).
+//! versioned, bounded and written atomically; forgetting removes it and checks that it is gone. The app's data folder is excluded from backups.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

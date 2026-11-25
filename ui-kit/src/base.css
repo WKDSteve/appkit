@@ -21,7 +21,7 @@ textarea {
   font: inherit;
   color: inherit;
 }
-/* A field is at least 16 px: below that iOS Safari zooms into the page when it takes the focus (rule FORM-05).
+/* A field is at least 16 px: below that iOS Safari zooms into the page when it takes the focus.
    The text around stays at --font-size; only the fields do not follow it down. */
 input,
 select,
@@ -37,10 +37,10 @@ h2,
 h3 {
   margin: 0 0 0.5em;
   line-height: 1.25;
-  /* No single word on the last line (CSS-09). Where the browser does not know it, the line breaks as always. */
+  /* No single word on the last line. Where the browser does not know it, the line breaks as always. */
   text-wrap: balance;
 }
-/* Numbers that are compared or change all the time keep one width, so that a column does not tremble (CSS-09). */
+/* Numbers that are compared or change all the time keep one width, so that a column does not tremble. */
 table,
 .num,
 .count {

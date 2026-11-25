@@ -12,7 +12,7 @@ the ruleset `mobile` of the maintainer's rules (`MOB-*`, `MSEC-*`, `AND-*`); thi
 | SSH tunnel | an SSH client on the phone forwards `127.0.0.1:<port>` to the same port on the PC | yes | yes | with a confirmation on the phone | no (the tunnel is down when the app is) | the kept copy |
 | Vault on the phone | a folder cloned with Git on the phone (an export of the app), read by the app | yes | no | no | no | always |
 
-- The hub stays on loopback in every way (`SRV-01`): no LAN address, no port forward on the router, no Funnel.
+- The hub stays on loopback in every way: no LAN address, no port forward on the router, no Funnel.
 - Tailscale Serve gives a real certificate for the tailnet name, so the phone speaks HTTPS. The name is in public
   Certificate Transparency logs: give the PC a neutral name.
 - Two hubs on one PC: one on Serve's 443 (`<pc>.<tailnet>.ts.net`), the other on another HTTPS port
@@ -36,21 +36,20 @@ page (Svelte)  --ipcFetch-->  shell (Rust, appkit-mobile)  --HTTPS or tunnel--> 
   versioned, written atomically, removed wholly on unpairing).
 - `tauri-plugin-appkit` (`mobile-plugin/`, Rust and Kotlin, a Cargo project of its own): the Android side. The device
   keys in the Android Keystore (a login key, and a trigger key that signs only after the biometrics or the screen lock,
-  bound by a `CryptoObject`, `AND-05`), the QR code of a pairing (ZXing: no network, no analytics, unlike ML Kit; it reads
+  bound by a `CryptoObject`), the QR code of a pairing (ZXing: no network, no analytics, unlike ML Kit; it reads
   dark on light and light on dark alike, since a dark terminal shows the hub's code inverted), the
   folder of a cloned vault (Storage Access Framework, read only, bounded), and UnifiedPush (the endpoint of a distributor
   app, a notice with the words the app gave, never the content of a message). The page reaches none of it: the shell
   calls it from Rust.
 - `appkit-ui/mobile` (TypeScript): `ipcFetch(bridge)` makes a `fetch` out of the bridge to the shell, so the client of
   the app (`HubClient` and what extends it) works unchanged; `Way`, `WAY_ABILITIES` and `nextStep` for what the page
-  shows about the connection (`MUI-05`, `MOB-09`).
+  shows about the connection.
 - `appkit-ui/queue` (TypeScript): the queue of writes made offline, each with `if_match`; a conflict keeps the hub's
-  current version beside the item and is never sent again; a write whose answer was lost is never sent again by itself
-  (`MOB-07`).
+  current version beside the item and is never sent again; a write whose answer was lost is never sent again by itself.
 
 ## Data classes, fail closed
 
-The hub cuts, never the phone (`MOB-02`):
+The hub cuts, never the phone:
 
 - A route reaches a device only when the app released it: `GuardRules::with_device_route(path)`. Every other route
   below `/api/` answers a device `403 not_for_devices` before it runs, the core's choice of vault among them. An app
@@ -67,7 +66,7 @@ The hub cuts, never the phone (`MOB-02`):
 
 ## Rights of a device
 
-Each device has a level, which the hub checks on every request (`MOB-03`):
+Each device has a level, which the hub checks on every request:
 
 | Level | May |
 |---|---|
@@ -82,7 +81,7 @@ Each device has a level, which the hub checks on every request (`MOB-03`):
 - The PC sets the level of a device (`/api/control/devices/level` with the control secret, the command line below);
   an open session follows at once.
 - A trigger carries the confirmation of that very request: a second key of the phone, kept behind its biometrics or
-  its lock (Android Keystore with user authentication, `AND-05`), signs the method, the path with its query and the
+  its lock (Android Keystore with user authentication), signs the method, the path with its query and the
   SHA-256 of the body with a fresh challenge of the hub (`x-device-confirm: <challenge>.<signature>`). Without it, with
   a wrong or spent one, or from a phone paired without that key: `403 confirm_required`. The phone shows the prompt
   before it signs; cancelling sends nothing (`appkit-mobile`: `Link::trigger`).
@@ -107,12 +106,12 @@ provider.
   network or the tailnet, no other port than 443 (it would otherwise post to whatever a device names).
 - A notice carries the kind of event and at most the id of an entry whose class is released for devices
   (`Push::notify(kind, Some((id, class)), urgent)`): `{"kind":"ci_red","id":"lib.nvim"}` or `{"kind":"ci_red","id":null}`.
-  The phone fetches the rest over its paired way (`PWA-06`). The text is encrypted for the device (aes128gcm), but the
+  The phone fetches the rest over its paired way. The text is encrypted for the device (aes128gcm), but the
   push service is somebody else's server all the same.
 - Where the endpoint comes from: a browser's `PushManager` in an installed page (Android Chrome; iOS only for a page on
   the home screen), or, for a Tauri app on Android (whose WebView has no Web Push), a UnifiedPush distributor app on the
   phone (for example Sunup, which uses Mozilla's push service, or ntfy). Both speak this format. Without either, there is
-  no push, and the app says so once (`MOB-09`).
+  no push, and the app says so once.
 - An app turns on the sending with the feature `push-net` of `appkit-hub` and `GuardRules::with_push`.
 
 ## On the PC: the command line
@@ -148,7 +147,7 @@ http://127.0.0.1:<port>/#appkit-pair=1&app=<namespace>&code=<32 hex digits>
 
 The code is good once, for 60 s, and stands in the fragment (no server sees it). The phone checks that the hub there is
 of its app (`hello`), sends its public key (and the public key that confirms triggers) with the code, and keeps the
-device id and the id of the hub. Both `hello` and every challenge name the protocol between phone app and hub (`MOB-10`): `"protocol":
+device id and the id of the hub. Both `hello` and every challenge name the protocol between phone app and hub: `"protocol":
 {"version": n, "oldest": m}` (`appkit_hub::access::PHONE_PROTOCOL`, `PHONE_PROTOCOL_OLDEST`). An app older than `oldest`
 gets `LinkError::AppTooOld` and shows "update needed"; a hub older than the app's `PROTOCOL_OLDEST_HUB` gives
 `HubTooOld`. Either is found before a key is sent or anything is signed. A hub that names no protocol speaks version 1. The keys are the platform's (Android Keystore) and never leave the phone. Every start

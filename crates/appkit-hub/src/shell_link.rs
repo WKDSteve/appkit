@@ -4,7 +4,7 @@
 //! The link written here: a header, an item list of the path (the shell takes the target from
 //! it), a `LinkInfo` with the local path (ANSI and Unicode), and the strings for the description,
 //! the working folder and the arguments. No icon: the shell shows that of the target, which the
-//! program carries itself (rule APP-11). Reading is the other half for `uninstall`: the target
+//! program carries itself. Reading is the other half for `uninstall`: the target
 //! path of a link from its `LinkInfo`, also of one the script host made before.
 //!
 //! [MS-SHLLINK]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-shllink/
@@ -495,7 +495,7 @@ mod tests {
     }
 
     /// A link names no icon of its own, so the shell shows the icon of its target: a program that
-    /// carries its icon (rule APP-11) has it on its links too. The target is a program of Windows,
+    /// carries its icon has it on its links too. The target is a program of Windows,
     /// whose icon is not the plain one of a file that carries none.
     #[cfg(windows)]
     #[test]

@@ -13,7 +13,7 @@
 #   listed in SHA256SUMS like every other file.
 #   TAG=vX.Y.Z   a release: a draft is made if there is none (a published release is never touched
 #                again), the files and the checksums are attached, and it stays a draft for a person
-#                to open (NREL-07).
+#                to open.
 #
 #   STEP=all     (the default) both halves in one call.
 #   STEP=stage   only the first half: the files, the stamped scripts and version.json go into the folder STAGE and
@@ -101,7 +101,7 @@ gh_retry() {
     done
 }
 
-# The rolling channels (rule GIT-08): the pre-release of that name, whose files are replaced by each build.
+# The rolling channels: the pre-release of that name, whose files are replaced by each build.
 case "$TAG" in
     latest | nightly | stable)
         [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || fail "the rolling build needs sha, a full commit id (got '$SHA')"
@@ -252,7 +252,7 @@ if [ -n "${LABEL:-}" ]; then
         --title "$LABEL (${SHA:0:7})" --notes-file "$stage.notes"
 else
     if draft="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null)"; then
-        [ "$draft" = "true" ] || fail "the release $TAG is published: it is never cut again (NREL-10), make a patch release"
+        [ "$draft" = "true" ] || fail "the release $TAG is published: it is never cut again, make a patch release"
         # A draft of an earlier cut (the tag was set again) gets the words of this one.
         if [ -n "$NOTES_FILE" ]; then
             notes > "$stage.notes"

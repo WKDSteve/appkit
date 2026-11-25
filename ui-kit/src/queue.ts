@@ -1,5 +1,5 @@
-// The writes of a phone, kept until the hub said yes or no (rules `MOB-07`, `MOB-08`, `MUI-04` of the ruleset
-// `mobile`). Taken from tasks-mobile, where it was written, without what only tasks has (files of a new task): an app
+// The writes of a phone, kept until the hub said yes or no (the rules for a phone app's writes). Taken from tasks-mobile, where it
+// was written, without what only tasks has (files of a new task): an app
 // names its operations and how to send one, the queue does the rest.
 //
 // - Nothing is shown as done before the hub said so: the page shows the data as the hub sent it, and the queue beside
@@ -53,7 +53,7 @@ export interface QueueStore {
 
 export interface QueueDeps<O> {
   store: QueueStore;
-  /** Is this what the app queues? Read back from storage, every item is checked (`MSEC-13`). */
+  /** Is this what the app queues? Read back from storage, every item is checked. */
   validOp: (op: unknown) => op is O;
   /** A change (not a new entry) must carry `if_match`: it is queued only with the version the person saw. */
   needsIfMatch: (op: O) => boolean;
@@ -225,7 +225,7 @@ export class WriteQueue<O> {
     if (this.items.length !== before) await this.persist();
   }
 
-  /** Forget everything (the phone is unpaired: `MSEC-12`). */
+  /** Forget everything (the phone is unpaired). */
   async clear(): Promise<void> {
     this.items = [];
     this.deps.changed?.();

@@ -51,5 +51,6 @@ Commits: `type(scope): what changed` (scopes such as `hub`, `ui-kit`, `web-kit`,
 - Widgets are held by `widgets.axe.dom.test.ts` (axe in light and dark; jsdom has no layout, so the contrast of the
   colours is computed from `tokens.css` in `tokens.test.ts`) and by the APG tests of each widget. Sign-out is one
   function for every app: `signOut(logout, forget)` from `appkit-ui/signout`; the app only says what it forgets.
-- Rules: the maintainer's ruleset for the web platform (private, so not named or cited here by id).
-- Git: in a cloud session (`CLAUDE_CODE_REMOTE` is set) never push to `main`, only to your own `claude/…` branch; a local session lands it by rebase and the device key re-signs it (`GIT-09`). "Push to main" (`GIT-01`) applies locally only.
+- Rules: the maintainer's ruleset for the web platform (private, so not named or cited here by id; `tools/check-rule-ids.py`
+  fails the CI on an id in any tracked file: say what the rule says).
+- Git: in a cloud session (`CLAUDE_CODE_REMOTE` is set) never push to `main`, only to your own `claude/…` branch; a local session lands it by rebase and the device key re-signs it. "Push to main" applies locally only.

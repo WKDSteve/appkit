@@ -149,7 +149,7 @@ that an app can later give each device its own rights.
 
 The file also holds a random id of the hub, made once (a list of an older hub gets one when it is opened, written at
 once). The pairing and every challenge name it, and a phone signs nothing for a hub that names another
-(`appkit-mobile`, `MSEC-04`): a new hub on the same name or port gets no signature, the phone pairs again.
+(`appkit-mobile`): a new hub on the same name or port gets no signature, the phone pairs again.
 
 ### A phone through the tailnet or a tunnel
 

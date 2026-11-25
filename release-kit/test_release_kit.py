@@ -1629,7 +1629,7 @@ class PublishTest(unittest.TestCase):
     def test_a_published_release_is_not_touched(self) -> None:
         res = self.publish(TAG="v1.2.3", SHA="", GH_DRAFT="false")
         self.assertNotEqual(res.returncode, 0)
-        self.assertIn("NREL-10", res.stderr)
+        self.assertIn("never cut again", res.stderr)
         self.assertFalse(any("upload" in c for c in self.calls()))
 
     def test_an_extra_file_may_not_shadow_a_script(self) -> None:

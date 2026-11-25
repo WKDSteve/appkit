@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Rule APG-08 (multiple choice; WCAG 2.1.1, 2.4.3, 4.1.2). The choice is a button that discloses a group of checkboxes
+// Multiple choice (WCAG 2.1.1, 2.4.3, 4.1.2). The choice is a button that discloses a group of checkboxes
 // (not a listbox): the key sequence is that of the disclosure with a checkbox group, plus the arrows of a list.
 import { flushSync, mount, tick, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -37,7 +37,7 @@ const button = () => document.querySelector<HTMLButtonElement>('button.trigger')
 const boxes = () => [...document.querySelectorAll<HTMLInputElement>('.popup input[type=checkbox]')];
 const popup = () => document.querySelector('.popup');
 
-describe('APG-08 multiple choice', () => {
+describe('APG multiple choice', () => {
   it('names its state: expanded, no menu semantics (the popup is a group of checkboxes, not a menu)', async () => {
     expect(button().getAttribute('aria-expanded')).toBe('false');
     // aria-haspopup="true" means a menu: a screen reader would announce one and expect menu keys.

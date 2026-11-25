@@ -92,7 +92,7 @@ pub async fn shell<R: Runtime>(
         .into_response()
 }
 
-/// The version of the protocol between a phone app and its hub (`MOB-10`) this hub speaks: the routes of pairing and
+/// The version of the protocol between a phone app and its hub this hub speaks: the routes of pairing and
 /// login and the form of their answers. It is raised when a change would make an older phone app misread an answer.
 pub const PHONE_PROTOCOL: u32 = 1;
 /// The oldest version of a phone app's protocol this hub takes. A phone app older than this shows "update needed" and
@@ -126,7 +126,7 @@ pub async fn hello<R: Runtime>(State(st): State<Arc<Core<R>>>) -> Response {
             "capabilities": rt.status().capabilities,
         },
         "capabilities": ["pairing"],
-        // Added to schema 1 (`MOB-10`): what a phone app checks before it pairs.
+        // Added to schema 1: what a phone app checks before it pairs.
         "protocol": phone_protocol(),
     });
     axum::Json(body).into_response()
@@ -563,7 +563,7 @@ pub async fn control_revoke<R: Runtime>(State(st): State<Arc<Core<R>>>, body: By
     }
 }
 
-/// Sign out: the session of the token that sent the request ends at once (`SRV-27`). The guard has checked the
+/// Sign out: the session of the token that sent the request ends at once. The guard has checked the
 /// session, so the token is there; the next request with it is a 401.
 pub async fn logout<R: Runtime>(
     State(st): State<Arc<Core<R>>>,

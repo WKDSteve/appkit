@@ -1,6 +1,6 @@
 //! The real network of the link: reqwest with rustls and the Mozilla roots. No redirects (an answer that points
 //! elsewhere is an answer, never followed with the token), no cookies, no proxy of the system, a time limit for the
-//! whole request and a byte limit checked while the body is read (`MSEC-08`).
+//! whole request and a byte limit checked while the body is read.
 
 use std::time::Duration;
 

@@ -161,7 +161,7 @@ async fn a_phone_pairs_reads_logs_in_again_and_is_refused_once_revoked() {
     );
 }
 
-/// The real network, with the protocol a newer hub would name in `hello` and in each challenge (`MOB-10`), and a
+/// The real network, with the protocol a newer hub would name in `hello` and in each challenge, and a
 /// list of the paths that were sent.
 struct NewerHub {
     net: Arc<dyn Transport>,

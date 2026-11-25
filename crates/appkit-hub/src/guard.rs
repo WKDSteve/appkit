@@ -5,7 +5,7 @@ use crate::*;
 // ── the guard ───────────────────────────────────────────────────────────────
 
 /// What a route that streams reads from the request (`parts.extensions`): resolves when the session of the request
-/// ends, so that an event stream ends with it (`SRV-27`, `SRV-19`).
+/// ends, so that an event stream ends with it.
 #[derive(Clone)]
 pub struct SessionEnd {
     sessions: Arc<SessionStore>,
@@ -73,7 +73,7 @@ pub const DEVICE_CHALLENGE_PATH: &str = "/auth/device/challenge";
 pub const DEVICE_SESSION_PATH: &str = "/auth/device/session";
 /// The routes of the PC for its devices, with the control secret: the list, and revoking one.
 pub const CONTROL_DEVICES_PATH: &str = "/api/control/devices";
-/// Signs the caller out: the session of the token that sends it ends (`SRV-27`). Below `/api/`, so it needs a session,
+/// Signs the caller out: the session of the token that sends it ends. Below `/api/`, so it needs a session,
 /// and released for every device at the lowest level: signing out is never a privilege.
 pub const LOGOUT_PATH: &str = "/api/session/logout";
 pub const CONTROL_REVOKE_PATH: &str = "/api/control/devices/revoke";
@@ -265,7 +265,7 @@ impl GuardRules {
         self.push.as_ref()
     }
 
-    /// Release one route of the app for paired devices with the level it needs (`MOB-02`, `MOB-03`). A session of a
+    /// Release one route of the app for paired devices with the level it needs. A session of a
     /// device reaches only the routes released this way; every other route below `/api/` (the core's `/api/vaults*`
     /// among them) answers it `403 not_for_devices`, whatever the method, before the route runs. Without a call, a
     /// device reaches nothing: fail closed. A device below the level gets `403 level_too_low`. A route of
@@ -329,7 +329,7 @@ impl GuardRules {
     }
 
     /// Let a phone reach the hub through Tailscale Serve (`tailscale serve` forwards
-    /// `https://<name>` to the loopback port of the hub; the hub still binds loopback only, `SRV-01`).
+    /// `https://<name>` to the loopback port of the hub; the hub still binds loopback only).
     /// The guard then also takes the `Host` `name` and the `Origin` `https://<name>`, exactly, and holds a
     /// request with that host to what a device may: no session of a pairing code (`/auth/exchange` is refused),
     /// no route of the control secret, and every route below `/api/` only with a session of a paired device.
@@ -825,7 +825,7 @@ pub async fn judge<R: Runtime>(st: &Core<R>, class: Class, req: Request, next: N
                 );
             }
             if let Some(id) = device.as_deref() {
-                // A device reaches only what the app released for devices: fail closed (`MOB-02`).
+                // A device reaches only what the app released for devices: fail closed.
                 let Some(needed) = st.guard_rules.device_level(parts.uri.path()) else {
                     return error_body(
                         StatusCode::FORBIDDEN,
@@ -833,7 +833,7 @@ pub async fn judge<R: Runtime>(st: &Core<R>, class: Class, req: Request, next: N
                         "this route is not released for devices",
                     );
                 };
-                // At the level the device has now (the PC may have lowered it since the session began) (`MOB-03`).
+                // At the level the device has now (the PC may have lowered it since the session began).
                 let has = st.devices.as_ref().and_then(|d| d.level_of(id));
                 let Some(has) = has else {
                     return error_body(
@@ -870,7 +870,7 @@ pub async fn judge<R: Runtime>(st: &Core<R>, class: Class, req: Request, next: N
         );
     }
 
-    // 9. A trigger of a device carries the confirmation of this very request, made on the device (`MOB-03`).
+    // 9. A trigger of a device carries the confirmation of this very request, made on the device.
     let body = match confirm_for {
         Some(device) => match confirmed(st, &parts, &device, body).await {
             Ok(body) => body,
@@ -1027,7 +1027,7 @@ fn page_policy(connect_src: Option<&str>, worker_policy: Option<&str>, media: bo
         .unwrap_or_else(|_| HeaderValue::from_static("default-src 'none'"))
 }
 
-/// The policy of an answer that is no document: nothing runs in it, nothing embeds it (`SRV-26`).
+/// The policy of an answer that is no document: nothing runs in it, nothing embeds it.
 const NON_DOCUMENT_POLICY: &str = "default-src 'none'; frame-ancestors 'none'; sandbox";
 
 pub fn set_security_headers(response: &mut Response, class: Class, connect_src: Option<&str>) {
@@ -1116,7 +1116,7 @@ fn page_headers(
         );
     } else {
         // An answer that is no document (JSON, a stream, an error, a 404): if a browser opens or embeds it
-        // directly, nothing may run in it (SRV-26).
+        // directly, nothing may run in it.
         h.insert(
             header::CONTENT_SECURITY_POLICY,
             HeaderValue::from_static(NON_DOCUMENT_POLICY),

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// APG menu pattern (rule APG-02; WCAG 2.1.1, 2.4.3, 4.1.2) for the context menu: the key sequence of the pattern.
+// APG menu pattern (WCAG 2.1.1, 2.4.3, 4.1.2) for the context menu: the key sequence of the pattern.
 import { flushSync, mount, tick, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ContextMenu from './ContextMenu.svelte';
@@ -51,7 +51,7 @@ const openByKey = async () => {
   await settle();
 };
 
-describe('APG-02 context menu', () => {
+describe('APG menu pattern: context menu', () => {
   it('has the roles of the pattern: a menu with named items, checked states, one focus stop each', async () => {
     await openByKey();
     const menu = document.querySelector('[role="menu"]')!;

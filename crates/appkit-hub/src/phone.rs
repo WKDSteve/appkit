@@ -4,7 +4,7 @@
 //! `127.0.0.1`.
 //!
 //! The pairing link is the form `appkit-mobile` reads (`way::parse_pair_link`): the address the phone uses (the tailnet
-//! name, or the loopback port at the end of an SSH tunnel), the app, and a one-time code in the fragment (`MSEC-02`).
+//! name, or the loopback port at the end of an SSH tunnel), the app, and a one-time code in the fragment.
 
 use std::path::{Path, PathBuf};
 

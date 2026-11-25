@@ -1,4 +1,4 @@
-"""Tests of pick_target.pick: which commit the rolling build `latest` is made from (rule GIT-08).
+"""Tests of pick_target.pick: which commit the rolling build `latest` is made from.
 
     python -m unittest discover -s release-kit -p "test_*.py" -v
 """

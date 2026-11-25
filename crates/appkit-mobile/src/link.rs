@@ -2,8 +2,7 @@
 //!
 //! The page never builds an address and never holds the session: it names a route of its app, and the link adds the
 //! base of the way in use, the origin, the token, a time limit and a byte limit. A route outside the app's own
-//! namespace is not sent at all. Before the phone signs anything, the hub has to name the id it named at pairing
-//! (`MSEC-04`): another program on the same name or port gets no signature.
+//! namespace is not sent at all. Before the phone signs anything, the hub has to name the id it named at pairing: another program on the same name or port gets no signature.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -23,7 +22,7 @@ pub const DEVICE_PAIR_PATH: &str = "/auth/device/pair";
 pub const DEVICE_CHALLENGE_PATH: &str = "/auth/device/challenge";
 pub const DEVICE_SESSION_PATH: &str = "/auth/device/session";
 
-/// The version of the protocol between this phone app and its hub (`MOB-10`): the routes of pairing and login and the
+/// The version of the protocol between this phone app and its hub: the routes of pairing and login and the
 /// form of their answers. The hub names its own and the oldest it takes in `hello` and in each challenge; the same
 /// numbers as `appkit_hub::access::PHONE_PROTOCOL` of the same tag of the kit.
 pub const PROTOCOL: u32 = 1;
@@ -31,7 +30,7 @@ pub const PROTOCOL: u32 = 1;
 pub const PROTOCOL_OLDEST_HUB: u32 = 1;
 
 /// Does the hub's answer (`hello` or a challenge) speak a protocol this app understands, and does it take this app?
-/// A hub from before `MOB-10` names none: it speaks version 1. Checked before a key is sent or anything is signed.
+/// A hub from before the protocol version names none: it speaks version 1. Checked before a key is sent or anything is signed.
 fn check_protocol(doc: &Value) -> Result<(), LinkError> {
     let said = &doc["protocol"];
     if said.is_null() {
@@ -121,14 +120,13 @@ pub enum NetError {
     /// It never reached the hub (no route, refused, no name, TLS): trying again is safe. The word says which, for
     /// the page to say what to do ("Tailscale is off"); it holds no address and no content.
     Unreachable(&'static str),
-    /// It may have arrived and the answer did not come (in time, or whole): a write is not sent again by itself
-    /// (`MOB-07`).
+    /// It may have arrived and the answer did not come (in time, or whole): a write is not sent again by itself.
     AnswerLost,
     /// The answer was larger than the limit; it was not read further.
     TooLarge,
 }
 
-/// How long a request may take and how large its answer may be (`MSEC-08`).
+/// How long a request may take and how large its answer may be.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
     pub timeout: Duration,
@@ -161,7 +159,7 @@ pub enum SignError {
 }
 
 /// The device key: it signs and shows its public half, nothing more. On a phone the Android Keystore holds it and it
-/// cannot be exported (`AND-05`).
+/// cannot be exported.
 pub trait Signer: Send + Sync {
     /// The public key, SEC1 uncompressed P-256 (65 bytes), lower-case hex.
     fn public_key(&self) -> BoxFuture<'_, Result<String, SignError>>;
@@ -270,7 +268,7 @@ pub enum LinkError {
     },
     /// The hub does not take this device any more (revoked, or never paired here): forget the pairing and pair again.
     Unpaired,
-    /// The program there names another id than the hub paired with: nothing was signed (`MSEC-04`).
+    /// The program there names another id than the hub paired with: nothing was signed.
     OtherHub,
     /// The link or the hub is of another app.
     OtherApp,
@@ -278,10 +276,10 @@ pub enum LinkError {
     NotAllowed,
     /// The answer is not what the hub sends.
     BadReply,
-    /// The hub no longer takes this version of the app (`MOB-10`): the page shows "update needed"; nothing was sent
+    /// The hub no longer takes this version of the app: the page shows "update needed"; nothing was sent
     /// or signed.
     AppTooOld,
-    /// The hub is older than this app understands (`MOB-10`): the page asks to update the hub on the PC; nothing was
+    /// The hub is older than this app understands: the page asks to update the hub on the PC; nothing was
     /// sent or signed.
     HubTooOld,
 }
@@ -437,7 +435,7 @@ pub struct Link {
     routes: AppRoutes,
     paired: Paired,
     limits: Limits,
-    /// The session token: in memory only (`MSEC-01`), one login at a time.
+    /// The session token: in memory only, one login at a time.
     session: tokio::sync::Mutex<Option<String>>,
 }
 
@@ -474,7 +472,7 @@ impl Link {
         &self.paired
     }
 
-    /// A challenge of the hub, once it named the id it named at pairing: before anything is signed (`MSEC-04`).
+    /// A challenge of the hub, once it named the id it named at pairing: before anything is signed.
     async fn challenge(&self) -> Result<String, LinkError> {
         let asked = post_json(
             self.transport.as_ref(),
@@ -617,7 +615,7 @@ impl Link {
 
     /// Start something on the PC (a route the app released at the level `trigger`): the confirmation key signs this
     /// very request (method, path and body) with a fresh challenge, which on a phone asks for the biometrics or the
-    /// lock first (`MOB-03`, `AND-05`). Sent once: a lost answer is reported, never repeated (`MOB-07`). When the
+    /// lock first. Sent once: a lost answer is reported, never repeated. When the
     /// session was gone the same confirmation is sent again after a new login: the guard refused before it looked at
     /// the confirmation, so nothing ran.
     ///
@@ -663,10 +661,10 @@ impl Link {
         *self.session.lock().await = None;
     }
 
-    /// A read of a route with the kept copy (`MOB-08`): asks the hub with the tag of the copy; a new answer replaces
+    /// A read of a route with the kept copy: asks the hub with the tag of the copy; a new answer replaces
     /// it, "not modified" keeps it (as fresh); when the hub cannot be reached the copy is given, marked as kept, with
     /// its time. A refusal of the hub is given as it is and not kept. When the hub does not take the device any more
-    /// the copy is forgotten (`MSEC-12`).
+    /// the copy is forgotten.
     ///
     /// # Errors
     ///
@@ -759,7 +757,7 @@ mod tests {
     fn the_protocol_of_the_hub_is_checked_both_ways() {
         let said = |v: Value| check_protocol(&json!({ "protocol": v }));
         assert_eq!(said(json!({ "version": PROTOCOL, "oldest": 1 })), Ok(()));
-        // A hub from before MOB-10 says nothing: it speaks version 1.
+        // A hub from before the protocol version says nothing: it speaks version 1.
         assert_eq!(check_protocol(&json!({ "app": "x" })), Ok(()));
         // A newer hub that still takes this app, and one that no longer does.
         assert_eq!(

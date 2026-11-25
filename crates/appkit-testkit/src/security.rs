@@ -581,7 +581,7 @@ pub async fn hello_needs_no_token_and_carries_no_data(s: &dyn Subject) {
             "version"
         ]
     );
-    // The protocol of a phone app (MOB-10): two numbers, nothing else.
+    // The protocol of a phone app: two numbers, nothing else.
     let protocol = doc["protocol"].as_object().expect("protocol is an object");
     assert_eq!(protocol.len(), 2, "{}", r.body);
     assert!(
@@ -834,7 +834,7 @@ pub async fn every_answer_carries_the_security_headers(s: &dyn Subject) {
     }
 }
 
-/// `SRV-26`: an answer says what it is and betrays nothing. One answer of each kind the guard can give without an
+/// An answer says what it is and betrays nothing. One answer of each kind the guard can give without an
 /// engine (the page, JSON, an error of the guard, a refusal, a 404, a method it does not know) is read raw.
 pub async fn answers_say_what_they_are_and_betray_nothing(s: &dyn Subject) {
     let h = Harness::new(s).await;
@@ -941,7 +941,7 @@ pub async fn answers_say_what_they_are_and_betray_nothing(s: &dyn Subject) {
     }
 }
 
-/// `SRV-28`: behind a proxy the hub reads a message the way the strictest reader does, and believes no header a
+/// Behind a proxy the hub reads a message the way the strictest reader does, and believes no header a
 /// proxy sets. Ambiguous messages get 400 and the connection is closed; `X-Forwarded-*` and identity headers
 /// decide nothing.
 pub async fn an_ambiguous_message_is_refused_and_a_proxy_is_not_believed(s: &dyn Subject) {
@@ -1075,7 +1075,7 @@ pub async fn an_ambiguous_message_is_refused_and_a_proxy_is_not_believed(s: &dyn
     }
 }
 
-/// `SRV-27`: a session ends when the person signs out. The token is at least 128 bits, a new one comes with each
+/// A session ends when the person signs out. The token is at least 128 bits, a new one comes with each
 /// pairing, signing out closes exactly the session that asks, and the next request with the token is a 401.
 pub async fn a_session_ends_when_the_person_signs_out(s: &dyn Subject) {
     let h = Harness::new(s).await;
@@ -1119,7 +1119,7 @@ pub async fn a_session_ends_when_the_person_signs_out(s: &dyn Subject) {
     );
 }
 
-/// `SRV-27`, `SRV-19`: an open event stream of a session ends when the session does (sign-out), and the stream of
+/// An open event stream of a session ends when the session does (sign-out), and the stream of
 /// another session does not.
 pub async fn an_event_stream_ends_with_its_session(s: &dyn Subject) {
     if !s.has_stream() {
@@ -1192,7 +1192,7 @@ pub async fn an_event_stream_ends_with_its_session(s: &dyn Subject) {
     );
 }
 
-/// `WPERF-08`, decided 2026-11-22: a hub on loopback keeps `no-store` on every file of its pages, the hashed
+/// Decided 2026-11-22: a hub on loopback keeps `no-store` on every file of its pages, the hashed
 /// ones under `/assets/` included. The page sits in the binary and matches the API of that very version; a cached
 /// older script against a newer API is the failure `no-store` prevents. The exception is held here: no file of a
 /// page, no 404 on a path of the page and no worker or manifest of the installable page may be kept by the browser.
@@ -2113,7 +2113,7 @@ async fn set_level(h: &Harness, id: &str, level: &str) -> Reply {
     .await
 }
 
-/// The levels of a device, enforced by the hub per request (`GuardRules::with_device_route`, `MOB-03`): a new device
+/// The levels of a device, enforced by the hub per request (`GuardRules::with_device_route`): a new device
 /// reads and creates (`read_route`, `create_route`), but cannot change (`change_route`) or trigger (`trigger_route`);
 /// the PC raises it (never a session, never through the tailnet), an open session follows at once, and lowering works
 /// the same way. A trigger also needs the device's confirmation of that very request: none, a wrong one, one for
@@ -2443,7 +2443,7 @@ async fn device_session(h: &Harness) -> String {
     r.json()["token"].as_str().expect("a token").to_owned()
 }
 
-/// Data classes fail closed for a device (`GuardRules::with_device_route`, `Caller`, `MOB-02`): a device reaches only
+/// Data classes fail closed for a device (`GuardRules::with_device_route`, `Caller`): a device reaches only
 /// the routes released for it (`released`), with any method; every other route below `/api/` (the core's choice of
 /// vault, a route the app keeps for the PC: `pc_only`) answers `not_for_devices` before it runs, also when the request
 /// looks like a write. A released route that holds areas (`classified`, its areas in `areas`: a name and the class the
