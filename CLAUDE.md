@@ -45,5 +45,11 @@ Commits: `type(scope): what changed` (scopes such as `hub`, `ui-kit`, `web-kit`,
   `DISABLE_TELEMETRY=1 pnpm -C ui-kit exec modern-web-guidance legacy-scan src --json`, the same for `../web-kit/src`.
   CI runs it as an informative step in the `ui-kit` and `web-kit` jobs. Raise its version on purpose.
 - `.claude/settings.json` sets `DISABLE_TELEMETRY=1` and allows only `npx -y modern-web-guidance@latest *`.
+- A field is at least 16 px (iOS Safari zooms in below that): a component that sets its own `font: inherit` on an
+  `input` sizes it again with `max(1rem, var(--font-size))` (`base.test.ts` reads Palette and DocsDialog). A target
+  (the info button, a handle) is at least 24 px, and 44 px under `(pointer: coarse)`.
+- Widgets are held by `widgets.axe.dom.test.ts` (axe in light and dark; jsdom has no layout, so the contrast of the
+  colours is computed from `tokens.css` in `tokens.test.ts`) and by the APG tests of each widget. Sign-out is one
+  function for every app: `signOut(logout, forget)` from `appkit-ui/signout`; the app only says what it forgets.
 - Rules: the maintainer's ruleset for the web platform (private, so not named or cited here by id).
 - Git: in a cloud session (`CLAUDE_CODE_REMOTE` is set) never push to `main`, only to your own `claude/…` branch; a local session lands it by rebase and the device key re-signs it (`GIT-09`). "Push to main" (`GIT-01`) applies locally only.

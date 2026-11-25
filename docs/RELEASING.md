@@ -10,7 +10,10 @@ tag (`pnpm-lock.yaml` holds the commit of each kit), and its CI checks that the 
 2. **The version says what changed.** While the version is `0.x`, a change of anything public
    (a type, a function, a field, a route of the core, the order or the meaning of a check of the
    guard) raises the minor number (`0.1.0` to `0.2.0`); a fix that keeps all of it raises the patch
-   number. The crates keep `version = "0.0.0"` in their manifests: the tag is the version.
+   number. The crates keep `version = "0.0.0"` in their manifests: the tag is the version. Keep the change
+   backward compatible where you can: an addition (`signOut`, the `lang` option of `assemble`) is a minor, and a name that
+   goes away stays as a forward to the new one until `rg` finds no app that uses it (the apps sit beside this checkout
+   under `E:epos\<app>`); an app drops its own copy only after it took the tag.
 3. **Tag and push.** `git tag -a vX.Y.Z -m "..."` on the green commit, `git push origin vX.Y.Z`.
 4. **A tag is never moved or deleted.** A mistake is fixed in the next version. Each app checks in its
    CI that the commit its `Cargo.lock` pins is the one its tag names now, so a moved tag is noticed.
