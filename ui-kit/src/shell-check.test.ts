@@ -8,6 +8,22 @@ const style = (over: Partial<ShellStyle> = {}): ShellStyle => {
   return { ...base, ...over };
 };
 
+describe('the reference shell', () => {
+  // The apps compare their page against this file. A field of the kit that is smaller than 16 px zooms on focus in
+  // iOS Safari; the kit sets 16 px, so the reference must say so too, or every app fails against its own kit.
+  it('has no text field below 16 px', async () => {
+    const golden = (await import('./shell.golden.json')).default as Record<string, Record<string, Record<string, string>>>;
+    const small: string[] = [];
+    for (const [theme, probes] of Object.entries(golden)) {
+      for (const [probe, values] of Object.entries(probes)) {
+        if (!/input/i.test(probe) || typeof values?.fontSize !== 'string') continue;
+        if (parseFloat(values.fontSize) < 16) small.push(`${theme}: ${probe} ${values.fontSize}`);
+      }
+    }
+    expect(small).toEqual([]);
+  });
+});
+
 describe('diffShell', () => {
   it('is empty for the same shell', () => {
     const sig: ShellSignature = { page: style(), trigger: style({ color: 'red' }) };
