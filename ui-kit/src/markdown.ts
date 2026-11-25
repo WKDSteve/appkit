@@ -89,14 +89,9 @@ export interface ImageSource {
   open?(src: string, url: string, alt: string): void;
 }
 
-/**
- * The address an `<img>` of an asset may carry: only a `blob:` URL of this page. Anything else the app hands over
- * by mistake (a URL of another host, `data:`, `javascript:`) counts as a missing file and is never drawn.
- */
-export function drawableImageUrl(url: string | null | undefined): string | null | undefined {
-  if (url === undefined || url === null) return url;
-  return /^blob:[^\s]+$/i.test(url) && url.length <= 2048 ? url : null;
-}
+// Kept here for the apps that import it from this module; the function lives in `image-url.ts`, which does not load
+// markdown-it.
+export { drawableImageUrl } from './image-url';
 
 /** The host a link goes to, for the person who reads the link text. */
 export function hostOf(href: string): string | null {

@@ -99,9 +99,9 @@ export {
   type PaletteOptions,
 } from './palette';
 export type { ToastKind, ToastMessage } from './toast';
+export { drawableImageUrl } from './image-url';
 export {
   ASSET_IMAGE_TYPES,
-  drawableImageUrl,
   hostOf,
   MAX_SOURCE,
   parseMarkdown,

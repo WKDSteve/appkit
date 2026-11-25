@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { drawableImageUrl, type ImageSource, type Inline } from './markdown';
+  import { drawableImageUrl } from './image-url';
+  import type { ImageSource, Inline } from './markdown';
   import { markHidden } from './text';
   import Inlines from './Inlines.svelte';
 

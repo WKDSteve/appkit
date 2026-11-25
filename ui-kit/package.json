@@ -25,6 +25,7 @@
     "./groups": "./src/groups.ts",
     "./handoff": "./src/handoff.ts",
     "./i18n": "./src/i18n.ts",
+    "./image-url": "./src/image-url.ts",
     "./keymap": "./src/keymap.ts",
     "./keymap.json": "./src/keymap.json",
     "./markdown": "./src/markdown.ts",
