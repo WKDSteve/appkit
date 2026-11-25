@@ -189,9 +189,13 @@ const isBytes = (value) => value instanceof Uint8Array || Buffer.isBuffer(value)
 /**
  * The single file. `partIds` names the parts in the order they are written, `parts` maps each id to its bytes; `csp` is
  * the policy of the page (`CSP_WASM_WORKER`, `CSP_STRICT` or the app's own), `title` the title of the page and
- * `comment` the comment in the head (where the file comes from, its build).
+ * `comment` the comment in the head (where the file comes from, its build). `lang` is the language of the page's text
+ * (`en` unless told): Intl, the translator of a browser and a screen reader go by it.
  */
-export function assemble({ css, js, partIds = [], parts = {}, csp, title, comment }) {
+export function assemble({ css, js, partIds = [], parts = {}, csp, title, comment, lang = 'en' }) {
+  if (typeof lang !== 'string' || !/^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(lang)) {
+    throw new Error(`pack: the language is not a language tag: ${JSON.stringify(lang)}`);
+  }
   checkPartIds(partIds);
   if (typeof csp !== 'string' || csp === '' || /"/.test(csp)) throw new Error('pack: the policy is missing or holds a quote');
   const loose = policyProblems(csp);
@@ -203,7 +207,7 @@ export function assemble({ css, js, partIds = [], parts = {}, csp, title, commen
   const blocks = partIds.map((id) => `<script id="${id}" type="application/octet-stream">${packPart(parts[id])}</script>`);
   return [
     '<!doctype html>',
-    '<html lang="en">',
+    `<html lang="${lang}">`,
     '<head>',
     '<meta charset="utf-8">',
     `<meta http-equiv="Content-Security-Policy" content="${csp}">`,

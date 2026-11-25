@@ -23,6 +23,8 @@ export interface PageInput {
   csp: string;
   /** The title of the page (plain text). */
   title: string;
+  /** The language of the text of the page, a language tag such as `de` or `pt-BR`; `en` by default. */
+  lang?: string;
   /** The comment in the head: where the file comes from, its build (plain text). */
   comment: string;
 }

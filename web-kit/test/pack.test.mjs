@@ -263,3 +263,13 @@ test('readDist finds the one script and the one style; writePage writes the file
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('the language of the page is en unless the app names its own, and only a language tag is taken', () => {
+  assert.match(plain(), /<html lang="en">/);
+  assert.match(plain({ lang: 'de' }), /<html lang="de">/);
+  assert.match(plain({ lang: 'pt-BR' }), /<html lang="pt-BR">/);
+  for (const bad of ['', 'de"><script>', 'English', 'd', 7]) {
+    assert.throws(() => plain({ lang: bad }), /not a language tag/, String(bad));
+  }
+  assert.deepEqual(verifyShell(plain({ lang: 'de' })), []);
+});
