@@ -10,6 +10,7 @@ export {
   type StreamDeps,
   type Theme,
 } from './session.svelte';
+export { signOut } from './signout';
 export {
   cacheableClass,
   indexedDbStore,

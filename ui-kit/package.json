@@ -37,6 +37,7 @@
     "./pointerDrag": "./src/pointerDrag.ts",
     "./queue": "./src/queue.ts",
     "./session": "./src/session.svelte.ts",
+    "./signout": "./src/signout.ts",
     "./shell-check": "./src/shell-check.js",
     "./shell.golden.json": "./src/shell.golden.json",
     "./sse": "./src/sse.ts",
