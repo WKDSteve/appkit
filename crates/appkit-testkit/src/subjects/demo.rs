@@ -153,6 +153,14 @@ impl Pages for TwoPages {
     fn has_index(&self) -> bool {
         true
     }
+
+    fn encoded(&self, request_path: &str, encoding: &str) -> Option<axum::body::Bytes> {
+        // The worker has a compressed version (any bytes: the hub sends them as they are).
+        match (request_path, encoding) {
+            ("/m/sw.js", "gzip") => Some(axum::body::Bytes::from_static(b"gzip-of-sw")),
+            _ => None,
+        }
+    }
 }
 
 /// The host `DemoWide` names.

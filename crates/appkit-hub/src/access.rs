@@ -4,8 +4,69 @@ use crate::*;
 
 // ── routes ──────────────────────────────────────────────────────────────────
 
-pub async fn shell<R: Runtime>(State(st): State<Arc<Core<R>>>, uri: axum::http::Uri) -> Response {
+/// The encodings a request accepts, best first among those the hub knows (`br`, then `gzip`); one with `q=0` is
+/// refused, as is every other.
+fn accepted_encodings(headers: &HeaderMap) -> Vec<&'static str> {
+    let mut accepted = Vec::new();
+    for value in headers.get_all(header::ACCEPT_ENCODING) {
+        let Ok(text) = value.to_str() else { continue };
+        for item in text.split(',') {
+            let mut parts = item.split(';');
+            let name = parts.next().unwrap_or("").trim().to_ascii_lowercase();
+            let refused = parts.any(|p| {
+                p.trim()
+                    .strip_prefix("q=")
+                    .and_then(|q| q.trim().parse::<f32>().ok())
+                    .is_some_and(|q| q <= 0.0)
+            });
+            if refused {
+                continue;
+            }
+            for known in ["br", "gzip"] {
+                if name == known && !accepted.contains(&known) {
+                    accepted.push(known);
+                }
+            }
+        }
+    }
+    accepted.sort_by_key(|e| usize::from(*e != "br"));
+    accepted
+}
+
+pub async fn shell<R: Runtime>(
+    State(st): State<Arc<Core<R>>>,
+    uri: axum::http::Uri,
+    headers: HeaderMap,
+) -> Response {
     if let Some(file) = st.ui.page(uri.path()) {
+        let path = uri.path();
+        // A file that has a compressed version differs by `Accept-Encoding` in every answer, also the plain one.
+        let has_variants = ["br", "gzip"]
+            .iter()
+            .any(|e| st.ui.encoded(path, e).is_some());
+        for encoding in accepted_encodings(&headers) {
+            if let Some(bytes) = st.ui.encoded(path, encoding) {
+                return (
+                    [
+                        (header::CONTENT_TYPE, file.content_type),
+                        (header::CONTENT_ENCODING, encoding),
+                        (header::VARY, "Accept-Encoding"),
+                    ],
+                    Body::from(bytes),
+                )
+                    .into_response();
+            }
+        }
+        if has_variants {
+            return (
+                [
+                    (header::CONTENT_TYPE, file.content_type),
+                    (header::VARY, "Accept-Encoding"),
+                ],
+                Body::from(file.bytes),
+            )
+                .into_response();
+        }
         return (
             [(header::CONTENT_TYPE, file.content_type)],
             Body::from(file.bytes),

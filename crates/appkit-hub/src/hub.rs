@@ -40,6 +40,14 @@ pub trait Pages: Send + Sync {
 
     /// Is there a page to serve at all (or only the placeholder)?
     fn has_index(&self) -> bool;
+
+    /// The file of this path, compressed ahead of time (at build, not per request) with `encoding` (`"br"` or
+    /// `"gzip"`), if the app holds such a version. The hub answers with it, with `Content-Encoding` and
+    /// `Vary: Accept-Encoding`, only to a request that accepts the encoding; all else is answered as before. Nothing is
+    /// compressed at run time.
+    fn encoded(&self, _request_path: &str, _encoding: &str) -> Option<Bytes> {
+        None
+    }
 }
 
 /// The state of a hub that does not depend on the app: the guard and its secrets, the pairing and
@@ -771,7 +779,7 @@ mod tests {
             capabilities: Vec::new(),
         }));
         let core = core_with(&first);
-        let page = shell(State(core), "/".parse().unwrap()).await;
+        let page = shell(State(core), "/".parse().unwrap(), HeaderMap::new()).await;
         let bytes = axum::body::to_bytes(page.into_body(), 1 << 20)
             .await
             .unwrap();

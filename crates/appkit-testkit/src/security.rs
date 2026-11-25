@@ -1219,6 +1219,55 @@ pub async fn the_files_of_the_pages_are_never_cached(s: &dyn Subject, prefix: &s
     }
 }
 
+/// A file that the app holds compressed ahead of time is sent so to a request that accepts the encoding, with
+/// `Content-Encoding`, `Vary: Accept-Encoding` and the length of the compressed bytes; any other request gets the plain
+/// file, also with `Vary`. No file is ever cacheable (`no-store` stays), and one without a compressed version has
+/// neither header.
+pub async fn a_precompressed_file_is_sent_to_a_request_that_accepts_it(
+    s: &dyn Subject,
+    prefix: &str,
+) {
+    let h = Harness::new(s).await;
+    let path = format!("{prefix}/sw.js");
+    let plain = get(&h, &path, &[]).await;
+    assert_eq!(plain.status, 200, "{plain:?}");
+    assert!(plain.header("content-encoding").is_none(), "{plain:?}");
+    assert_eq!(plain.header("vary"), Some("Accept-Encoding"), "{plain:?}");
+    assert!(plain.body.starts_with("self.addEventListener"), "{plain:?}");
+    for asked in ["gzip", "br, gzip;q=0.5", "deflate, GZIP"] {
+        let r = get(&h, &path, &[("Accept-Encoding", asked)]).await;
+        assert_eq!(r.status, 200, "{asked}: {r:?}");
+        assert_eq!(r.header("content-encoding"), Some("gzip"), "{asked}: {r:?}");
+        assert_eq!(r.header("vary"), Some("Accept-Encoding"), "{asked}: {r:?}");
+        assert_eq!(r.header("content-length"), Some("10"), "{asked}: {r:?}");
+        assert_eq!(r.body, "gzip-of-sw", "{asked}: {r:?}");
+        assert_eq!(
+            r.header("cache-control"),
+            Some("no-store"),
+            "{asked}: {r:?}"
+        );
+        assert!(r.header("etag").is_none(), "{asked}: {r:?}");
+    }
+    // Refused, or an encoding the app has no version of: the plain file.
+    for asked in ["gzip;q=0", "identity", "br", "zstd"] {
+        let r = get(&h, &path, &[("Accept-Encoding", asked)]).await;
+        assert!(r.header("content-encoding").is_none(), "{asked}: {r:?}");
+        assert!(
+            r.body.starts_with("self.addEventListener"),
+            "{asked}: {r:?}"
+        );
+    }
+    // A file without a compressed version keeps its answer as it was.
+    let other = get(
+        &h,
+        &format!("{prefix}/manifest.webmanifest"),
+        &[("Accept-Encoding", "gzip")],
+    )
+    .await;
+    assert!(other.header("content-encoding").is_none(), "{other:?}");
+    assert!(other.header("vary").is_none(), "{other:?}");
+}
+
 // ── 11 to 14, 17: pairing ───────────────────────────────────────────────────
 
 pub async fn a_pairing_code_is_good_once(s: &dyn Subject) {

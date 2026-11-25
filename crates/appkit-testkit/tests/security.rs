@@ -47,6 +47,15 @@ async fn the_files_of_the_pages_are_never_cached() {
     .await;
 }
 
+#[tokio::test]
+async fn a_precompressed_file_is_sent_to_a_request_that_accepts_it() {
+    appkit_testkit::security::a_precompressed_file_is_sent_to_a_request_that_accepts_it(
+        &appkit_testkit::subjects::DemoInstallable,
+        appkit_testkit::subjects::INSTALLABLE_PREFIX,
+    )
+    .await;
+}
+
 mod demo_installable_recording {
     appkit_testkit::security_matrix!(appkit_testkit::subjects::DemoInstallableRecording);
 }

@@ -37,7 +37,7 @@ together are at most 8 KiB.
 
 Every answer carries `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`,
 `Cache-Control: no-store` and `Cross-Origin-Resource-Policy: same-origin`; the page carries a
-restrictive `Content-Security-Policy` whose `connect-src` is `'self'`. An app can widen that by exactly one
+restrictive `Content-Security-Policy` whose `connect-src` is `'self'`. A file of a page that the app holds compressed ahead of time (`Pages::encoded`, `gzip` or `br`) is sent so, with `Content-Encoding` and `Vary: Accept-Encoding`, only to a request that accepts the encoding; `no-store` stays on it, and nothing is compressed at run time. An app can widen that by exactly one
 host with `GuardRules::with_connect_src("https://host")` (today: hub-desktop, `https://api.github.com`, for the
 update badge: a read of public release data without token or cookie). The value is checked when the hub is
 made and must be `https://` plus a lower-case host name with a dot and an optional port: no wildcard, no
