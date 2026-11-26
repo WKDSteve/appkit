@@ -387,7 +387,9 @@ Parameters (all optional):
                 if ($arg -match '\s') { $flags += '"' + $arg + '"' } else { $flags += $arg }
             }
             Write-Output "running the setup silently ($($flags -join ' '))"
-            $proc = Start-Process -FilePath $path -ArgumentList $flags -Wait -PassThru
+            # -NoNewWindow: a console program here (a wrapper script) shares this console instead of opening a
+            # window of its own that takes the focus; the usual GUI setup has no console either way.
+            $proc = Start-Process -FilePath $path -ArgumentList $flags -Wait -PassThru -NoNewWindow
             if ($proc.ExitCode -ne 0) {
                 # The usual cause: the app still runs and locks the files the setup replaces. A silent Inno Setup
                 # answers its Abort/Retry/Ignore box itself with Abort (exit code 5), and the bare code says

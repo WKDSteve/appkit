@@ -27,6 +27,12 @@ import unittest.mock
 import zipfile
 from pathlib import Path
 
+# On Windows a child with no console of its own (the job steps of a self-hosted runner have none) makes every
+# console program it starts open a console window of its own, and Windows Terminal shows that window and takes
+# the focus. A hidden console (CREATE_NO_WINDOW) is inherited by the grandchildren, so none appears. Every
+# subprocess of these tests gets it; elsewhere it is empty.
+HIDDEN: dict[str, int] = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
+
 KIT = Path(__file__).resolve().parent
 sys.path.insert(0, str(KIT))
 
@@ -382,7 +388,7 @@ class InstallShTest(unittest.TestCase):
         # No real gh: a test that wants one passes INSTALL_GH (the fake below).
         full = dict(os.environ, OUT=self.out.as_posix(), INSTALL_GH="no-such-gh-for-the-tests")
         full.update(env)
-        return subprocess.run([SH_EXE, script.as_posix(), *args], capture_output=True, text=True, env=full)
+        return subprocess.run([SH_EXE, script.as_posix(), *args], capture_output=True, text=True, env=full, **HIDDEN)
 
     def fake_gh(self) -> Path:
         gh = self.tmp / "fake-gh"
@@ -509,7 +515,7 @@ class InstallShTest(unittest.TestCase):
         res = subprocess.run(
             [SH_EXE, SH.as_posix(), "--file", "demo-hub", "--kind", "hub", "--program", "demo-hub", "--allow-root"],
             capture_output=True, text=True, cwd=self.tmp,
-            env=dict(os.environ, OUT=self.out.as_posix(), PATH=posix_path_env(old)),
+            env=dict(os.environ, OUT=self.out.as_posix(), PATH=posix_path_env(old)), **HIDDEN,
         )
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(self.out.read_text().strip(), "install")
@@ -522,7 +528,7 @@ class InstallShTest(unittest.TestCase):
         full = dict(os.environ, OUT=self.out.as_posix(), PATH=posix_path_env(tools), MSYS="noglob",
                     FIXTURES=(self.tmp / "fixtures").as_posix(), CURL_LOG=(self.tmp / "curl.log").as_posix())
         full.update(env)
-        return subprocess.run([SH_EXE, script.as_posix(), "--allow-root", *args], capture_output=True, text=True, env=full)
+        return subprocess.run([SH_EXE, script.as_posix(), "--allow-root", *args], capture_output=True, text=True, env=full, **HIDDEN)
 
     def fixtures(self, name: str) -> None:
         folder = self.tmp / "fixtures"
@@ -772,7 +778,7 @@ class UninstallEntryPs1Test(unittest.TestCase):
                     [shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(driver),
                      "-Kit", str(ENTRY_PS1), "-Root", root, "-Install", str(install), "-Elsewhere", str(other),
                      "-Start", str(start), "-Desk", str(desk)],
-                    capture_output=True, text=True, encoding="utf-8", errors="replace")
+                    capture_output=True, text=True, encoding="utf-8", errors="replace", **HIDDEN)
                 self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
                 got = json.loads(res.stdout.strip().splitlines()[-1])
                 app = install / "demo.exe"
@@ -796,7 +802,7 @@ class UninstallEntryPs1Test(unittest.TestCase):
                 self.assertIn("trailing backslash", got["slash"])
                 # Nothing of the test stays in the registry.
                 check = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-Command",
-                                        f"Test-Path -LiteralPath '{root}'"], capture_output=True, text=True)
+                                        f"Test-Path -LiteralPath '{root}'"], capture_output=True, text=True, **HIDDEN)
                 self.assertEqual(check.stdout.strip(), "False")
 
 
@@ -857,7 +863,7 @@ class InstallPs1Test(unittest.TestCase):
         # test that only wants the exit code must not die on an umlaut before it can say what failed.
         return subprocess.run([shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                                "-Command", command], capture_output=True, text=True, encoding="utf-8",
-                              errors="replace", env=full, cwd=cwd)
+                              errors="replace", env=full, cwd=cwd, **HIDDEN)
 
     def fake(self, name: str) -> Path:
         path = self.tmp / name
@@ -1010,7 +1016,7 @@ class InstallPs1Test(unittest.TestCase):
         write_sums(self.tmp, setup)
         me = Path(sys.executable).stem
         other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"],
-                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **HIDDEN)
         # Cleanups run last in, first out: kill, then wait, also when an assertion below failed.
         self.addCleanup(other.wait, 30)
         self.addCleanup(other.kill)
@@ -1255,7 +1261,7 @@ class InstallPs1Test(unittest.TestCase):
                 "'after: ' + $ErrorActionPreference + ' ' + $File + ' ' + $Version + ' ' + $Kind"
             )
             res = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-Command", command],
-                                 capture_output=True, text=True)
+                                 capture_output=True, text=True, **HIDDEN)
             self.assertIn("caught: install.ps1:", res.stdout, res.stderr)
             self.assertIn("after: Continue mine mine mine", res.stdout)
 
@@ -1411,7 +1417,7 @@ class PublishTest(unittest.TestCase):
             full["PATH"] = "/" + self.bin.as_posix().replace(":", "", 1) + ":" + "/usr/bin:/bin:" + os.environ["PATH"]
         # In a folder of its own: publish.sh reads README.md and README.<lang>.md of the folder it runs in.
         return subprocess.run([BASH_EXE, PUBLISH.as_posix()], capture_output=True, text=True, env=full,
-                              cwd=self.tmp)
+                              cwd=self.tmp, **HIDDEN)
 
     def calls(self) -> list[str]:
         return self.log.read_text().splitlines() if self.log.exists() else []
@@ -1792,6 +1798,38 @@ class PublishActionTest(unittest.TestCase):
         self.assertIn("subject-checksums: ${{ runner.temp }}/release-kit-stage.sums", steps)
         self.assertIn("if: inputs.attest == 'true'", steps)
         self.assertEqual(steps.count("STAGE: ${{ runner.temp }}/release-kit-stage"), 4, "every bash step, both systems")
+
+
+class NoConsoleWindowTest(unittest.TestCase):
+    """The tests start no console window on a self-hosted Windows runner (they stole the focus 42 times in one run)."""
+
+    def test_every_subprocess_call_gets_the_hidden_console(self) -> None:
+        import ast
+
+        tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+        bare = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            target = node.func.value
+            if not (isinstance(target, ast.Name) and target.id == "subprocess" and node.func.attr in ("run", "Popen")):
+                continue
+            if not any(k.arg is None and isinstance(k.value, ast.Name) and k.value.id == "HIDDEN" for k in node.keywords):
+                bare.append(node.lineno)
+        self.assertEqual(bare, [], "subprocess calls without **HIDDEN (a console window on the runner)")
+
+    def test_install_ps1_starts_the_setup_without_a_new_console(self) -> None:
+        text = (KIT / "scripts" / "install.ps1").read_text(encoding="utf-8")
+        starts = [line.strip() for line in text.splitlines() if "Start-Process" in line and not line.strip().startswith("#")]
+        self.assertTrue(starts, "install.ps1 starts the setup with Start-Process")
+        for line in starts:
+            self.assertIn("-NoNewWindow", line, "a console setup would open a window of its own")
+
+    def test_hidden_is_create_no_window_on_windows(self) -> None:
+        if sys.platform == "win32":
+            self.assertEqual(HIDDEN, {"creationflags": subprocess.CREATE_NO_WINDOW})
+        else:
+            self.assertEqual(HIDDEN, {})
 
 
 if __name__ == "__main__":
