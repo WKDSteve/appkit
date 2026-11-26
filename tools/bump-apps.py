@@ -170,21 +170,22 @@ def pinned_tag_at(app: Path, mode: str, ref: str) -> str | None:
     return found.group(1) if found else None
 
 
-def upstream_of(app: Path) -> str | None:
-    """The branch the clone is compared with: its upstream, else origin/main when there is one, else None."""
+def compared_refs(app: Path) -> list[str]:
+    """The branches the clone's pin is compared with: its upstream (when it has one) and origin/main (always, also when
+    the clone tracks another branch: main is where the apps are released from)."""
+    refs = []
     try:
-        return git(app, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}").strip()
+        refs.append(git(app, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}").strip())
     except RuntimeError:
         pass
-    try:
-        git(app, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/main")
-    except RuntimeError:
-        return None
-    return "origin/main"
+    if "origin/main" not in refs:
+        refs.append("origin/main")
+    return refs
 
 
 def higher_pins(app: Path, mode: str, tag: str) -> list[str]:
-    """Where the app already pins a newer appkit than `tag`: in the clone's files, or on its upstream after a fetch.
+    """Where the app already pins a newer appkit than `tag`: in the clone's files, or on its upstream or origin/main
+    after a fetch. A ref that does not exist (no remote origin, no main there) is no finding.
 
     Two sessions bump the same app: the second, with an older tag, would lower the pin the first one set, and the
     app's code may already use what only the newer tag has (hub-desktop on v0.81.0 lowered to v0.80.0)."""
@@ -192,13 +193,19 @@ def higher_pins(app: Path, mode: str, tag: str) -> list[str]:
     held = pinned_tag(app, mode)
     if held and version(held) > version(tag):
         found.append(f"the clone pins {held}")
-    ref = upstream_of(app)
-    if ref:
-        remote = ref.split("/", 1)[0]
+    refs = compared_refs(app)
+    try:
+        remotes = set(git(app, "remote").split())
+    except RuntimeError:
+        remotes = set()
+    for remote in dict.fromkeys(ref.split("/", 1)[0] for ref in refs):
+        if remote not in remotes:
+            continue
         try:
             git(app, "fetch", "--quiet", remote)
         except RuntimeError as err:
-            print(f"   note: could not fetch {remote} ({err}); comparing with the last known {ref}")
+            print(f"   note: could not fetch {remote} ({err}); comparing with what is known of it")
+    for ref in refs:
         theirs = pinned_tag_at(app, mode, ref)
         if theirs and version(theirs) > version(tag):
             found.append(f"{ref} pins {theirs}")

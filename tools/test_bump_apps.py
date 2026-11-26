@@ -441,6 +441,19 @@ class DowngradeTest(unittest.TestCase):
         run.assert_not_called()
         self.assertIn('tag = "v0.23.1"', (app / "Cargo.toml").read_text(), "nothing written")
 
+    def test_origin_main_is_compared_also_when_the_clone_tracks_another_branch(self) -> None:
+        app = self.repo("ai-desktop", full=False)
+        self.git(app, "branch", "-q", "-M", "main")
+        self.bump_on_origin(app, "v0.24.0")  # origin/main pins v0.24.0
+        self.git(app, "switch", "-q", "-c", "feature")
+        self.git(app, "push", "-q", "origin", "feature")
+        self.git(app, "branch", "-q", "--set-upstream-to=origin/feature")  # its upstream still pins v0.23.1
+        with mock.patch.object(bump, "run") as run, \
+                mock.patch("sys.stdout", new_callable=__import__("io").StringIO) as out:
+            self.assertFalse(bump.bump_app("ai-desktop", self.tmp, "v0.23.2", NEW_SHA, self.args))
+        run.assert_not_called()
+        self.assertIn("origin/main pins v0.24.0", out.getvalue())
+
     def test_an_upstream_behind_or_level_does_not_stop_it(self) -> None:
         app = self.repo("ai-desktop", full=False)
         self.bump_on_origin(app, "v0.23.1")  # nothing to replace: origin's commit is the same pin
