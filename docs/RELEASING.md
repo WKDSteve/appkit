@@ -29,7 +29,10 @@ tag (`pnpm-lock.yaml` holds the commit of each kit), and its CI checks that the 
    files, and runs each app's own pin check and, in an app that has one, its lock-age check (`--min-days`,
    default 7): a crate the refresh pulled in younger than that is named and the app is not done; `--hold-back`
    puts it back to the version of appkit's own `Cargo.lock` and checks again. It refuses a tag that is not on
-   origin, and skips an app whose files to edit hold uncommitted work. Then push each app and watch its CI.
+   origin, and skips an app whose files to edit hold uncommitted work. It never lowers a pin: an app whose
+   clone or upstream (after a fetch) already pins a newer tag is skipped, also in `--dry-run` ("would lower");
+   `--allow-downgrade` lowers it on purpose. Then push each app (read `git log origin/main..HEAD` first) and
+   watch its CI.
 
    A tag that asks an app for more than its pins (a change of its own code, such as `v0.56.0`: the hub is a
    window program) gets an entry in `BY_HAND` of the script. The bump prints it for each app whose pin is

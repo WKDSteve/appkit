@@ -7,6 +7,12 @@
     python tools/bump-apps.py v0.23.2 --commit              also commit each app (never pushes)
     python tools/bump-apps.py v0.23.2 --hold-back           a crate the bump made too young goes back to appkit's version
     python tools/bump-apps.py v0.23.2 --worktree            bump and commit each app in a worktree of its HEAD (see below)
+    python tools/bump-apps.py v0.23.2 --allow-downgrade     also an app that already pins a newer tag (see below)
+
+A bump never lowers a pin: an app whose clone, or whose upstream after a fetch (origin/main without one), already
+pins a newer tag than the one asked for is skipped and counts as not done, also in a --dry-run ("would lower").
+Another session may have moved it on, and the app's code may use what only the newer tag has. --allow-downgrade
+lowers it on purpose.
 
 Why a script: an app pins appkit in several places that must agree (and its own check fails when they do
 not), and doing it by hand is what makes a small appkit fix cost an afternoon.
@@ -140,12 +146,63 @@ def version(tag: str) -> tuple[int, ...]:
 
 def pinned_tag(app: Path, mode: str) -> str | None:
     """The tag of appkit the app holds now: Cargo.toml for an app with the crates, tools/release-kit.pin else."""
-    path, pattern = ((app / "Cargo.toml", CARGO_TAG) if mode in ("full", "cargo")
-                     else (app / "tools" / "release-kit.pin", PIN_TAG_VALUE))
+    rel, pattern = pin_file(mode)
+    path = app / rel
     if not path.is_file():
         return None
     found = pattern.search(read_exact(path))
     return found.group(1) if found else None
+
+
+def pin_file(mode: str) -> tuple[str, re.Pattern[str]]:
+    """The file (relative to the app) that holds the app's tag of appkit, and the pattern that reads it."""
+    return ("Cargo.toml", CARGO_TAG) if mode in ("full", "cargo") else ("tools/release-kit.pin", PIN_TAG_VALUE)
+
+
+def pinned_tag_at(app: Path, mode: str, ref: str) -> str | None:
+    """The tag of appkit the app holds at a commit (`git show <ref>:<file>`); None when the file or the pin is not there."""
+    rel, pattern = pin_file(mode)
+    try:
+        text = git(app, "show", f"{ref}:{rel}")
+    except RuntimeError:
+        return None
+    found = pattern.search(text)
+    return found.group(1) if found else None
+
+
+def upstream_of(app: Path) -> str | None:
+    """The branch the clone is compared with: its upstream, else origin/main when there is one, else None."""
+    try:
+        return git(app, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}").strip()
+    except RuntimeError:
+        pass
+    try:
+        git(app, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/main")
+    except RuntimeError:
+        return None
+    return "origin/main"
+
+
+def higher_pins(app: Path, mode: str, tag: str) -> list[str]:
+    """Where the app already pins a newer appkit than `tag`: in the clone's files, or on its upstream after a fetch.
+
+    Two sessions bump the same app: the second, with an older tag, would lower the pin the first one set, and the
+    app's code may already use what only the newer tag has (hub-desktop on v0.81.0 lowered to v0.80.0)."""
+    found = []
+    held = pinned_tag(app, mode)
+    if held and version(held) > version(tag):
+        found.append(f"the clone pins {held}")
+    ref = upstream_of(app)
+    if ref:
+        remote = ref.split("/", 1)[0]
+        try:
+            git(app, "fetch", "--quiet", remote)
+        except RuntimeError as err:
+            print(f"   note: could not fetch {remote} ({err}); comparing with the last known {ref}")
+        theirs = pinned_tag_at(app, mode, ref)
+        if theirs and version(theirs) > version(tag):
+            found.append(f"{ref} pins {theirs}")
+    return found
 
 
 def by_hand(app: Path, mode: str, tag: str) -> list[str]:
@@ -605,6 +662,14 @@ def bump_app(name: str, repos: Path, tag: str, sha: str, args: argparse.Namespac
     if not (app / ".git").exists():
         print("   skipped: no clone at " + str(app))
         return False
+    higher = higher_pins(app, mode, tag)
+    if higher:
+        if not getattr(args, "allow_downgrade", False):
+            verb = "would lower" if args.dry_run else "skipped, nothing written:"
+            print(f"   {verb} the pin to {tag} ({'; '.join(higher)}): a bump never lowers it"
+                  " (--allow-downgrade to lower it on purpose)")
+            return False
+        print(f"   lowering the pin to {tag} on purpose (--allow-downgrade; {'; '.join(higher)})")
     for note in by_hand(app, mode, tag):
         print(f"   by hand, not part of the bump commit: {note}")
     if getattr(args, "worktree", False):
@@ -665,6 +730,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--worktree", action="store_true",
                         help="bump and commit each app in a worktree of its HEAD, then fast-forward the clone"
                              " (implies --commit)")
+    parser.add_argument("--allow-downgrade", action="store_true",
+                        help="bump an app whose pin (in the clone or on its upstream) is newer than the tag")
     parser.add_argument("--repos-dir", help="folder with the clones (default: the parent of this clone)")
     args = parser.parse_args(argv)
 

@@ -368,8 +368,97 @@ class BumpAppTest(unittest.TestCase):
             self.assertTrue(bump.bump_app("ai-desktop", self.tmp, "v0.23.2", NEW_SHA, self.args))
 
 
+class DowngradeTest(unittest.TestCase):
+    """A bump never lowers a pin: neither below the clone's own nor below the one its upstream already has."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.args = type("Args", (), {"dry_run": False, "commit": True, "no_lock": False})()
+
+    def git(self, app: Path, *args: str) -> str:
+        res = subprocess.run(["git", "-C", str(app), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                             check=True, capture_output=True, text=True)
+        return res.stdout
+
+    def repo(self, name: str, full: bool) -> Path:
+        app = make_app(self.tmp, name, full)
+        self.git(app, "init", "-q")
+        self.git(app, "config", "user.name", "t")
+        self.git(app, "config", "user.email", "t@t")
+        self.git(app, "add", ".")
+        self.git(app, "commit", "-q", "-m", "start")
+        return app
+
+    def bump_on_origin(self, app: Path, tag: str) -> None:
+        """origin of `app` gets a commit (from another clone) that pins `tag`; the clone stays behind."""
+        origin = self.tmp / f"{app.name}.git"
+        self.git(self.tmp, "clone", "-q", "--bare", str(app), str(origin))
+        self.git(app, "remote", "add", "origin", str(origin))
+        self.git(app, "fetch", "-q", "origin")
+        branch = self.git(app, "symbolic-ref", "--short", "HEAD").strip()
+        self.git(app, "branch", "-q", f"--set-upstream-to=origin/{branch}")
+        other = self.tmp / f"{app.name}-other"
+        self.git(self.tmp, "clone", "-q", str(origin), str(other))
+        for path in [other / "Cargo.toml", other / "tools" / "release-kit.pin"]:
+            if path.is_file():
+                path.write_text(path.read_text(encoding="utf-8").replace("v0.23.1", tag), encoding="utf-8", newline="")
+        (other / "README.md").write_text("pushed by another session\n", encoding="utf-8")
+        self.git(other, "add", "-A")
+        self.git(other, "commit", "-q", "-m", f"pin {tag}")
+        self.git(other, "push", "-q", "origin", "HEAD")
+
+    def test_a_clone_that_pins_a_newer_tag_is_skipped_untouched(self) -> None:
+        app = self.repo("hub-desktop", full=True)
+        with mock.patch.object(bump, "run") as run, mock.patch.object(bump, "refresh_locks") as refresh:
+            self.assertFalse(bump.bump_app("hub-desktop", self.tmp, "v0.23.0", NEW_SHA, self.args))
+        run.assert_not_called()
+        refresh.assert_not_called()
+        self.assertIn('tag = "v0.23.1"', (app / "Cargo.toml").read_text())
+        self.assertEqual(self.git(app, "status", "--porcelain").strip(), "")
+        self.assertEqual(len(self.git(app, "log", "--oneline").splitlines()), 1)
+
+    def test_a_dry_run_says_it_would_lower(self) -> None:
+        self.repo("ai-desktop", full=False)
+        self.args.dry_run = True
+        with mock.patch("sys.stdout", new_callable=__import__("io").StringIO) as out:
+            self.assertFalse(bump.bump_app("ai-desktop", self.tmp, "v0.23.0", NEW_SHA, self.args))
+        self.assertIn("would lower the pin to v0.23.0 (the clone pins v0.23.1)", out.getvalue())
+
+    def test_allow_downgrade_lowers_it_on_purpose(self) -> None:
+        app = self.repo("ai-desktop", full=False)
+        self.args.allow_downgrade = True
+        with mock.patch.object(bump, "run"):
+            self.assertTrue(bump.bump_app("ai-desktop", self.tmp, "v0.23.0", NEW_SHA, self.args))
+        self.assertIn("tag = v0.23.0", (app / "tools" / "release-kit.pin").read_text())
+
+    def test_an_upstream_that_pins_a_newer_tag_stops_the_bump(self) -> None:
+        # the clone is behind (v0.23.1), origin already has v0.24.0: a bump to v0.23.2 would lower origin's pin
+        app = self.repo("hub-desktop", full=True)
+        self.bump_on_origin(app, "v0.24.0")
+        with mock.patch.object(bump, "run") as run, mock.patch.object(bump, "refresh_locks"):
+            self.assertFalse(bump.bump_app("hub-desktop", self.tmp, "v0.23.2", NEW_SHA, self.args))
+        run.assert_not_called()
+        self.assertIn('tag = "v0.23.1"', (app / "Cargo.toml").read_text(), "nothing written")
+
+    def test_an_upstream_behind_or_level_does_not_stop_it(self) -> None:
+        app = self.repo("ai-desktop", full=False)
+        self.bump_on_origin(app, "v0.23.1")  # nothing to replace: origin's commit is the same pin
+        with mock.patch.object(bump, "run"):
+            self.assertTrue(bump.bump_app("ai-desktop", self.tmp, "v0.23.2", NEW_SHA, self.args))
+
+    def test_the_worktree_bump_checks_the_upstream_too(self) -> None:
+        app = self.repo("ai-desktop", full=False)
+        self.bump_on_origin(app, "v0.24.0")
+        self.args.worktree = True
+        with mock.patch.object(bump, "run") as run:
+            self.assertFalse(bump.bump_app("ai-desktop", self.tmp, "v0.23.2", NEW_SHA, self.args))
+        run.assert_not_called()
+        self.assertEqual(self.git(app, "branch", "--list", "bump/*").strip(), "", "no bump branch either")
+
+
 class WorktreeTest(unittest.TestCase):
-    """--worktree: the bump is made from HEAD in a throw-away worktree; another session's uncommitted work neither
+    """--worktree:the bump is made from HEAD in a throw-away worktree; another session's uncommitted work neither
     skips the app nor reaches the commit or the lock refresh."""
 
     def setUp(self) -> None:
