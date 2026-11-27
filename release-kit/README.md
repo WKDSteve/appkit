@@ -284,6 +284,76 @@ Bash by its full path (`C:\PROGRA~1\Git\bin\bash.exe`, the 8.3 form: the shell s
 leave the `unix-*` inputs empty and set `expect` to the number of Windows files (one): there is no `install.sh`.
 `publish` then needs `python3`, `gh` and `sha256sum` on the runner's PATH (Git Bash brings the last one).
 
+### Windows on the self-hosted runner, Linux and macOS on hosted runners
+
+A public repository gets GitHub-hosted runners for free, so an app whose Windows build stays on the self-hosted runner
+can add Linux and macOS as throw-away VMs in the same `build` matrix (reference: `hub-desktop`,
+`.github/workflows/rolling.yml`). The parts that matter:
+
+```yaml
+  build:
+    name: build (${{ matrix.name }})
+    runs-on: ${{ matrix.runs-on }}
+    continue-on-error: ${{ matrix.experimental }}   # a red new leg leaves the job green
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: windows, runs-on: [self-hosted, windows], shell: 'C:\PROGRA~1\Git\bin\bash.exe --noprofile --norc -e -o pipefail {0}', program: my-hub.exe, asset: my-hub-windows-x86_64.exe, experimental: false }
+          - { name: linux, runs-on: ubuntu-22.04, shell: 'bash --noprofile --norc -e -o pipefail {0}', program: my-hub, asset: my-hub-x86_64-unknown-linux-gnu.tar.gz, experimental: false }
+          - { name: macos, runs-on: macos-latest, shell: 'bash --noprofile --norc -e -o pipefail {0}', program: my-hub, asset: my-hub-aarch64-apple-darwin.tar.gz, experimental: true }
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    # steps: build; for a .tar.gz put the program at the top of the archive
+    #   (cp target/release/$PROGRAM LICENSE stage/ && COPYFILE_DISABLE=1 tar -czf dist/$ASSET -C stage .);
+    #   run the app's install test on the program; upload-artifact name rolling-${{ matrix.name }}
+
+  publish:
+    steps:
+      # ... download-artifact, then count what is there: the required files must be, the experimental one may be
+      - id: files
+        run: |
+          test -f dist/my-hub-windows-x86_64.exe
+          test -f dist/my-hub-x86_64-unknown-linux-gnu.tar.gz
+          count=2; [ -f dist/my-hub-aarch64-apple-darwin.tar.gz ] && count=3
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+      - uses: WKDSteve/appkit/release-kit/publish@<sha> # vX.Y.Z
+        with:
+          expect: ${{ steps.files.outputs.count }}
+          unix-kind: hub
+          unix-program: my-hub
+          unix-release-asset: my-hub-{version}-{triple}.tar.gz
+          unix-rolling-asset: my-hub-{triple}.tar.gz   # one name for Linux and macOS: install.sh fills in its own triple
+          extra: |
+            scripts/uninstall.ps1
+            scripts/uninstall.sh
+          # ... the windows-* inputs as before
+```
+
+- **Names carry the triple.** `install.sh` only knows `Linux-x86_64` and `Darwin-arm64`; with `{triple}` in both asset
+  names it downloads the archive of its own system. A name without `{triple}` is a Linux x86-64 build only.
+- **`kind: hub` needs the program's own `install` command on Linux and macOS** (the program copies itself to its place).
+  An app made of several files (a `bin/` folder, an extension, a player with libraries) is no `hub`: it needs an install
+  script of its own beside its archive, as `takt` has (`scripts/install.sh`, `package-release.py`).
+- **A new leg starts experimental.** `publish` requires only the legs that have proven themselves; a missing archive of
+  the experimental leg is not published, and `publish` takes an earlier one of that name off the release (it removes
+  what a build no longer has). Make the leg required after some green runs.
+- **Linux on `ubuntu-22.04`**, not `ubuntu-latest`: a program linked against an older glibc runs on more systems.
+  `macos-latest` is arm64 (`aarch64-apple-darwin`); there is no Intel build unless a leg for `macos-13` is added.
+- **Native libraries:** a hub with `axum`/`tokio` and no tray needs none on Linux. `cpal` needs `libasound2-dev`
+  (and `libdbus-1-dev` for rtkit), a Tauri app the WebKitGTK packages (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`,
+  `libayatana-appindicator3-dev`, `librsvg2-dev`): install them with `apt-get` in the Linux leg.
+- **Shell scripts that run on macOS** meet Bash 3.2 (an empty array under `set -u` is unset: `${A[@]+"${A[@]}"}`; no
+  `mapfile`, no associative arrays), no `sha256sum` (`shasum -a 256`) and a locale-dependent `sort`/`ls` order
+  (`LC_ALL=C`).
+- **Never pipe a listing into `grep -q` under `pipefail`:** `tar -tzf a.tar.gz | grep -q x` fails on GNU tar
+  (Linux) whenever a line follows the match (`tar: stdout: write error`, SIGPIPE), and passes on macOS; write the
+  listing to a file first (the first Linux run of `hub-desktop` failed so).
+- **The self-hosted Windows CI is unchanged:** the hosted legs only build what CI already proved on Windows; the app's
+  CI may add `clippy`/tests on `ubuntu-latest` and `macos-latest` for the code behind `cfg(unix)` (as appkit's own
+  `rust-other-systems` job does).
+
 ## Attestation
 
 `publish` attests every file it puts on a release, the install scripts and `version.json` included, with
