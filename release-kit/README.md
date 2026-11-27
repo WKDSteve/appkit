@@ -23,7 +23,12 @@ uploading, checking, naming.
   the build of the newest green commit of `main` (not of the tip: a red tip, or one still in CI, does not keep it
   from being built) replaces its files, which keep **fixed names without a version**
   (`releases/download/latest/<file>` always works). A channel only moves forward: a target that is not a descendant of the commit
-  in `version.json` of the build that is up builds nothing, so a late run never moves it backwards. `SHA256SUMS` goes first, files of an earlier build that
+  in `version.json` of the build that is up builds nothing, so a late run never moves it backwards. While a
+  descendant of the newest green commit is still in CI (its run queued or in progress), nothing is built either: that
+  CI ends in a rolling run of its own, which builds the descendant when it is green and the older commit when it is
+  red, so nothing stays unbuilt and no build is made only to be replaced minutes later (the job `if` of `prepare`
+  therefore lets red CI runs through too). `wait-for-descendants: false` builds every green state instead; a commit
+  named by hand and the other channels never wait. `SHA256SUMS` goes first, files of an earlier build that
   this one no longer has go, and only at the end does the tag move to the commit and the page name it:
   a run that stops in between leaves the page naming the previous commit.
 - **`vX.Y.Z`** is a release from a tag, left as a **draft**: a person installs it, opens it,
@@ -187,7 +192,8 @@ on:
         description: A green commit of main to build again (full id); empty - the newest green commit
         required: false
 # One group, nothing cancelled: a run decides at its own start (prepare), so an older run neither replaces nor
-# cancels a newer build, and a waiting run is replaced by a newer one of the same group.
+# cancels a newer build, and a waiting run is replaced by a newer one of the same group. The group does not stop a
+# run that is building already; prepare does not start one while a newer commit is still in CI.
 concurrency:
   group: rolling
   cancel-in-progress: false
@@ -196,10 +202,13 @@ permissions:
 
 jobs:
   prepare:
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') }}
+    # Every completed CI run of a push, red ones too: after a red descendant, prepare builds the older green commit
+    # it waited for (it builds nothing when there is nothing new).
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.event == 'push' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read        # the CI runs of main: which are green, which still run
     outputs:
       current: ${{ steps.prepare.outputs.current }}
       sha: ${{ steps.prepare.outputs.sha }}

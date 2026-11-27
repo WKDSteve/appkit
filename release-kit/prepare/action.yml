@@ -14,6 +14,12 @@
 #       sha: ${{ github.event.inputs.sha }}   # empty for a workflow_run: the newest green commit
 #       token: ${{ github.token }}
 #
+# The job needs `actions: read` too: prepare reads the CI runs of the branch (which are green, which still run).
+# While a descendant of the newest green commit is still in CI, a run for `latest` builds nothing: that descendant's
+# CI ends in a rolling run of its own, which builds it when green and the older commit when red. So the job `if`
+# lets every completed CI run of a push through, red ones too (prepare decides). `wait-for-descendants: false`
+# builds every green state instead.
+#
 # The job hands `steps.prepare.outputs.current` (and `sha`, `short`) on to the build jobs. Several runs may be
 # waiting at once: give the workflow ONE concurrency group without cancel-in-progress, so an older run neither
 # replaces nor cancels a newer build (each run decides on the state at its own start).
@@ -42,8 +48,12 @@ inputs:
     description: "The channels the app has switched on, separated by spaces (the one line of its release configuration). A run for another channel builds nothing."
     required: false
     default: latest
+  wait-for-descendants:
+    description: "latest only: 'true' builds nothing while a descendant of the newest green commit is still in CI (the rolling run of its CI decides); 'false' builds every green state. A commit named by hand and the channels nightly and stable never wait."
+    required: false
+    default: "true"
   token:
-    description: A token with contents write (github.token).
+    description: A token with contents write and actions read (github.token).
     required: true
   branch:
     description: The branch whose tip is built.
@@ -75,6 +85,12 @@ runs:
         CI_WORKFLOW: ${{ inputs.ci-workflow }}
         CHANNEL: ${{ inputs.channel }}
         CHANNELS: ${{ inputs.channels }}
+        WAIT_FOR_DESCENDANTS: ${{ inputs.wait-for-descendants }}
+        FINISHED_SHA: ${{ github.event.workflow_run.head_sha }}
+        FINISHED_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        FINISHED_WORKFLOW: ${{ github.event.workflow_run.path }}
+        FINISHED_EVENT: ${{ github.event.workflow_run.event }}
+        FINISHED_BRANCH: ${{ github.event.workflow_run.head_branch }}
         KIT: ${{ github.action_path }}/..
       run: bash "$KIT/prepare.sh"
     - name: Which commit is built, and does the pre-release exist (Windows)
@@ -88,5 +104,11 @@ runs:
         CI_WORKFLOW: ${{ inputs.ci-workflow }}
         CHANNEL: ${{ inputs.channel }}
         CHANNELS: ${{ inputs.channels }}
+        WAIT_FOR_DESCENDANTS: ${{ inputs.wait-for-descendants }}
+        FINISHED_SHA: ${{ github.event.workflow_run.head_sha }}
+        FINISHED_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        FINISHED_WORKFLOW: ${{ github.event.workflow_run.path }}
+        FINISHED_EVENT: ${{ github.event.workflow_run.event }}
+        FINISHED_BRANCH: ${{ github.event.workflow_run.head_branch }}
         KIT: ${{ github.action_path }}/..
       run: bash "$(cygpath -u "$KIT")/prepare.sh"

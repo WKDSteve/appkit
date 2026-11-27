@@ -137,6 +137,13 @@ BY_HAND = [
      "cli::completions_script(shell, &[<command>, <binary>], OWN_COMMANDS) and exits 0 (a wrong shell word is "
      "Parsed::Usage, exit 2 as before); the app's own usage text lists `completions <shell>` through "
      "cli::usage_lines; README of appkit, 'completions'"),
+    ("v0.85.0", ("full", "kit", "cargo"),
+     "rolling.yml: latest builds nothing while a descendant of the newest green commit is still in CI, and the "
+     "rolling run of that descendant's CI builds the older commit when the descendant is red. So the job `if` of "
+     "prepare lets red runs through too (`github.event_name == 'workflow_dispatch' || "
+     "github.event.workflow_run.event == 'push'`, no `conclusion == 'success'`), and the prepare job gets "
+     "`actions: read` beside `contents: write`; `wait-for-descendants: false` on prepare builds every green state "
+     "instead; the model is release-kit/README.md"),
 ]
 
 

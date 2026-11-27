@@ -1800,6 +1800,158 @@ class PublishActionTest(unittest.TestCase):
         self.assertEqual(steps.count("STAGE: ${{ runner.temp }}/release-kit-stage"), 4, "every bash step, both systems")
 
 
+class PrepareWaitsForDescendantsTest(unittest.TestCase):
+    """latest builds nothing while a descendant of the newest green commit is still in CI (tasks-desktop ddf0b69 and
+    1d48a8d on 2026-11-27: the green run of the older commit built and published while the newer one was in CI).
+
+    pick_target.main() runs against a fake `gh` that answers the API of a branch OLD <- NEW (NEW is the tip); the
+    rolling build is at BASE, the parent of OLD."""
+
+    BASE, OLD, NEW = "b" * 40, "0" * 40, "1" * 40
+
+    def decide(self, new_run: dict | None, *extra: str) -> tuple[str, str]:
+        runs = [{"head_sha": self.OLD, "status": "completed", "conclusion": "success",
+                 "created_at": "2026-11-27T10:00:00Z"}]
+        if new_run:
+            runs.insert(0, dict(new_run, head_sha=self.NEW, created_at="2026-11-27T10:01:00Z"))
+        calls: list[tuple[str, ...]] = []
+
+        def gh(*args: str) -> str:
+            calls.append(args)
+            if args[:2] == ("release", "download"):
+                return json.dumps({"commit": self.BASE})
+            path = args[1]
+            if "/commits?" in path:
+                return json.dumps([{"sha": c} for c in (self.NEW, self.OLD, self.BASE)])
+            if "/actions/workflows/" in path:
+                return json.dumps({"workflow_runs": runs})
+            if "/compare/" in path:
+                return "ahead\n"  # a line of history: every newer commit is a descendant
+            raise AssertionError(f"unexpected gh call {args}")
+
+        import pick_target
+
+        out = io.StringIO()
+        with unittest.mock.patch.object(pick_target, "gh", gh), unittest.mock.patch("sys.stdout", out):
+            code = pick_target.main(["--repo", "Owner/demo", "--channel", "latest", *extra])
+        self.assertEqual(code, 0)
+        runs_calls = [c for c in calls if "/actions/workflows/" in c[1]]
+        self.assertEqual(len(runs_calls), 1, "one request for the CI runs")
+        lines = dict(line.split("=", 1) for line in out.getvalue().splitlines())
+        return lines["target"], lines["reason"]
+
+    def test_a_descendant_still_in_ci_builds_nothing(self) -> None:
+        for status in ("queued", "in_progress", "waiting", "pending"):
+            with self.subTest(status=status):
+                target, reason = self.decide({"status": status, "conclusion": None})
+                self.assertEqual(target, "")
+                self.assertIn(f"{self.NEW[:7]}, a descendant of the newest green commit {self.OLD[:7]}", reason)
+                self.assertIn("still in CI", reason)
+
+    def test_the_descendant_red_builds_the_older_green_commit(self) -> None:
+        # The rolling run that the red CI of NEW starts: nothing stays unbuilt.
+        target, reason = self.decide({"status": "completed", "conclusion": "failure"})
+        self.assertEqual(target, self.OLD, reason)
+
+    def test_the_descendant_green_builds_the_descendant(self) -> None:
+        target, reason = self.decide({"status": "completed", "conclusion": "success"})
+        self.assertEqual(target, self.NEW, reason)
+
+    def test_no_descendant_in_ci_builds_the_green_commit(self) -> None:
+        target, reason = self.decide(None)
+        self.assertEqual(target, self.OLD, reason)
+
+    def test_build_every_green_does_not_wait(self) -> None:
+        target, reason = self.decide({"status": "in_progress", "conclusion": None}, "--build-every-green")
+        self.assertEqual(target, self.OLD, reason)
+
+    def test_the_run_that_started_this_one_counts_as_completed(self) -> None:
+        # The list of runs still shows NEW in progress a moment after its CI ended: the event says otherwise.
+        lagging = {"status": "in_progress", "conclusion": None}
+        target, reason = self.decide(lagging, "--finished", self.NEW, "--finished-conclusion", "success")
+        self.assertEqual(target, self.NEW, reason)
+        target, reason = self.decide(lagging, "--finished", self.NEW, "--finished-conclusion", "failure")
+        self.assertEqual(target, self.OLD, reason)
+
+    def test_a_commit_named_by_hand_does_not_wait(self) -> None:
+        target, reason = self.decide({"status": "in_progress", "conclusion": None}, "--requested", self.OLD)
+        self.assertEqual(target, self.OLD, reason)
+
+
+@unittest.skipUnless(BASH_EXE, "needs a POSIX shell (Git Bash on Windows)")
+class PrepareShTest(unittest.TestCase):
+    """prepare.sh hands the input wait-for-descendants on to pick_target.py (a fake PYTHON logs its arguments)."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.args = self.tmp / "args"
+        self.python = self.tmp / "python"
+        self.python.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$ARGS_LOG"\necho target=\necho reason=fake\n',
+                               encoding="utf-8", newline="\n")
+        self.python.chmod(0o755)
+
+    def prepare(self, **env: str) -> subprocess.CompletedProcess[str]:
+        full = dict(os.environ, GH_TOKEN="t", BRANCH="main", GITHUB_REPOSITORY="Owner/demo",
+                    GITHUB_OUTPUT=(self.tmp / "out").as_posix(), KIT=KIT.as_posix(),
+                    PYTHON=self.python.as_posix(), ARGS_LOG=self.args.as_posix())
+        full.update(env)
+        return subprocess.run([BASH_EXE, (KIT / "prepare.sh").as_posix()], capture_output=True, text=True, env=full,
+                              **HIDDEN)
+
+    def passed(self) -> list[str]:
+        return self.args.read_text(encoding="utf-8").splitlines()
+
+    def test_waits_by_default(self) -> None:
+        res = self.prepare()
+        self.assertEqual(res.returncode, 0, res.stderr + res.stdout)
+        self.assertNotIn("--build-every-green", self.passed())
+        self.assertIn("current=false", (self.tmp / "out").read_text(encoding="utf-8"))
+
+    def test_false_builds_every_green(self) -> None:
+        res = self.prepare(WAIT_FOR_DESCENDANTS="false")
+        self.assertEqual(res.returncode, 0, res.stderr + res.stdout)
+        self.assertIn("--build-every-green", self.passed())
+
+    def test_another_value_stops(self) -> None:
+        res = self.prepare(WAIT_FOR_DESCENDANTS="no")
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("wait-for-descendants must be true or false", res.stdout)
+        self.assertFalse(self.args.exists(), "pick_target.py is not asked")
+
+    def finished_arg(self) -> str:
+        args = self.passed()
+        return args[args.index("--finished") + 1]
+
+    def test_the_ci_run_that_started_it_is_passed_on(self) -> None:
+        sha = "c" * 40
+        event = dict(FINISHED_SHA=sha, FINISHED_CONCLUSION="success", FINISHED_WORKFLOW=".github/workflows/ci.yml",
+                     FINISHED_EVENT="push", FINISHED_BRANCH="main")
+        self.assertEqual(self.prepare(**event).returncode, 0)
+        self.assertEqual(self.finished_arg(), sha)
+        self.assertIn("success", self.passed())
+        for key, other in (("FINISHED_EVENT", "pull_request"), ("FINISHED_BRANCH", "feature"),
+                           ("FINISHED_WORKFLOW", ".github/workflows/web.yml")):
+            with self.subTest(key=key):
+                self.assertEqual(self.prepare(**dict(event, **{key: other})).returncode, 0)
+                self.assertEqual(self.finished_arg(), "", f"{key}={other} is not the CI run of the branch")
+
+    def test_by_hand_no_run_is_passed_on(self) -> None:
+        self.assertEqual(self.prepare().returncode, 0)
+        self.assertEqual(self.finished_arg(), "")
+
+    def test_the_action_passes_the_input_in_both_steps(self) -> None:
+        text = (KIT / "prepare" / "action.yml").read_text(encoding="utf-8")
+        self.assertIn("  wait-for-descendants:\n", text)
+        self.assertEqual(text.count("WAIT_FOR_DESCENDANTS: ${{ inputs.wait-for-descendants }}"), 2)
+        for line in ("FINISHED_SHA: ${{ github.event.workflow_run.head_sha }}",
+                     "FINISHED_CONCLUSION: ${{ github.event.workflow_run.conclusion }}",
+                     "FINISHED_WORKFLOW: ${{ github.event.workflow_run.path }}",
+                     "FINISHED_EVENT: ${{ github.event.workflow_run.event }}",
+                     "FINISHED_BRANCH: ${{ github.event.workflow_run.head_branch }}"):
+            self.assertEqual(text.count(line), 2, line)
+
+
 class NoConsoleWindowTest(unittest.TestCase):
     """The tests start no console window on a self-hosted Windows runner (they stole the focus 42 times in one run)."""
 

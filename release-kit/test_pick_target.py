@@ -42,6 +42,22 @@ class Pick(unittest.TestCase):
         target, _ = pick_target.pick(BRANCH, {c(5), c(4)}, c(3), descendant)
         self.assertEqual(target, c(5))
 
+    def test_descendant_still_in_ci_builds_nothing(self):
+        target, why = pick_target.pick(BRANCH, {c(3)}, c(2), descendant, open_runs={c(5)})
+        self.assertIsNone(target)
+        self.assertIn("still in CI", why)
+
+    def test_open_run_of_an_older_commit_does_not_wait(self):
+        # c(2) is re-run (in progress) while c(4) is green: c(2) is no descendant of c(4).
+        target, _ = pick_target.pick(BRANCH, {c(4), c(2)}, c(1), descendant, open_runs={c(2), c(4)})
+        self.assertEqual(target, c(4))
+
+    def test_open_run_that_is_no_descendant_does_not_wait(self):
+        # A newer commit in the list that does not descend from the target (a merged side line) is not waited for.
+        target, _ = pick_target.pick(BRANCH, {c(3)}, c(2), lambda old, new: new != c(5) and descendant(old, new),
+                                     open_runs={c(5)})
+        self.assertEqual(target, c(3))
+
     def test_already_built_builds_nothing(self):
         target, why = pick_target.pick(BRANCH, {c(5)}, c(5), descendant)
         self.assertIsNone(target)

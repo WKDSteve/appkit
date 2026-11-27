@@ -2,13 +2,19 @@
 """Decide which commit the rolling build `latest` is made from.
 
     pick_target.py --repo OWNER/NAME --branch main --ci-workflow ci.yml [--channel latest|nightly|stable]
-                   [--channels "latest nightly stable"] [--requested SHA]
+                   [--channels "latest nightly stable"] [--requested SHA] [--build-every-green]
+                   [--finished SHA --finished-conclusion success|failure|...]
 
 Three rolling channels, each only moving forward: a target that is not a descendant of the commit
 `version.json` of the channel's own release names builds nothing.
 
   latest   the newest commit of the branch whose CI run is green, not the tip: a tip that is red, or whose CI is
-           still running, must not keep the newest green commit from being built.
+           still running, must not keep the newest green commit from being built. But while a descendant of
+           that commit on the branch still has a CI run open (queued or in progress), nothing is built: that run
+           ends in a rolling run of its own, which builds the descendant when it is green and this commit when
+           it is red. `--build-every-green` turns the wait off (every green state is built). `--finished` names
+           the commit whose completed CI run started this run (github.event.workflow_run): it counts as completed,
+           and as green with a conclusion of success, even when the list of runs does not show that yet.
   nightly  the tip of the branch, built at once, green or not (for those who want the newest state before the CI
            is through).
   stable   the commit `latest` has had for at least STABLE_DAYS days, if the CI did not turn red and no bug was
@@ -46,15 +52,20 @@ def pick(
     built: str | None,
     is_descendant: Callable[[str, str], bool],
     requested: str | None = None,
+    open_runs: Iterable[str] = (),
 ) -> tuple[str | None, str]:
     """The commit to build, or None, and why.
 
     commits: the branch, newest first. green: commits whose CI run succeeded. built: the commit of the
     `latest` that is up now (None: there is none). is_descendant(a, b): b is a or has a as an ancestor.
     requested: a commit named by hand; it must be green and on the branch, and it may rebuild `built`.
+    open_runs: commits whose CI run is not completed yet. A descendant of the target among them makes this run
+    build nothing (the target is not requested by hand): the descendant's CI ends in a rolling run of its own,
+    which builds the descendant when green and, when red, this target again as the newest green commit.
     """
     commits = list(commits)
     green = set(green)
+    open_runs = set(open_runs)
     if requested:
         if requested not in commits:
             return None, f"{requested[:7]} is not among the newest {len(commits)} commits of the branch"
@@ -65,6 +76,11 @@ def pick(
         target = next((c for c in commits if c in green), None)
         if target is None:
             return None, f"none of the newest {len(commits)} commits has a green CI run"
+        newer = commits[: commits.index(target)]
+        waiting = next((c for c in newer if c in open_runs and is_descendant(target, c)), None)
+        if waiting:
+            return None, (f"{waiting[:7]}, a descendant of the newest green commit {target[:7]}, is still in CI: "
+                          f"the rolling run of its CI builds {waiting[:7]} when green, {target[:7]} when red")
     if built is None:
         return target, f"no build yet: {target[:7]}"
     if target == built:
@@ -155,6 +171,16 @@ def gh(*args: str) -> str:
     return subprocess.run(["gh", *args], check=True, capture_output=True, text=True).stdout
 
 
+def open_run_commits(runs: list[dict]) -> list[str]:
+    """The commits of the runs that are not completed (queued, in_progress, waiting, requested, pending)."""
+    return [r["head_sha"] for r in runs if r.get("status") != "completed" and isinstance(r.get("head_sha"), str)]
+
+
+def run_commits(runs: list[dict], conclusion: str, field: str) -> list[str]:
+    """`field` of the runs that ended with `conclusion`."""
+    return [r[field] for r in runs if r.get("conclusion") == conclusion and isinstance(r.get(field), str)]
+
+
 def release_version(repo: str, tag: str) -> dict | None:
     """The `version.json` of the release `tag`, or None (no release yet, or one that predates version.json)."""
     try:
@@ -185,6 +211,10 @@ def main(argv: list[str]) -> int:
     p.add_argument("--channel", default="latest", choices=CHANNELS)
     p.add_argument("--channels", default="latest", help="the channels the app has switched on, separated by spaces")
     p.add_argument("--requested", default="")
+    p.add_argument("--build-every-green", action="store_true",
+                   help="latest: build the newest green commit even while a descendant of it is still in CI")
+    p.add_argument("--finished", default="", help="the commit whose completed CI run started this run")
+    p.add_argument("--finished-conclusion", default="", help="the conclusion of that run")
     args = p.parse_args(argv)
     if args.requested and not FULL.match(args.requested):
         print(f"::error::sha must be a full commit id, got '{args.requested}'", file=sys.stderr)
@@ -199,14 +229,16 @@ def main(argv: list[str]) -> int:
         print(f"reason=the channel {args.channel} is not switched on for this app (channels: {' '.join(on) or 'none'})")
         return 0
     repo = args.repo
-    commits = gh("api", f"repos/{repo}/commits?sha={args.branch}&per_page={WINDOW}", "--jq", ".[].sha").split()
+    commits = [c["sha"] for c in json.loads(gh("api", f"repos/{repo}/commits?sha={args.branch}&per_page={WINDOW}"))]
+    fetched: list[list[dict]] = []
+
+    def runs() -> list[dict]:
+        if not fetched:  # one request for all questions of this run
+            fetched.append(json.loads(gh("api", ci_runs_url(repo, args.ci_workflow, args.branch)))["workflow_runs"])
+        return fetched[0]
 
     def ci_runs(conclusion: str, field: str) -> list[str]:
-        return gh(
-            "api",
-            ci_runs_url(repo, args.ci_workflow, args.branch),
-            "--jq", f'.workflow_runs[] | select(.conclusion == "{conclusion}") | .{field}',
-        ).split()
+        return run_commits(runs(), conclusion, field)
 
     def is_descendant(old: str, new: str) -> bool:
         try:
@@ -218,7 +250,13 @@ def main(argv: list[str]) -> int:
     built = built_commit(release_version(repo, args.channel))  # None: nothing to compare with
     requested = args.requested or None
     if args.channel == "latest":
-        target, reason = pick(commits, ci_runs("success", "head_sha"), built, is_descendant, requested)
+        # The run that started this one is completed, whatever the list of runs says a moment after it ended.
+        finished = args.finished if FULL.match(args.finished) else None
+        waiting_for = [] if args.build_every_green else [c for c in open_run_commits(runs()) if c != finished]
+        green = ci_runs("success", "head_sha")
+        if finished and args.finished_conclusion == "success":
+            green.append(finished)
+        target, reason = pick(commits, green, built, is_descendant, requested, waiting_for)
     elif args.channel == "nightly":
         target, reason = pick_nightly(commits, built, is_descendant, requested)
     else:
