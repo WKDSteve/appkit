@@ -32,7 +32,7 @@
 #           unix-kind: hub
 #           unix-program: tasks-hub
 #           unix-release-asset: tasks-hub-{version}-{triple}.tar.gz
-#           unix-rolling-asset: tasks-hub-linux-x86_64.tar.gz
+#           unix-rolling-asset: tasks-hub-{triple}.tar.gz   # Linux and macOS (README, "hosted runners")
 #           extra: |
 #             scripts/uninstall.ps1
 #             scripts/uninstall.sh
@@ -95,7 +95,7 @@ inputs:
     required: false
     default: ""
   unix-rolling-asset:
-    description: The Linux file of the rolling build.
+    description: The Linux/macOS file of the rolling build; {triple} is filled in by install.sh (without it, a Linux x86-64 build).
     required: false
     default: ""
   extra:

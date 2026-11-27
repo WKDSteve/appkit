@@ -337,18 +337,25 @@ can add Linux and macOS as throw-away VMs in the same `build` matrix (reference:
   An app made of several files (a `bin/` folder, an extension, a player with libraries) is no `hub`: it needs an install
   script of its own beside its archive, as `takt` has (`scripts/install.sh`, `package-release.py`).
 - **A new leg starts experimental.** `publish` requires only the legs that have proven themselves; a missing archive of
-  the experimental leg is not published, and `publish` takes an earlier one of that name off the release (it removes
-  what a build no longer has). Make the leg required after some green runs.
+  the experimental leg is not published, and on the rolling build `publish` takes an earlier one of that name off the
+  release (it removes what a build no longer has; a release draft cut again keeps it). Make the leg required after
+  some green runs. Name the artifacts by the commit (`rolling-${{ matrix.name }}-${{ needs.prepare.outputs.short }}`,
+  the same in the download pattern), so a re-run whose `prepare` picks a newer commit never takes up an older file,
+  and let `publish` run on `!cancelled() && needs.build.result != 'failure'`: a cancelled experimental leg (a timeout)
+  can make the matrix result `cancelled`, which would skip it.
 - **Linux on `ubuntu-22.04`**, not `ubuntu-latest`: a program linked against an older glibc runs on more systems.
-  `macos-latest` is arm64 (`aarch64-apple-darwin`); there is no Intel build unless a leg for `macos-13` is added.
+  `macos-latest` is arm64 (`aarch64-apple-darwin`). An Intel Mac needs more than a leg: `install.sh` refuses
+  `Darwin-x86_64` (it knows `Linux-x86_64` and `Darwin-arm64` only).
 - **Native libraries:** a hub with `axum`/`tokio` and no tray needs none on Linux. `cpal` needs `libasound2-dev`
   (and `libdbus-1-dev` for rtkit), a Tauri app the WebKitGTK packages (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`,
   `libayatana-appindicator3-dev`, `librsvg2-dev`): install them with `apt-get` in the Linux leg.
 - **Shell scripts that run on macOS** meet Bash 3.2 (an empty array under `set -u` is unset: `${A[@]+"${A[@]}"}`; no
   `mapfile`, no associative arrays), no `sha256sum` (`shasum -a 256`) and a locale-dependent `sort`/`ls` order
-  (`LC_ALL=C`).
+  (`LC_ALL=C`). The hosted macOS runner met the same Bash: `docmap.nvim`'s build script failed there on an empty
+  array (fixed in `docmap.nvim@d2add0d`).
 - **Never pipe a listing into `grep -q` under `pipefail`:** `tar -tzf a.tar.gz | grep -q x` fails on GNU tar
-  (Linux) whenever a line follows the match (`tar: stdout: write error`, SIGPIPE), and passes on macOS; write the
+  (Linux) when it still writes after grep has exited (`tar: stdout: write error`; a line after the match was enough in
+  50 of 50 tries), and passes on macOS; write the
   listing to a file first (the first Linux run of `hub-desktop` failed so).
 - **The self-hosted Windows CI is unchanged:** the hosted legs only build what CI already proved on Windows; the app's
   CI may add `clippy`/tests on `ubuntu-latest` and `macos-latest` for the code behind `cfg(unix)` (as appkit's own
