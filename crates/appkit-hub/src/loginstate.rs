@@ -271,8 +271,14 @@ fn read_doc(dir: &Path) -> Result<Map<String, Value>, String> {
 
 /// Change `start_with_hub` in the settings of hub-desktop in `dir` and nothing else of the file
 /// (whatever keys hub-desktop has are kept as they are). Written in one step: a temporary file, then a
-/// rename. An empty list removes the key.
+/// rename, under the lock of the file ([`crate::config::locked`]), which hub-desktop takes for its own changes too
+/// ([`crate::config::update_file`]): a change of the other side between the read and the rename is not lost. An empty
+/// list removes the key.
 fn edit_list(dir: &Path, change: impl FnOnce(&mut Vec<String>)) -> Result<(), String> {
+    crate::config::locked(dir, || edit_list_unlocked(dir, change))
+}
+
+fn edit_list_unlocked(dir: &Path, change: impl FnOnce(&mut Vec<String>)) -> Result<(), String> {
     let mut doc = read_doc(dir)?;
     let mut list = list_of(&doc)?;
     change(&mut list);
@@ -549,5 +555,27 @@ mod tests {
         assert!(login.has("testing-desktop"));
         say(Autostart::Off);
         assert!(!login.has("testing-desktop"));
+    }
+
+    /// Two programs that change `start_with_hub` at the same time (an app and hub-desktop's tile): every id is there
+    /// in the end.
+    #[test]
+    fn edits_of_the_list_at_the_same_time_lose_nothing() {
+        let scratch = Scratch::new("hub-list-lock");
+        let dir = scratch.path().to_owned();
+        let threads: Vec<_> = (0..8)
+            .map(|t| {
+                let dir = dir.clone();
+                std::thread::spawn(move || {
+                    for n in 0..12 {
+                        edit_list(&dir, |list| list.push(format!("a{t}-{n}"))).expect("an edit");
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().expect("a writer");
+        }
+        assert_eq!(read_list(&dir).expect("the list").len(), 8 * 12);
     }
 }

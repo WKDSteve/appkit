@@ -387,6 +387,70 @@ pub(crate) fn temp_beside(dir: &Path, name: &str) -> PathBuf {
 /// The largest settings file that is read.
 const MAX_FILE_BYTES: u64 = 64 * 1024;
 
+/// How long a writer waits for another one to finish with `config.json` before it gives up.
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Run `f` while this process holds the lock of `config.json` in `dir` (`config.json.lock` beside it, an advisory
+/// lock of the system that every writer of the kit takes). A read, a change and the write in `f` then see no write of
+/// another process or thread in between: without it, two programs that change different keys of the same file (an app
+/// its `start_with_hub` in the settings of hub-desktop, hub-desktop its own keys) lose each other's change. The lock
+/// file stays: removing it would let a third writer lock a new file while the second still holds the old one. A
+/// writer that holds the lock longer than [`LOCK_WAIT`] makes this give up rather than hang.
+///
+/// # Errors
+///
+/// The folder or the lock file cannot be made, the lock is not free in time, or what `f` returns.
+pub fn locked<T>(dir: &Path, f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("cannot make the config folder: {e}"))?;
+    let path = dir.join("config.json.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(|e| format!("cannot open {}: {e}", path.display()))?;
+    let deadline = std::time::Instant::now() + LOCK_WAIT;
+    loop {
+        match file.try_lock() {
+            Ok(()) => break,
+            Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(std::fs::TryLockError::WouldBlock) => {
+                return Err(format!(
+                    "the settings in {} are being written by another program; try again",
+                    dir.display()
+                ));
+            }
+            Err(std::fs::TryLockError::Error(e)) => {
+                return Err(format!("cannot lock {}: {e}", path.display()));
+            }
+        }
+    }
+    let out = f();
+    // Closing the file frees the lock as well; this frees it before the caller goes on.
+    let _ = file.unlock();
+    out
+}
+
+/// Change `config.json` in `dir` under its lock ([`locked`]): load it, let `change` change it, write it in one step.
+/// What every writer that loads the file to change part of it uses, so that a change of another program between the
+/// load and the write is not lost.
+///
+/// # Errors
+///
+/// The file cannot be read or is not valid, `change` refuses, or the write fails.
+pub fn update_file<A: AppSettings>(
+    dir: &Path,
+    change: impl FnOnce(&mut FileConfig<A>) -> Result<(), String>,
+) -> Result<(), String> {
+    locked(dir, || {
+        let mut cfg = load_file::<A>(dir).map_err(|e| e.to_string())?;
+        change(&mut cfg)?;
+        save_file(dir, &cfg)
+    })
+}
+
 /// Write `config.json` into `dir` in one step (a temporary file, then a
 /// rename): a crash leaves the old file or the new one.
 ///
@@ -683,5 +747,47 @@ mod tests {
             load_file::<NoSettings>(&dir),
             Err(ConfigError::Invalid(..))
         ));
+    }
+
+    /// Writers that each add names of their own at the same time, as an app and hub-desktop do: every name is there
+    /// in the end (without the lock a load between another writer's load and its write loses that writer's names).
+    #[test]
+    fn writers_at_the_same_time_lose_nothing_of_each_other() {
+        let scratch = Scratch::new("hub-lock");
+        let dir = scratch.path().to_owned();
+        let threads: Vec<_> = (0..8)
+            .map(|t| {
+                let dir = dir.clone();
+                std::thread::spawn(move || {
+                    for n in 0..12 {
+                        update_file::<Mine>(&dir, |cfg| {
+                            cfg.app.names.push(format!("w{t}-{n}"));
+                            Ok(())
+                        })
+                        .expect("an update");
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().expect("a writer");
+        }
+        let names = load_file::<Mine>(&dir).expect("the file").app.names;
+        assert_eq!(names.len(), 8 * 12, "{names:?}");
+    }
+
+    #[test]
+    fn a_change_that_refuses_writes_nothing_and_frees_the_lock() {
+        let scratch = Scratch::new("hub-lock-refuse");
+        let dir = scratch.path();
+        let refused = update_file::<Mine>(dir, |_| Err("no".to_owned()));
+        assert_eq!(refused, Err("no".to_owned()));
+        assert!(!dir.join("config.json").exists());
+        update_file::<Mine>(dir, |cfg| {
+            cfg.port = Some(20001);
+            Ok(())
+        })
+        .expect("the lock is free again");
+        assert_eq!(load_file::<Mine>(dir).unwrap().port, Some(20001));
     }
 }
