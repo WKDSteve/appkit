@@ -25,6 +25,7 @@ use windows::Win32::UI::Accessibility::{
     UIA_InvokePatternId, UIA_NamePropertyId, UIA_RangeValuePatternId, UIA_SelectionItemPatternId,
     UIA_TextControlTypeId, UIA_TogglePatternId, UIA_WindowPatternId,
 };
+use windows::Win32::UI::HiDpi::{GetWindowDpiAwarenessContext, SetThreadDpiAwarenessContext};
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClientRect, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
     SetWindowPos, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
@@ -32,8 +33,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::protocol::{By, Desktop, Seen};
 
-/// `PW_RENDERFULLCONTENT`: also what the GPU draws, which is all of an egui window.
-const FULL_CONTENT: PRINT_WINDOW_FLAGS = PRINT_WINDOW_FLAGS(2);
+/// `PW_CLIENTONLY | PW_RENDERFULLCONTENT`: the client area only (the bitmap has its size; without the flag the
+/// window is drawn from its frame, and the title bar pushes the bottom edge out of the picture), and also what the
+/// GPU draws, which is all of an egui window.
+const CLIENT_FULL_CONTENT: PRINT_WINDOW_FLAGS = PRINT_WINDOW_FLAGS(1 | 2);
 
 /// The title of the invisible window winit keeps next to the real one (E2).
 const NOT_THE_WINDOW: &str = "Winit Thread Event Target";
@@ -364,8 +367,21 @@ impl Desktop for Uia {
     }
 }
 
-/// The client area as top-down pixels of 4 bytes.
+/// The client area as top-down pixels of 4 bytes, measured and drawn in the DPI awareness of the window itself: this
+/// driver is not DPI aware, so at 125 % `GetClientRect` of a DPI-aware window would give its scaled-down size while
+/// `PrintWindow` draws its real pixels, and the picture would lose its right and bottom edge.
 fn capture(hwnd: HWND) -> Result<(u32, u32, Vec<u8>), String> {
+    // SAFETY: a window handle; the context of this thread is put back before the function returns.
+    let before = unsafe { SetThreadDpiAwarenessContext(GetWindowDpiAwarenessContext(hwnd)) };
+    let shot = capture_client(hwnd);
+    if !before.0.is_null() {
+        // SAFETY: the context this thread had before.
+        unsafe { SetThreadDpiAwarenessContext(before) };
+    }
+    shot
+}
+
+fn capture_client(hwnd: HWND) -> Result<(u32, u32, Vec<u8>), String> {
     let mut rect = RECT::default();
     // SAFETY: a window handle and a local to write to.
     unsafe { GetClientRect(hwnd, &mut rect) }.map_err(|e| text(&e))?;
@@ -392,7 +408,7 @@ fn capture(hwnd: HWND) -> Result<(u32, u32, Vec<u8>), String> {
         let dc = CreateCompatibleDC(Some(window_dc));
         let bitmap = CreateCompatibleBitmap(window_dc, width, height);
         let old = SelectObject(dc, bitmap.into());
-        let printed = PrintWindow(hwnd, dc, FULL_CONTENT).as_bool();
+        let printed = PrintWindow(hwnd, dc, CLIENT_FULL_CONTENT).as_bool();
         SelectObject(dc, old);
         let lines = GetDIBits(
             dc,
@@ -416,4 +432,129 @@ fn capture(hwnd: HWND) -> Result<(u32, u32, Vec<u8>), String> {
         return Err("the window cannot be captured".to_owned());
     }
     Ok((width.unsigned_abs(), height.unsigned_abs(), pixels))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use windows::core::w;
+    use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
+    use windows::Win32::Graphics::Gdi::{
+        BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, FillRect, UpdateWindow, PAINTSTRUCT,
+    };
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
+        PeekMessageW, RegisterClassW, ShowWindow, TranslateMessage, MSG, PM_REMOVE,
+        SW_SHOWNOACTIVATE, WM_PAINT, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+        WS_OVERLAPPEDWINDOW,
+    };
+
+    use super::capture;
+
+    /// The rows at the bottom of the client area that are red; the rest is white. Fewer than a title bar is high.
+    const STRIP: i32 = 8;
+
+    extern "system" fn paint(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        // SAFETY: the messages of a window this test made, answered on its own thread.
+        unsafe {
+            if msg == WM_PAINT {
+                let mut ps = PAINTSTRUCT::default();
+                let dc = BeginPaint(hwnd, &raw mut ps);
+                let mut rect = RECT::default();
+                let _ = GetClientRect(hwnd, &raw mut rect);
+                let white = CreateSolidBrush(COLORREF(0x00FF_FFFF));
+                FillRect(dc, &raw const rect, white);
+                let red = CreateSolidBrush(COLORREF(0x0000_00FF));
+                rect.top = rect.bottom - STRIP;
+                FillRect(dc, &raw const rect, red);
+                let _ = DeleteObject(white.into());
+                let _ = DeleteObject(red.into());
+                let _ = EndPaint(hwnd, &raw const ps);
+                return LRESULT(0);
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+    }
+
+    fn pump() {
+        let mut msg = MSG::default();
+        // SAFETY: the message queue of this thread.
+        unsafe {
+            while PeekMessageW(&raw mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                let _ = TranslateMessage(&raw const msg);
+                DispatchMessageW(&raw const msg);
+            }
+        }
+    }
+
+    /// Blue, green, red of a pixel of a capture (GDI order).
+    fn at(pixels: &[u8], width: u32, x: u32, y: u32) -> [u8; 3] {
+        let i = usize::try_from((y * width + x) * 4).unwrap_or(usize::MAX);
+        [pixels[i], pixels[i + 1], pixels[i + 2]]
+    }
+
+    #[test]
+    fn a_shot_shows_the_client_area_down_to_its_bottom_edge() {
+        // SAFETY: a window of this test, made, shown and destroyed on this thread.
+        let hwnd = unsafe {
+            let instance = GetModuleHandleW(None).expect("module handle");
+            let class = WNDCLASSW {
+                lpfnWndProc: Some(paint),
+                hInstance: instance.into(),
+                lpszClassName: w!("appkit-sheet-driver-shot-test"),
+                ..WNDCLASSW::default()
+            };
+            RegisterClassW(&raw const class);
+            CreateWindowExW(
+                WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                w!("appkit-sheet-driver-shot-test"),
+                w!("sheet-driver shot test"),
+                WS_OVERLAPPEDWINDOW,
+                40,
+                40,
+                400,
+                300,
+                None,
+                None,
+                Some(instance.into()),
+                None,
+            )
+            .expect("a window")
+        };
+        // SAFETY: the window made above.
+        unsafe {
+            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            let _ = UpdateWindow(hwnd);
+        }
+        // The window is drawn once its first frame is composed: wait for its white, not for a time.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let shot = loop {
+            pump();
+            let shot = capture(hwnd);
+            if let Ok((width, _, pixels)) = &shot {
+                if at(pixels, *width, width / 2, 0) == [255, 255, 255] || Instant::now() > deadline
+                {
+                    break shot;
+                }
+            } else if Instant::now() > deadline {
+                break shot;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        // SAFETY: the window made above.
+        let _ = unsafe { DestroyWindow(hwnd) };
+        let (width, height, pixels) = shot.expect("a capture");
+        assert_eq!(
+            at(&pixels, width, width / 2, 0),
+            [255, 255, 255],
+            "the top row is the client area, not the title bar"
+        );
+        assert_eq!(
+            at(&pixels, width, width / 2, height - 1),
+            [0, 0, 255],
+            "the bottom row is the red strip at the bottom edge of the client area"
+        );
+    }
 }
