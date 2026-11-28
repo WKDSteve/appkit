@@ -181,8 +181,15 @@ jobs:
         with:
           persist-credentials: false
       # The lockfile is the truth; the age and trust policy are in ui-kit/pnpm-workspace.yaml. pnpm is the
-      # runner's own (not installed globally here: that would change this machine on every run).
-      - run: pnpm --version && pnpm install --frozen-lockfile
+      # runner's own (not installed globally here: that would change this machine on every run). It says its exit code
+      # and writes each line as it comes: an install once ended with exit code 1 and no message (see web-kit).
+      - shell: pwsh
+        run: |
+          pnpm --version
+          pnpm install --frozen-lockfile --reporter=append-only
+          $code = $LASTEXITCODE
+          Write-Output "pnpm install ended with exit code $code"
+          exit $code
       - run: pnpm check
       - run: pnpm test
       - run: pnpm audit --audit-level high
@@ -210,7 +217,15 @@ jobs:
           persist-credentials: false
       - run: node --version && pnpm --version
       - run: pnpm test
-      - run: pnpm -C ../ui-kit install --frozen-lockfile
+      # Twice (runs 45708835457 and 46044602286) this install ended with exit code 1 and no message: the package list
+      # came, its last line ("Done in ...") did not, and the retry was green. It says its exit code and writes each line
+      # as it comes, so that a next time shows where it stopped.
+      - shell: pwsh
+        run: |
+          pnpm -C ../ui-kit install --frozen-lockfile --reporter=append-only
+          $code = $LASTEXITCODE
+          Write-Output "pnpm install ended with exit code $code"
+          exit $code
       - run: pnpm check
       # Informative only (never red): legacy web-platform patterns that a newer platform feature replaces, judged against
       # the target in .mwgrc (Baseline widely available). The scanner is an exact devDependency of ui-kit, so the
