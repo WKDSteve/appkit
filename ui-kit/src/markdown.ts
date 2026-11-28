@@ -28,33 +28,10 @@ export interface ParseOptions {
   assets?: boolean;
 }
 
-/** The kinds of image file an asset may be: what an `<img>` draws and nothing that runs (E12: SVG only as `<img>`). */
-export const ASSET_IMAGE_TYPES: readonly string[] = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'];
-const ASSET_MAX = 512;
-
-/**
- * The path below `assets/` an image address names, or null. Relative only: no scheme, no leading slash, no `.` or
- * `..` segment, no backslash, no query or fragment, no control character, and the file kind is on the allow-list.
- * markdown-it hands the address percent-encoded; it is decoded once and checked as decoded, so `%2e%2e` is `..`.
- */
-export function safeAssetPath(raw: string): string | null {
-  let text = raw.trim();
-  if (text === '' || text.length > ASSET_MAX) return null;
-  try {
-    text = decodeURIComponent(text);
-  } catch {
-    return null;
-  }
-  if (text.startsWith('./')) text = text.slice(2);
-  if (/[\\:?#%\u0000-\u001f\u007f]/.test(text)) return null;
-  const parts = text.split('/');
-  if (parts[0] !== 'assets' || parts.length < 2) return null;
-  if (parts.some((part) => part === '' || part === '.' || part === '..')) return null;
-  const name = parts[parts.length - 1] ?? '';
-  const dot = name.lastIndexOf('.');
-  if (dot <= 0) return null;
-  return ASSET_IMAGE_TYPES.includes(name.slice(dot + 1).toLowerCase()) ? text : null;
-}
+// The checks that need no parser live in `markdown-links.ts` (the root of the kit offers them from there); this module
+// keeps offering them for the apps that import them from `appkit-ui/markdown`.
+import { hostOf, MAX_SOURCE, safeAssetPath, safeHref } from './markdown-links';
+export { ASSET_IMAGE_TYPES, hostOf, MAX_SOURCE, safeAssetPath, safeHref } from './markdown-links';
 
 export type Block =
   | { t: 'p'; children: Inline[] }
@@ -67,14 +44,8 @@ export type Block =
 
 /** Deeper than this is drawn flat: a body that nests a thousand quotes. */
 const MAX_DEPTH = 12;
-/** Longer than this is not read as Markdown: it is shown as it is. */
-export const MAX_SOURCE = 256 * 1024;
 
 const md = new MarkdownIt({ html: false, linkify: false, typographer: false, breaks: false });
-
-// Only these ever become a link. markdown-it already refuses `javascript:`
-// and the like; this is the second wall, and it is an allow-list.
-const LINK_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
 
 /**
  * The app's way to the images of a text read with `assets`. `url` gives the address to draw for a path below
@@ -92,28 +63,6 @@ export interface ImageSource {
 // Kept here for the apps that import it from this module; the function lives in `image-url.ts`, which does not load
 // markdown-it.
 export { drawableImageUrl } from './image-url';
-
-/** The host a link goes to, for the person who reads the link text. */
-export function hostOf(href: string): string | null {
-  try {
-    const url = new URL(href);
-    return url.protocol === 'mailto:' ? url.pathname.split('@').pop() || null : url.host || null;
-  } catch {
-    return null;
-  }
-}
-
-export function safeHref(raw: string): string | null {
-  const text = raw.trim();
-  if (text === '' || text.length > 2048) return null;
-  try {
-    const url = new URL(text);
-    return LINK_PROTOCOLS.has(url.protocol) ? url.href : null;
-  } catch {
-    // Relative, or not a URL at all: shown as text, not made a link.
-    return null;
-  }
-}
 
 interface Tok {
   type: string;

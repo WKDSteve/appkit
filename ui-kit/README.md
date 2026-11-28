@@ -22,7 +22,7 @@ bundler (Vite with the Svelte plugin) compiles them, there is no build here.
 | A dialog that closes when the mouse is pressed and released on the backdrop beside it (`use:closeOnBackdrop` on a `<dialog>` opened with `showModal()`; `closeable` can keep one open that holds a draft); the command palette, the documentation window and the conflict center use it. Where the browser knows `closedby` (Chrome/Edge 134, Firefox 141) the action sets `closedby="any"` and the browser does it; with `closeable`, and in other browsers, its own listeners do. `node ui-kit/browser/backdrop.browser.cjs` shows both ways in Chromium (needs Playwright) | `backdrop.ts` |
 | The name of the app at the left end of the bar: a button with a quiet hover effect (a line under it, the accent, a little more letter spacing, none of the movement for reduced motion) when the app gives it a click, plain text without | `Brand.svelte` |
 | The documentation inside an app: `searchDocs` over the documents (every word, the title weighs more), `helpItems` for the Help menu (the section Documentation with the search and one entry per document, the section Project with the repository and the license; only https links), the window `DocsDialog.svelte` (search, list, the chosen document as Markdown) and `AboutLinks.svelte` (the repository with the mark of GitHub, the license). The app brings the documents, bundled with the page | `docs.ts`, `DocsDialog.svelte`, `AboutLinks.svelte` |
-| A markdown reader that draws text as elements, never as an HTML string. An image is its description; with `parseMarkdown(text, { assets: true })` and an `images` source on `Blocks` (`ImageSource`: the app's `blob:` URL of a path, its word for a missing file, optionally `open` to see it larger) a file below `assets/` of the text's own folder (`png`, `jpg`, `jpeg`, `webp`, `gif`, `svg`; `safeAssetPath`) is drawn as `<img>`: never a URL, `data:`, an absolute path or `..`, and only a `blob:` address is drawn (`drawableImageUrl`), so an SVG is a picture and runs nothing | `markdown.ts`, `Blocks.svelte`, `Inlines.svelte` |
+| A markdown reader that draws text as elements, never as an HTML string. An image is its description; with `parseMarkdown(text, { assets: true })` and an `images` source on `Blocks` (`ImageSource`: the app's `blob:` URL of a path, its word for a missing file, optionally `open` to see it larger) a file below `assets/` of the text's own folder (`png`, `jpg`, `jpeg`, `webp`, `gif`, `svg`; `safeAssetPath`) is drawn as `<img>`: never a URL, `data:`, an absolute path or `..`, and only a `blob:` address is drawn (`drawableImageUrl`), so an SVG is a picture and runs nothing | `markdown.ts`, `markdown-links.ts`, `Blocks.svelte`, `Inlines.svelte` |
 | One explanation popup for every element with `data-hint` (hover, focus, Escape) | `tooltip.ts` |
 | The hub client every app extends (`class Hub extends HubClient`): the session as a bearer token and nothing else (no cookie, no cache, no referrer), a late refusal of an old token ignored, the refusal as `ApiError`, the pairing code traded for a token, `hello`, `snapshot` with its tag, `rescan`, and `postJson`/`post` for the calls of the app. The app names where its routes live (`/api/tasks`) and adds its own calls | `client.ts` |
 | What an app that keeps a copy in the browser shares: `cacheableClass` (only `public` and `internal`, fail closed) and an IndexedDB store behind `CacheStore` (every failure is a miss). What is kept, and how a copy is cut, is the app's | `cache.ts` |
@@ -56,6 +56,12 @@ import 'appkit-ui/base.css';
 import MenuBar, { type Menu } from 'appkit-ui/MenuBar.svelte';
 import { installTooltips, tooltip } from 'appkit-ui/tooltip';
 ```
+
+Take what is large from its own path, never from the root (`appkit-ui`): a bundler keeps a module that the root
+reaches whenever it cannot prove the module free of side effects, used or not. The markdown parser
+(`parseMarkdown`, markdown-it, about 100 kB) is therefore only `appkit-ui/markdown`; the root offers the light
+checks of a link or an image address (`safeHref`, `hostOf`, `safeAssetPath`) without it, and
+`src/rootImport.bundle.test.ts` holds that a root import leaves the parser out.
 
 ### The palette of an app
 

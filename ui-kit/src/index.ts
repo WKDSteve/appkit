@@ -103,18 +103,10 @@ export {
 } from './palette';
 export type { ToastKind, ToastMessage } from './toast';
 export { drawableImageUrl } from './image-url';
-export {
-  ASSET_IMAGE_TYPES,
-  hostOf,
-  MAX_SOURCE,
-  parseMarkdown,
-  safeAssetPath,
-  safeHref,
-  type Block,
-  type ImageSource,
-  type Inline,
-  type ParseOptions,
-} from './markdown';
+// The parser itself (`parseMarkdown`) is `appkit-ui/markdown` only: markdown-it is about 100 kB, and a bundler keeps
+// it whenever a module that loads it is reached, used or not (`rootImport.bundle.test.ts`).
+export { ASSET_IMAGE_TYPES, hostOf, MAX_SOURCE, safeAssetPath, safeHref } from './markdown-links';
+export type { Block, ImageSource, Inline, ParseOptions } from './markdown';
 export {
   installNav,
   placeOf,
