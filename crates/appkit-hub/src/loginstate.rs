@@ -171,8 +171,9 @@ pub fn is_on(identity: &AppIdentity, env: &Env, login: &dyn LoginEntries) -> Opt
 /// needs none. Returns what to print.
 ///
 /// On: hub-desktop starts with the login and takes the app over → the app goes into `start_with_hub`
-/// and its own entry is removed (the list first: a failure then starts a hub twice, which its `start`
-/// answers with "already running", never none). Otherwise its own entry is written.
+/// and its own entry is removed (the list first: a crash in between starts a hub twice, which its `start`
+/// answers with "already running", never none; an entry that cannot be removed takes the app out of the list again
+/// when this call put it there). Otherwise its own entry is written.
 ///
 /// Off: the app is taken out of `start_with_hub` and its own entry is removed.
 ///
@@ -190,15 +191,33 @@ pub fn set(
     let list_dir = taken_over(identity).then(|| hub_desktop_dir(env)).flatten();
     if on {
         if let Some(dir) = list_dir.filter(|_| login.is_on(&HUB_DESKTOP) == Some(true)) {
+            let mut added = false;
             edit_list(&dir, |list| {
                 if !list.iter().any(|id| id == identity.route_ns) {
                     list.push(identity.route_ns.to_owned());
+                    added = true;
                 }
             })?;
-            if login.is_on(identity) != Some(false) {
-                login.set(identity, None).map_err(|e| {
-                    format!("hub-desktop starts the hub now, but its own login entry stays: {e}")
-                })?;
+            if login.is_on(identity) != Some(false)
+                && let Err(e) = login.set(identity, None)
+            {
+                // With both the list and its own entry the hub would start twice: what this call put into the
+                // list goes out again, so the app is left as it was (its own entry).
+                if !added {
+                    return Err(format!(
+                        "hub-desktop starts the hub now, but its own login entry stays: {e}"
+                    ));
+                }
+                return Err(
+                    match edit_list(&dir, |list| list.retain(|id| id != identity.route_ns)) {
+                        Ok(()) => format!(
+                            "its own login entry cannot be removed, so it keeps it and hub-desktop does not start it: {e}"
+                        ),
+                        Err(left) => format!(
+                            "hub-desktop starts the hub now, but its own login entry stays: {e}; and it stays in start_with_hub: {left}"
+                        ),
+                    },
+                );
             }
             return Ok(
                 "the hub starts with your login, with hub-desktop (start_with_hub)\n".to_owned(),
@@ -335,6 +354,8 @@ mod tests {
     struct FakeLogin {
         entries: RefCell<BTreeMap<&'static str, PathBuf>>,
         unknown: bool,
+        /// An entry cannot be removed (the system refuses).
+        refuses_removal: bool,
     }
 
     impl FakeLogin {
@@ -357,6 +378,9 @@ mod tests {
             (!self.unknown).then(|| self.has(identity.app))
         }
         fn set(&self, identity: &AppIdentity, program: Option<&Path>) -> Result<(), String> {
+            if program.is_none() && self.refuses_removal {
+                return Err("access denied".to_owned());
+            }
             let mut entries = self.entries.borrow_mut();
             let app: &'static str = Box::leak(identity.app.to_owned().into_boxed_str());
             match program {
@@ -436,6 +460,36 @@ mod tests {
         set(&TESTING, false, no_program, &env, &login).unwrap();
         assert_eq!(read_list(scratch.path()).unwrap(), ["rules"]);
         assert_eq!(is_on(&TESTING, &env, &login), Some(false));
+    }
+
+    /// An own entry that cannot be removed leaves the app as it was: out of the list (with both, the hub would start
+    /// twice), with its entry. An app the list already held stays in it.
+    #[test]
+    fn an_own_entry_that_cannot_be_removed_takes_the_app_out_of_the_list_again() {
+        let (scratch, env) = profile("login-refuses");
+        std::fs::write(
+            scratch.path().join("config.json"),
+            r#"{"start_with_hub":["rules"]}"#,
+        )
+        .unwrap();
+        let mut login = FakeLogin::with(&["hub-desktop", "testing-desktop"]);
+        login.refuses_removal = true;
+        let err = set(&TESTING, true, no_program, &env, &login).unwrap_err();
+        assert!(err.contains("access denied"), "{err}");
+        assert!(err.contains("keeps it"), "{err}");
+        assert_eq!(read_list(scratch.path()).unwrap(), ["rules"]);
+        assert!(login.has("testing-desktop"));
+        assert_eq!(state(&TESTING, &env, &login), Some(Some(Via::Own)));
+
+        // Listed before: the list is not this call's to take back.
+        std::fs::write(
+            scratch.path().join("config.json"),
+            r#"{"start_with_hub":["rules","testing"]}"#,
+        )
+        .unwrap();
+        let err = set(&TESTING, true, no_program, &env, &login).unwrap_err();
+        assert!(err.contains("its own login entry stays"), "{err}");
+        assert_eq!(read_list(scratch.path()).unwrap(), ["rules", "testing"]);
     }
 
     #[test]
