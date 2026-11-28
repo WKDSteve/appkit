@@ -96,8 +96,6 @@ pub struct FileConfig<A = NoSettings> {
     pub engine_dir: Option<PathBuf>,
     /// What the app keeps in the same file. It is written between `engine_dir` and `port`, where
     /// the keys of the tasks hub always were, so that a file that is saved keeps its order.
-    /// What the app keeps in the same file. It is written between `engine_dir` and `port`, where
-    /// the keys of the tasks hub always were, so that a file that is saved keeps its order.
     #[serde(flatten)]
     pub app: A,
     /// The port the hub tries first (it is part of the origin).
