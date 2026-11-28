@@ -68,7 +68,12 @@ export type PickResult =
 export function pickerSupport(win: PickerWindow): Support;
 export function oneLine(error: unknown, max?: number): string;
 export function pickFolder(win: PickerWindow, options: { id: string; mode: AccessMode }): Promise<PickResult>;
-export function permissionOf(handle: DirHandle, mode: AccessMode): Promise<PermissionState | 'gone'>;
+/** How long a look that should be quick (the permission of a stored folder) waits for the browser, in ms. */
+export const LOOK_WAIT_MS: number;
+/** `promise`, or `fallback` once `ms` have passed without an answer; a rejection in time still rejects. */
+export function within<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T>;
+/** The permission of a stored handle; `prompt` when the browser does not answer within `waitMs` (default LOOK_WAIT_MS). */
+export function permissionOf(handle: DirHandle, mode: AccessMode, waitMs?: number): Promise<PermissionState | 'gone'>;
 export function grantAccess(handle: DirHandle, mode: AccessMode): Promise<PermissionState | 'gone'>;
 export function displayName(name: unknown): string;
 

@@ -9,12 +9,14 @@ import {
   displayName,
   grantAccess,
   idbKeyValue,
+  LOOK_WAIT_MS,
   MAX_RECENT,
   oneLine,
   permissionOf,
   pickerSupport,
   pickFolder,
   RecentFolders,
+  within,
 } from '../src/folder.js';
 import { fakeIdb } from './fake-idb.mjs';
 
@@ -98,6 +100,28 @@ test('the permission of a stored folder, and asking for it again, in the mode th
   await permissionOf(h, 'read');
   await grantAccess(h, 'readwrite');
   assert.deepEqual(asked, [['query', { mode: 'read' }], ['request', { mode: 'readwrite' }]]);
+});
+
+test('a browser that never answers queryPermission is taken to want to be asked, within the limit', async () => {
+  const silent = handle('v');
+  silent.queryPermission = () => new Promise(() => {});
+  // A guard of the test's own (not the kit's `within`): without the limit the answer is 'no answer', not a hang.
+  let guard;
+  const noAnswer = new Promise((resolve) => {
+    guard = setTimeout(() => resolve('no answer'), 1000);
+  });
+  assert.equal(await Promise.race([permissionOf(silent, 'read', 20), noAnswer]), 'prompt');
+  clearTimeout(guard);
+  // The default limit is the kit's, a few seconds: short enough for a page that waits on it.
+  assert.ok(LOOK_WAIT_MS > 0 && LOOK_WAIT_MS <= 5000, `${LOOK_WAIT_MS}`);
+  // An answer in time is the answer.
+  assert.equal(await permissionOf(handle('v', { perm: 'denied' }), 'read', 1000), 'denied');
+});
+
+test('within: the answer, the fallback after the limit, a rejection in time', async () => {
+  assert.equal(await within(Promise.resolve('yes'), 1000, 'late'), 'yes');
+  assert.equal(await within(new Promise(() => {}), 10, 'late'), 'late');
+  await assert.rejects(within(Promise.reject(new Error('no')), 1000, 'late'), /no/);
 });
 
 test('the folders used before: newest first, one entry per folder, a limit, and a list that is not trusted', async () => {

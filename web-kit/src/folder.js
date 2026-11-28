@@ -47,13 +47,47 @@ export async function pickFolder(win, { id, mode }) {
   }
 }
 
-/** The permission a stored handle has now for `mode`; `gone` when the folder does not exist any more. */
-export async function permissionOf(handle, mode) {
-  try {
-    return await handle.queryPermission({ mode });
-  } catch (error) {
-    return nameOf(error) === 'NotFoundError' ? 'gone' : 'denied';
-  }
+/**
+ * How long the browser gets to answer a look that should be quick, such as the permission of a stored folder. Chrome
+ * was seen to leave `queryPermission` of a stored handle unanswered for good (2026-11-19); without a limit a page that
+ * waits for it stays on "starting" with nothing to click.
+ */
+export const LOOK_WAIT_MS = 2000;
+
+/**
+ * `promise`, or `fallback` once `ms` have passed without an answer. A promise that rejects in time still rejects. The
+ * timer is cleared when the answer comes first.
+ */
+export function within(promise, ms, fallback) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve(fallback), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+/**
+ * The permission a stored handle has now for `mode`; `gone` when the folder does not exist any more. A browser that
+ * does not answer within `waitMs` is taken to want to be asked (`prompt`): a click then asks with `grantAccess`, which
+ * has no limit (it waits for the person's answer in the browser's dialog).
+ */
+export function permissionOf(handle, mode, waitMs = LOOK_WAIT_MS) {
+  const asked = (async () => {
+    try {
+      return await handle.queryPermission({ mode });
+    } catch (error) {
+      return nameOf(error) === 'NotFoundError' ? 'gone' : 'denied';
+    }
+  })();
+  return within(asked, waitMs, 'prompt');
 }
 
 /** Ask for the permission again. Must run inside a click (the first thing the click handler does). */
