@@ -1495,7 +1495,7 @@ struct StartupLogin<'a> {
 impl crate::loginstate::LoginEntries for StartupLogin<'_> {
     fn is_on(&self, identity: &AppIdentity) -> Option<bool> {
         startup_entry(
-            &of(identity),
+            &crate::loginstate::other(identity),
             Autostart::Status,
             Path::new(""),
             self.env,
@@ -1512,25 +1512,13 @@ impl crate::loginstate::LoginEntries for StartupLogin<'_> {
             Autostart::Off
         };
         startup_entry(
-            &of(identity),
+            &crate::loginstate::other(identity),
             what,
             program.unwrap_or(Path::new("")),
             self.env,
             self.reg,
         )
         .map(|_| ())
-    }
-}
-
-/// The parts of an app that its login entry needs, for an app that is not the one installed (hub-desktop).
-fn of(identity: &AppIdentity) -> Background<'_> {
-    Background {
-        login: LoginApp {
-            identity,
-            summary: identity.title,
-        },
-        extra_files: &[],
-        uninstall_script: "",
     }
 }
 
@@ -1774,8 +1762,10 @@ pub struct UninstallOptions {
 
 /// The files every hub keeps in the config folder; those of the app are added by [`Background`].
 /// Nothing else is ever removed there.
-const KIT_FILES: [&str; 5] = [
+const KIT_FILES: [&str; 6] = [
     "config.json",
+    // The lock of its writers (`config::locked`), which stays beside it.
+    "config.json.lock",
     "usage.json",
     "hub.json",
     "control.secret",
@@ -2922,6 +2912,22 @@ mod tests {
         assert!(!dir.exists());
         // Nothing there at all: told, and no error.
         assert!(purge_settings(&dir).unwrap().contains("no settings"));
+    }
+
+    /// Settings written under their lock (`config::update_file`) leave the lock file beside them; it goes with the
+    /// purge, or the folder would stay for it.
+    #[test]
+    fn purging_takes_the_lock_file_of_the_settings_too() {
+        let dir = settings_dir("lock");
+        crate::config::update_file::<crate::config::NoSettings>(&dir, |cfg| {
+            cfg.port = Some(20002);
+            Ok(())
+        })
+        .unwrap();
+        assert!(dir.join("config.json.lock").is_file());
+        let text = purge_settings(&dir).unwrap();
+        assert!(text.contains("folder is removed"), "{text}");
+        assert!(!dir.exists());
     }
 
     #[test]

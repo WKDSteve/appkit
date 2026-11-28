@@ -73,7 +73,8 @@ pub trait LoginEntries {
 /// macOS: the files of [`crate::loginitems`]).
 pub struct SystemLogin;
 
-fn other(identity: &AppIdentity) -> Background<'_> {
+/// The parts of an app that its login entry needs, for any app by its names (not only the one that runs).
+pub(crate) fn other(identity: &AppIdentity) -> Background<'_> {
     Background {
         login: LoginApp {
             identity,
