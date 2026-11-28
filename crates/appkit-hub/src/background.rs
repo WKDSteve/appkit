@@ -1283,7 +1283,25 @@ async fn install_steps_beside(
         let sync = env.get(&no_login_sync(app)).is_none();
         let was_on = (opts.autostart || sync) && autostart_is_on(app);
         let entry = |what| autostart_for(app, what, &target);
-        let entry_made = login_entry_step(opts, was_on, sync, entry, out)?;
+        let login = crate::loginstate::SystemLogin;
+        let listed = if opts.autostart || sync {
+            hub_desktop_step(
+                app.identity(),
+                &target,
+                opts,
+                sync,
+                was_on,
+                &env,
+                &login,
+                out,
+            )?
+        } else {
+            None
+        };
+        let entry_made = match listed {
+            Some(_) => false,
+            None => login_entry_step(opts, was_on, sync, entry, out)?,
+        };
         if opts.shortcut {
             let made = shortcut(
                 app,
@@ -1292,7 +1310,18 @@ async fn install_steps_beside(
                 opts.link_start,
                 &LinkPlace::ALL,
             );
-            out.push_str(&undo_entry_on_failure(made, entry_made, entry)?);
+            out.push_str(&match listed {
+                Some(added) => undo_list_on_failure(
+                    made,
+                    added,
+                    was_on,
+                    app.identity(),
+                    &target,
+                    &env,
+                    &login,
+                )?,
+                None => undo_entry_on_failure(made, entry_made, entry)?,
+            });
         }
     }
     let command = command_step(app, &env, &target, out);
@@ -1379,6 +1408,132 @@ fn undo_entry_on_failure(
     }
 }
 
+/// The start with the login of `install` for an app that hub-desktop takes over while hub-desktop starts with the
+/// login: it goes into `start_with_hub` through [`crate::loginstate::set`], the one way the app's page and
+/// hub-desktop's tile switch it, and its own entry goes away (with both, the hub would start twice, and the state
+/// would show "own entry"). That is the way for `--autostart`, and for the sync of an entry that is there beside the
+/// list. `None`: it is not the way (another app, hub-desktop does not start with the login, or neither case), and the
+/// own entry is written as before. `Some(added)`: whether this install put the app into the list.
+#[allow(clippy::too_many_arguments)]
+fn hub_desktop_step(
+    identity: &AppIdentity,
+    target: &Path,
+    opts: InstallOptions,
+    sync: bool,
+    was_on: bool,
+    env: &Env,
+    login: &dyn crate::loginstate::LoginEntries,
+    out: &mut String,
+) -> Result<Option<bool>, String> {
+    use crate::loginstate;
+
+    if !loginstate::taken_over(identity) || login.is_on(&loginstate::HUB_DESKTOP) != Some(true) {
+        return Ok(None);
+    }
+    let Some(dir) = loginstate::hub_desktop_dir(env) else {
+        return Ok(None);
+    };
+    let listed =
+        loginstate::read_list(&dir).is_ok_and(|list| list.iter().any(|id| id == identity.route_ns));
+    if !(opts.autostart || (sync && was_on && listed)) {
+        return Ok(None);
+    }
+    out.push_str(&loginstate::set(
+        identity,
+        true,
+        || Ok(target.to_owned()),
+        env,
+        login,
+    )?);
+    Ok(Some(!listed))
+}
+
+/// A step after [`hub_desktop_step`] failed: the app goes out of `start_with_hub` again when this install put it
+/// there, and an own entry that was there before (`was_on`, the person's) comes back. The error says which it was.
+fn undo_list_on_failure(
+    step: Result<String, String>,
+    added: bool,
+    was_on: bool,
+    identity: &AppIdentity,
+    target: &Path,
+    env: &Env,
+    login: &dyn crate::loginstate::LoginEntries,
+) -> Result<String, String> {
+    match step {
+        Err(e) if added => {
+            let undone =
+                crate::loginstate::set(identity, false, || Ok(target.to_owned()), env, login)
+                    .and_then(|_| {
+                        if was_on {
+                            login.set(identity, Some(target))
+                        } else {
+                            Ok(())
+                        }
+                    });
+            Err(match undone {
+                Ok(()) => {
+                    format!("{e}; the start with hub-desktop this install made is taken back")
+                }
+                Err(left) => {
+                    format!(
+                        "{e}; the start with hub-desktop this install made is still there: {left}"
+                    )
+                }
+            })
+        }
+        other => other,
+    }
+}
+
+/// The login entries of the machine as `install` on Windows reaches them: the links in the Startup folder (and the
+/// old values of the `Run` key) through `reg`, so that the tests give a registry and a folder of their own.
+struct StartupLogin<'a> {
+    env: &'a Env,
+    reg: &'a dyn Registry,
+}
+
+impl crate::loginstate::LoginEntries for StartupLogin<'_> {
+    fn is_on(&self, identity: &AppIdentity) -> Option<bool> {
+        startup_entry(
+            &of(identity),
+            Autostart::Status,
+            Path::new(""),
+            self.env,
+            self.reg,
+        )
+        .ok()
+        .map(|said| said.starts_with("on"))
+    }
+
+    fn set(&self, identity: &AppIdentity, program: Option<&Path>) -> Result<(), String> {
+        let what = if program.is_some() {
+            Autostart::On
+        } else {
+            Autostart::Off
+        };
+        startup_entry(
+            &of(identity),
+            what,
+            program.unwrap_or(Path::new("")),
+            self.env,
+            self.reg,
+        )
+        .map(|_| ())
+    }
+}
+
+/// The parts of an app that its login entry needs, for an app that is not the one installed (hub-desktop).
+fn of(identity: &AppIdentity) -> Background<'_> {
+    Background {
+        login: LoginApp {
+            identity,
+            summary: identity.title,
+        },
+        extra_files: &[],
+        uninstall_script: "",
+    }
+}
+
 /// The login entry (the link in the Startup folder) and the links of `install` on Windows, through `reg` (or why it
 /// cannot be asked).
 fn entry_and_links(
@@ -1392,6 +1547,8 @@ fn entry_and_links(
     // The tests of the program: an entry of the machine is not theirs to point somewhere else.
     let sync = env.get(&no_login_sync(app)).is_none();
     let mut entry_made = false;
+    // `Some((added, was_on))` when the start goes through the list of hub-desktop.
+    let mut listed = None;
     // A registry that cannot be asked is an error only when an entry is wanted; else there is none to point here.
     let asked = if opts.autostart {
         Some(reg.clone()?)
@@ -1401,16 +1558,44 @@ fn entry_and_links(
     if let Some(asked) = asked {
         let was_on = startup_entry(app, Autostart::Status, target, env, asked)
             .is_ok_and(|said| said.starts_with("on"));
-        // It may be registered for another copy: then it is pointed here.
-        entry_made = login_entry_step(
+        let login = StartupLogin { env, reg: asked };
+        match hub_desktop_step(
+            app.identity(),
+            target,
             opts,
-            was_on,
             sync,
-            |what| startup_entry(app, what, target, env, asked),
+            was_on,
+            env,
+            &login,
             &mut out,
-        )?;
+        )? {
+            Some(added) => listed = Some((added, was_on)),
+            // It may be registered for another copy: then it is pointed here.
+            None => {
+                entry_made = login_entry_step(
+                    opts,
+                    was_on,
+                    sync,
+                    |what| startup_entry(app, what, target, env, asked),
+                    &mut out,
+                )?;
+            }
+        }
     }
     let links = install_links(app, target, opts, env, reg.clone());
+    if let (Some((added, was_on)), Ok(asked)) = (listed, reg.clone()) {
+        let login = StartupLogin { env, reg: asked };
+        out.push_str(&undo_list_on_failure(
+            links,
+            added,
+            was_on,
+            app.identity(),
+            target,
+            env,
+            &login,
+        )?);
+        return Ok(out);
+    }
     out.push_str(&undo_entry_on_failure(links, entry_made, |what| {
         startup_entry(app, what, target, env, reg.clone()?)
     })?);
@@ -3110,6 +3295,108 @@ mod tests {
         let why = failed.expect_err("no folder for the link on the desktop");
         assert!(!why.contains("taken back"), "{why}");
         assert!(link.is_file());
+    }
+
+    /// A profile where hub-desktop starts with the login (its link in the Startup folder), and the folder of its
+    /// settings.
+    #[cfg(windows)]
+    fn with_hub_desktop(name: &str) -> (Scratch, Env, PathBuf, PathBuf) {
+        let (scratch, env, startup) = profile(name);
+        std::fs::create_dir_all(&startup).unwrap();
+        crate::shell_link::write(
+            &startup.join("hub-desktop.lnk"),
+            &startup_link("hub-desktop", Path::new(r"C:\apps\hub-desktop.exe")),
+        )
+        .unwrap();
+        let dir = crate::loginstate::hub_desktop_dir(&env).expect("a config folder of hub-desktop");
+        (scratch, env, startup, dir)
+    }
+
+    /// `install --autostart` while hub-desktop starts with the login: the app goes into `start_with_hub`, the way its
+    /// page and hub-desktop's tile switch it, and gets no entry of its own (with both, the hub would start twice).
+    #[cfg(windows)]
+    #[test]
+    fn install_autostart_goes_through_the_list_while_hub_desktop_starts_with_the_login() {
+        let opts = InstallOptions {
+            autostart: true,
+            ..InstallOptions::default()
+        };
+        let (_s, env, startup, dir) = with_hub_desktop("hub-install-list");
+        let reg = FakeRegistry::new(None);
+        let said = entry_and_links(
+            &APP,
+            Path::new(r"C:\apps\rules-hub.exe"),
+            opts,
+            &env,
+            Ok(&reg),
+        )
+        .expect("the install");
+        assert!(said.contains("start_with_hub"), "{said}");
+        assert_eq!(crate::loginstate::read_list(&dir).unwrap(), ["rules"]);
+        assert!(!startup.join("rules-desktop.lnk").exists());
+        assert_eq!(
+            crate::loginstate::state(
+                &IDENTITY,
+                &env,
+                &StartupLogin {
+                    env: &env,
+                    reg: &reg
+                }
+            ),
+            Some(Some(crate::loginstate::Via::HubDesktop))
+        );
+    }
+
+    /// The sync of `install` (no `--autostart`): an own entry beside the list goes away instead of being pointed at
+    /// the new copy; the list stays.
+    #[cfg(windows)]
+    #[test]
+    fn the_sync_of_install_takes_an_own_entry_beside_the_list_away() {
+        let (_s, env, startup, dir) = with_hub_desktop("hub-install-sync-list");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.json"), r#"{"start_with_hub":["rules"]}"#).unwrap();
+        let link = startup.join("rules-desktop.lnk");
+        crate::shell_link::write(
+            &link,
+            &startup_link(IDENTITY.app, Path::new(r"C:\old\rules-hub.exe")),
+        )
+        .unwrap();
+        let reg = FakeRegistry::new(None);
+        entry_and_links(
+            &APP,
+            Path::new(r"C:\apps\rules-hub.exe"),
+            InstallOptions::default(),
+            &env,
+            Ok(&reg),
+        )
+        .expect("the install");
+        assert!(!link.exists(), "the own entry beside the list is gone");
+        assert_eq!(crate::loginstate::read_list(&dir).unwrap(), ["rules"]);
+    }
+
+    /// A later step of `install --autostart` fails: the app goes out of the list again, which this install put it in.
+    #[cfg(windows)]
+    #[test]
+    fn a_failed_install_takes_the_app_out_of_the_list_it_put_it_in() {
+        let opts = InstallOptions {
+            autostart: true,
+            shortcut: true,
+            ..InstallOptions::default()
+        };
+        // No USERPROFILE: the link on the desktop cannot be made.
+        let (_s, env, startup, dir) = with_hub_desktop("hub-install-list-undo");
+        let reg = FakeRegistry::new(None);
+        let why = entry_and_links(
+            &APP,
+            Path::new(r"C:\apps\rules-hub.exe"),
+            opts,
+            &env,
+            Ok(&reg),
+        )
+        .expect_err("no folder for the link on the desktop");
+        assert!(why.contains("taken back"), "{why}");
+        assert!(crate::loginstate::read_list(&dir).unwrap().is_empty());
+        assert!(!startup.join("rules-desktop.lnk").exists());
     }
 
     /// Without `--autostart` a registry that cannot be asked stops nothing: there is no entry to point here.
