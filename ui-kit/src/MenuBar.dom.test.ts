@@ -422,3 +422,38 @@ describe('MenuBar tells a menu that it opens', () => {
     expect(opened).toEqual([]);
   });
 });
+
+describe('MenuBar keeps a scrolling menu reachable by the keyboard', () => {
+  // jsdom has no layout: a popup "scrolls" when its content is taller than its box.
+  const heights = (scroll: number, client: number): void => {
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('mb-popup') ? scroll : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('mb-popup') ? client : 0;
+    });
+  };
+
+  it('makes a popup that scrolls a tab stop of its own (axe scrollable-region-focusable)', async () => {
+    heights(900, 300);
+    trigger('project').click();
+    await settle();
+    expect(popup('project')?.getAttribute('tabindex')).toBe('0');
+  });
+
+  it('leaves a popup that fits without a tab stop', async () => {
+    heights(200, 200);
+    trigger('project').click();
+    await settle();
+    expect(popup('project')?.hasAttribute('tabindex')).toBe(false);
+  });
+
+  it('takes the tab stop away when the window grows and the popup fits', async () => {
+    heights(900, 300);
+    trigger('project').click();
+    await settle();
+    heights(900, 900);
+    window.dispatchEvent(new Event('resize'));
+    expect(popup('project')?.hasAttribute('tabindex')).toBe(false);
+  });
+});

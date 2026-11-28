@@ -84,6 +84,13 @@ async function axe(page, what) {
     [],
     `${what}: axe`,
   );
+  // axe 4.14 only calls a scroll box whose items have tabindex -1 "incomplete"; axe 4.13 (an app's) calls it a
+  // violation. Either way the box needs a tab stop of its own.
+  assert.deepEqual(
+    result.incomplete.filter((v) => v.id === 'scrollable-region-focusable').map((v) => v.nodes.length),
+    [],
+    `${what}: axe scrollable-region-focusable`,
+  );
 }
 
 /** The menu View open, the focus on its item Lernpläne. */

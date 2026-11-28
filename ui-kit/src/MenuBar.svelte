@@ -209,6 +209,18 @@
   }
 
   /**
+   * A list taller than the window scrolls inside itself, and a scroll box needs a way in for the keyboard (WCAG 2.1.1,
+   * axe `scrollable-region-focusable`): the items take the focus only by the roving tabindex (-1), so while the list
+   * scrolls it is a tab stop of its own, as in `ContextMenu`. axe 4.13 counts a box without one as a violation.
+   * `rest` is its tabindex while it does not scroll (null: none).
+   */
+  function reachWhenScrolling(list: HTMLElement, rest: number | null): void {
+    if (list.scrollHeight > list.clientHeight) list.tabIndex = 0;
+    else if (rest === null) list.removeAttribute('tabindex');
+    else list.tabIndex = rest;
+  }
+
+  /**
    * Places a submenu beside its item (`flyoutPlace`), fixed to the window: once it is drawn, and again when the
    * window changes size or something scrolls under it.
    */
@@ -237,6 +249,7 @@
       list.style.left = `${at.left - at0.left}px`;
       list.style.top = `${at.top - at0.top}px`;
       list.dataset.side = at.side;
+      reachWhenScrolling(list, -1);
     };
     place();
     window.addEventListener('resize', place);
@@ -312,8 +325,12 @@
     if (anchored) {
       // Anchored by CSS (see `anchored`): shown in the top layer, kept in the window by its fallbacks.
       popup.showPopover();
+      const reach = (): void => reachWhenScrolling(popup, null);
+      reach();
+      window.addEventListener('resize', reach);
       return {
         destroy: () => {
+          window.removeEventListener('resize', reach);
           if (popup.matches(':popover-open')) popup.hidePopover();
         },
       };
@@ -329,6 +346,7 @@
         popup.style.left = `${popup.offsetLeft + shift}px`;
         popup.style.right = 'auto';
       }
+      reachWhenScrolling(popup, null);
     };
     place();
     window.addEventListener('resize', place);
