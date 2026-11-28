@@ -208,7 +208,7 @@ fn ask_vault<A: AppSettings>(
     env: &Env,
     dir: &Path,
 ) -> Result<(), String> {
-    let mut file: FileConfig<A> = config::load_file(dir).map_err(|e| e.to_string())?;
+    let file: FileConfig<A> = config::load_file(dir).map_err(|e| e.to_string())?;
     // What the hub would read: the main vault, or the active one of the named vaults.
     if file.effective().vault.is_some() || env.path(app.vault_var).is_some() {
         return Ok(());
@@ -234,8 +234,12 @@ fn ask_vault<A: AppSettings>(
                 continue;
             }
         };
-        file.vault = Some(path.clone());
-        config::save_file(dir, &file)?;
+        // The question can take minutes: the file is read again under its lock, so a change another writer made
+        // in the meantime stays.
+        config::update_file::<A>(dir, |file| {
+            file.vault = Some(path.clone());
+            Ok(())
+        })?;
         io.say(&format!(
             "The vault is {} (kept in the settings).",
             path.display()
@@ -1032,6 +1036,49 @@ mod tests {
             io.said
         );
         assert_eq!(vault_in_settings(&dir), None);
+    }
+
+    /// Answers like [`Script`], but another writer changes `config.json` while the question is open.
+    struct WriterMeanwhile<'a> {
+        inner: Script,
+        dir: &'a Path,
+    }
+
+    impl Io for WriterMeanwhile<'_> {
+        fn ask(&mut self, question: &str) -> Option<String> {
+            config::update_file::<NoSettings>(self.dir, |file| {
+                file.nvim = Some(PathBuf::from("nvim-of-the-other-writer"));
+                Ok(())
+            })
+            .unwrap();
+            self.inner.ask(question)
+        }
+        fn say(&mut self, text: &str) {
+            self.inner.say(text);
+        }
+        fn done(&mut self, finished: bool) {
+            self.inner.done(finished);
+        }
+    }
+
+    /// The question can take minutes: a change another writer makes to `config.json` meanwhile is kept.
+    #[test]
+    fn a_change_made_while_the_vault_is_asked_for_is_kept() {
+        let dir = temp("vault-meanwhile");
+        let vault = temp("vault-meanwhile-folder");
+        let env = Env::from_pairs([("RULES_DESKTOP_CONFIG_DIR", dir.display().to_string())]);
+        let mut io = WriterMeanwhile {
+            inner: Script::new(&[Box::leak(vault.display().to_string().into_boxed_str())]),
+            dir: &dir,
+        };
+        ask_vault(&mut io, &env, &dir).unwrap();
+        let file: Cfg = config::load_file(&dir).unwrap();
+        assert_eq!(file.vault, Some(vault.to_path_buf()));
+        assert_eq!(
+            file.nvim,
+            Some(PathBuf::from("nvim-of-the-other-writer")),
+            "the other writer's change is lost"
+        );
     }
 
     #[test]
